@@ -293,7 +293,8 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     val scope = rememberCoroutineScope()
     val sel = ed.selectedClip
     val masking = ed.panel == Panel.Mask && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
-    val movable = sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking
+    val advanced = (ed.panel == Panel.Background || ed.panel == Panel.Tracking) && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
+    val movable = sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D
     var placement by remember { mutableStateOf<Placement?>(null) }
     LaunchedEffect(sel?.id, t?.revision) {
         placement = if (movable && sel != null) ed.placementOf(sel.id) else null
@@ -314,7 +315,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                 .size(boxW, boxH)
                 .border(1.dp, Fc.Raised)
                 .pointerInput(sel?.id, movable, ed.panel, t?.width, t?.height) {
-                    if (ed.panel == Panel.Mask) return@pointerInput
+                    if (ed.panel == Panel.Mask || advanced || ed.panel == Panel.Object3D) return@pointerInput
                     val frameW = t?.width?.toFloat() ?: return@pointerInput
                     val k = size.width / frameW // screen px per frame px
                     awaitEachGesture {
@@ -401,6 +402,9 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
             val maskState = ed.maskState
             if (masking && maskState != null && t != null) {
                 MaskOverlay(ed, maskState, t.width.toFloat(), Modifier.fillMaxSize())
+            }
+            if (advanced && t != null) {
+                AdvancedOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
             }
         }
     }

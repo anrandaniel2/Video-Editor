@@ -32,6 +32,7 @@ pub mod remix;
 pub mod scene;
 pub mod stretch;
 pub mod track;
+pub mod track3d;
 pub mod transitions;
 pub mod vfx;
 

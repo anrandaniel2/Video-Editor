@@ -1,0 +1,365 @@
+package io.github.artcraftandroid.filmcraft.ui.editor
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
+import io.github.artcraftandroid.filmcraft.core.Object3DMesh
+import io.github.artcraftandroid.filmcraft.core.Object3DSettings
+import io.github.artcraftandroid.filmcraft.core.StereoLayout
+import io.github.artcraftandroid.filmcraft.ui.Fc
+import io.github.artcraftandroid.filmcraft.ui.FcSlider
+import io.github.artcraftandroid.filmcraft.ui.FcSize
+import io.github.artcraftandroid.filmcraft.ui.FcType
+import io.github.artcraftandroid.filmcraft.ui.LucideIcons
+import io.github.artcraftandroid.filmcraft.ui.PanelAction
+import io.github.artcraftandroid.filmcraft.ui.SelectChip
+import io.github.artcraftandroid.filmcraft.ui.SliderRow
+import io.github.artcraftandroid.filmcraft.ui.ToolPanel
+import io.github.artcraftandroid.filmcraft.ui.glyph
+import kotlin.math.round
+
+/** Keyframable 3D primitives and extruded text. */
+@Composable
+fun Object3DPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
+    val clip = ed.selectedClip
+    val state = ed.object3DState
+    val settings = state?.settings
+    val hasObject = state?.hasObject == true
+    LaunchedEffect(clip?.id, ed.playhead) {
+        if (clip != null) ed.loadObject3D(clip.id)
+        ed.loadTracks()
+    }
+    ToolPanel(
+        "3D Object", close, modifier, tag = "object3d_panel",
+        actions = {
+            if (state?.hasObject == true) {
+                PanelAction(LucideIcons.Timer.glyph(), "Toggle keyframes", { ed.toggleObjectAnimation() }, tag = "object3d_keyframe")
+            }
+        },
+    ) {
+        Text(
+            "Add a 3D layer, rotate it with the sliders, and turn on keyframes to animate it at the playhead.",
+            style = FcType.Caption, color = Fc.Detail,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Object3DMesh.entries.forEach { mesh ->
+                val label = mesh.name.lowercase().replaceFirstChar { it.uppercase() }
+                SelectChip(label, settings?.mesh == mesh, {
+                    if (hasObject && settings != null) ed.setObject(settings.copy(mesh = mesh)) else ed.addObject(mesh)
+                }, tag = "object3d_mesh_${mesh.name.lowercase()}")
+            }
+        }
+        if (hasObject && settings != null) {
+            ObjectControls(ed, settings, state?.animated == true)
+        } else {
+            Text(
+                "Choose a shape to add a 3D overlay. Select a text clip and use Extrude to turn its style into 3D text.",
+                style = FcType.Body, color = Fc.Secondary,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding, vertical = 16.dp),
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated: Boolean) {
+    fun change(next: Object3DSettings, merge: String? = null) = ed.setObject(next, merge)
+    Spacer(Modifier.height(8.dp))
+    Text(
+        if (animated) "Keyframed · edits at playhead" else "Static · enable keyframes to animate",
+        style = FcType.Caption, color = Fc.Detail,
+        modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
+    )
+    if (st.mesh == Object3DMesh.TEXT) {
+        OutlinedTextField(
+            value = st.text,
+            onValueChange = { change((ed.object3DState?.settings ?: st).copy(text = it)) },
+            label = { Text("Text") },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 8.dp).testTag("object3d_text"),
+        )
+        Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = st.font,
+                onValueChange = { change((ed.object3DState?.settings ?: st).copy(font = it)) },
+                label = { Text("Font") },
+                modifier = Modifier.weight(1f).testTag("object3d_font"),
+            )
+            OutlinedTextField(
+                value = st.fontStyle,
+                onValueChange = { change((ed.object3DState?.settings ?: st).copy(fontStyle = it)) },
+                label = { Text("Style") },
+                modifier = Modifier.weight(1f).testTag("object3d_font_style"),
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SelectChip("Bold", st.fauxBold, { change((ed.object3DState?.settings ?: st).copy(fauxBold = !st.fauxBold)) }, tag = "object3d_bold")
+            SelectChip("Italic", st.fauxItalic, { change((ed.object3DState?.settings ?: st).copy(fauxItalic = !st.fauxItalic)) }, tag = "object3d_italic")
+            SelectChip("Left", st.align == 0u, { change((ed.object3DState?.settings ?: st).copy(align = 0u)) }, tag = "object3d_align_left")
+            SelectChip("Center", st.align == 1u, { change((ed.object3DState?.settings ?: st).copy(align = 1u)) }, tag = "object3d_align_center")
+            SelectChip("Right", st.align == 2u, { change((ed.object3DState?.settings ?: st).copy(align = 2u)) }, tag = "object3d_align_right")
+        }
+        AdvancedSlider("Font size", st.size, 4.0, 600.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
+    } else {
+        AdvancedSlider("Size", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
+    }
+    AdvancedSlider("Extrusion", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }
+    AdvancedSlider("Bevel", st.bevel, 0.0, 100.0, 0.5, "object3d_bevel") { v, k -> change((ed.object3DState?.settings ?: st).copy(bevel = v), k) }
+    HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+    AdvancedSlider("Rotate X", st.rotationX, -180.0, 180.0, 1.0, "object3d_rx") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationX = v), k) }
+    AdvancedSlider("Rotate Y", st.rotationY, -180.0, 180.0, 1.0, "object3d_ry") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationY = v), k) }
+    AdvancedSlider("Rotate Z", st.rotationZ, -180.0, 180.0, 1.0, "object3d_rz") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationZ = v), k) }
+    AdvancedSlider("Scale", st.scale, 0.0, 400.0, 1.0, "object3d_scale") { v, k -> change((ed.object3DState?.settings ?: st).copy(scale = v), k) }
+    AdvancedSlider("Camera distance", st.z, 50.0, 3000.0, 5.0, "object3d_z") { v, k -> change((ed.object3DState?.settings ?: st).copy(z = v), k) }
+    AdvancedSlider("X", st.x, -2000.0, 4000.0, 1.0, "object3d_x") { v, k -> change((ed.object3DState?.settings ?: st).copy(x = v), k) }
+    AdvancedSlider("Y", st.y, -2000.0, 4000.0, 1.0, "object3d_y") { v, k -> change((ed.object3DState?.settings ?: st).copy(y = v), k) }
+    HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+    ColorRow("Front", st.color) { c -> change((ed.object3DState?.settings ?: st).copy(color = c)) }
+    ColorRow("Sides", st.sideColor) { c -> change((ed.object3DState?.settings ?: st).copy(sideColor = c)) }
+    AdvancedSlider("Metalness", st.metalness, 0.0, 100.0, 1.0, "object3d_metal") { v, k -> change((ed.object3DState?.settings ?: st).copy(metalness = v), k) }
+    AdvancedSlider("Roughness", st.roughness, 0.0, 100.0, 1.0, "object3d_rough") { v, k -> change((ed.object3DState?.settings ?: st).copy(roughness = v), k) }
+    AdvancedSlider("Opacity", st.opacity, 0.0, 100.0, 1.0, "object3d_opacity") { v, k -> change((ed.object3DState?.settings ?: st).copy(opacity = v), k) }
+    AdvancedSlider("Light angle", st.lightAngle, 0.0, 360.0, 1.0, "object3d_light_angle") { v, k -> change((ed.object3DState?.settings ?: st).copy(lightAngle = v), k) }
+    AdvancedSlider("Light elevation", st.lightElevation, -90.0, 90.0, 1.0, "object3d_light_elev") { v, k -> change((ed.object3DState?.settings ?: st).copy(lightElevation = v), k) }
+    HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+    Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), verticalAlignment = Alignment.CenterVertically) {
+        Text("Follow motion track", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+        Switch(
+            checked = st.followTrack,
+            onCheckedChange = { ed.followTrack(ed.selectedTrackId, it) },
+            enabled = ed.motionTracks.isNotEmpty(),
+            colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+            modifier = Modifier.testTag("object3d_follow"),
+        )
+    }
+    if (ed.motionTracks.isNotEmpty()) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ed.motionTracks.forEach { t ->
+                SelectChip(t.name, ed.selectedTrackId == t.id, {
+                    ed.selectedTrackId = t.id
+                    if (st.followTrack) ed.followTrack(t.id, true)
+                }, tag = "object3d_track_${t.id}")
+            }
+        }
+        AdvancedSlider("Track depth", st.trackDepth, -1000.0, 1000.0, 5.0, "object3d_track_depth") { v, k ->
+            change((ed.object3DState?.settings ?: st).copy(trackDepth = v), k)
+        }
+    }
+}
+
+private val COLORS = listOf(0xFFEB7333uL, 0xFFF2C14EuL, 0xFF4CC9F0uL, 0xFF80ED99uL, 0xFFF72585uL, 0xFFFFFFFFuL, 0xFF222222uL)
+
+@Composable
+private fun ColorRow(label: String, selected: ULong, onPick: (ULong) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+        COLORS.forEach { c ->
+            Box(
+                Modifier.padding(start = 8.dp).size(24.dp).clip(CircleShape).background(Color(c.toInt()))
+                    .clickable { onPick(c) }
+                    .testTag("object3d_color_${c.toString(16)}"),
+            )
+        }
+    }
+}
+
+/** Analyse footage and manage the tracks 3D objects can follow. */
+@Composable
+fun TrackingPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
+    val clip = ed.selectedClip
+    LaunchedEffect(clip?.id) { ed.loadTracks() }
+    val stereo = ed.trackingLayout
+    var baseline by remember { mutableDoubleStateOf(64.0) }
+    var seconds by remember { mutableDoubleStateOf(10.0) }
+    ToolPanel(
+        "3D Motion Tracking", close, modifier, tag = "tracking_panel",
+        actions = {
+            if (ed.selectedTrackId != 0uL) {
+                PanelAction(LucideIcons.Trash2.glyph(), "Delete track", { ed.deleteTrack(ed.selectedTrackId) }, tag = "tracking_delete")
+            }
+        },
+    ) {
+        Text(
+            "Tap the preview to choose what to follow, then track from the playhead. Side-by-side or top/bottom footage also estimates depth.",
+            style = FcType.Caption, color = Fc.Detail,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            ed.trackingTarget?.let { "Target: ${round(it.first * 100)}%, ${round(it.second * 100)}%" } ?: "Target: centre (tap the preview to move it)",
+            style = FcType.Body, color = Fc.Secondary,
+            modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SelectChip("Mono", stereo == StereoLayout.MONO, { ed.trackingLayout = StereoLayout.MONO }, tag = "tracking_mono")
+            SelectChip("Side by side", stereo == StereoLayout.SIDE_BY_SIDE, { ed.trackingLayout = StereoLayout.SIDE_BY_SIDE }, tag = "tracking_sbs")
+            SelectChip("Top / bottom", stereo == StereoLayout.TOP_BOTTOM, { ed.trackingLayout = StereoLayout.TOP_BOTTOM }, tag = "tracking_tb")
+        }
+        AdvancedSlider("Depth sensitivity", baseline, 4.0, 256.0, 1.0, "tracking_baseline") { v, _ -> baseline = v }
+        AdvancedSlider("Seconds to track", seconds, 1.0, 30.0, 1.0, "tracking_seconds") { v, _ -> seconds = v }
+        Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 8.dp)) {
+            SelectChip(if (ed.trackingBusy) "Tracking…" else "Track from playhead", false, {
+                if (!ed.trackingBusy && clip != null) ed.trackMotion(stereo, baseline, seconds)
+            }, tag = "tracking_run")
+        }
+        if (ed.motionTracks.isNotEmpty()) {
+            HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ed.motionTracks.forEach { t ->
+                    SelectChip("${t.name} · ${t.samples}", ed.selectedTrackId == t.id, { ed.selectedTrackId = t.id }, tag = "tracking_item_${t.id}")
+                }
+            }
+            Text(
+                "Select a 3D object and turn on Follow motion track in the 3D panel to attach it.",
+                style = FcType.Caption, color = Fc.Detail,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding, vertical = 8.dp),
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/** One-click background removal refined with keep/remove points on the preview. */
+@Composable
+fun BackgroundPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
+    val clip = ed.selectedClip
+    val state = ed.backgroundState
+    LaunchedEffect(clip?.id, ed.playhead) { if (clip != null) ed.loadBackground(clip.id) }
+    ToolPanel(
+        "Background Removal", close, modifier, tag = "background_panel",
+        actions = {
+            val active = state?.takeIf { it.enabled }
+            if (active != null) {
+                PanelAction(LucideIcons.CircleX.glyph(), "Clear points", {
+                    ed.setBackground(active.settings.copy(keepPoints = emptyList(), removePoints = emptyList()))
+                }, tag = "background_clear_points")
+            }
+        },
+    ) {
+        val st = state?.settings
+        if (state == null || !state.enabled || st == null) {
+            Text(
+                "Remove the background in one click, then tap the preview with Keep or Remove to refine what stays.",
+                style = FcType.Caption, color = Fc.Detail,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+            )
+            Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 12.dp)) {
+                SelectChip("Remove background", false, { ed.removeBackground() }, tag = "background_run")
+            }
+        } else {
+            fun change(next: BackgroundSettings, merge: String? = null) = ed.setBackground(next, merge)
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SelectChip("Keep points", ed.backgroundPointMode == EditorController.BackgroundPointMode.Keep, {
+                    ed.backgroundPointMode = EditorController.BackgroundPointMode.Keep
+                }, tag = "background_keep_mode")
+                SelectChip("Remove points", ed.backgroundPointMode == EditorController.BackgroundPointMode.Remove, {
+                    ed.backgroundPointMode = EditorController.BackgroundPointMode.Remove
+                }, tag = "background_remove_mode")
+                SelectChip("Done", ed.backgroundPointMode == EditorController.BackgroundPointMode.None, {
+                    ed.backgroundPointMode = EditorController.BackgroundPointMode.None
+                }, tag = "background_done_mode")
+            }
+            Text(
+                "Keep: ${st.keepPoints.size} · Remove: ${st.removePoints.size}. Tap the preview to add points.",
+                style = FcType.Caption, color = Fc.Detail,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
+            )
+            AdvancedSlider("Threshold", st.threshold, 1.0, 100.0, 1.0, "background_threshold") { v, k ->
+                change((ed.backgroundState?.settings ?: st).copy(threshold = v), k)
+            }
+            AdvancedSlider("Feather", st.feather, 0.0, 100.0, 1.0, "background_feather") { v, k ->
+                change((ed.backgroundState?.settings ?: st).copy(feather = v), k)
+            }
+            AdvancedSlider("Edge smooth", st.smooth, 0.0, 20.0, 0.5, "background_smooth") { v, k ->
+                change((ed.backgroundState?.settings ?: st).copy(smooth = v), k)
+            }
+            AdvancedSlider("Point radius", st.pointRadius, 0.0, 50.0, 0.5, "background_point_radius") { v, k ->
+                change((ed.backgroundState?.settings ?: st).copy(pointRadius = v), k)
+            }
+            AdvancedSlider("Point strength", st.pointStrength, 0.0, 100.0, 1.0, "background_point_strength") { v, k ->
+                change((ed.backgroundState?.settings ?: st).copy(pointStrength = v), k)
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Invert", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = st.invert,
+                    onCheckedChange = { change((ed.backgroundState?.settings ?: st).copy(invert = it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                    modifier = Modifier.testTag("background_invert"),
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun AdvancedSlider(
+    label: String, value: Double, min: Double, max: Double, step: Double, tag: String,
+    onChange: (Double, String?) -> Unit,
+) {
+    var v by remember(value) { mutableDoubleStateOf(value) }
+    var token by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
+    SliderRow(label, "${round(v * 10.0) / 10.0}") {
+        FcSlider(
+            fraction = ((v - min) / (max - min)).toFloat(),
+            onChange = { f ->
+                val raw = min + f.coerceIn(0f, 1f).toDouble() * (max - min)
+                v = round(raw / step) * step
+                onChange(v, token)
+            },
+            onDone = { token = java.util.UUID.randomUUID().toString() },
+            description = label, tag = tag,
+        )
+    }
+}

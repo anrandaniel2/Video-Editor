@@ -11,12 +11,14 @@
 //! (frames for analysis, sequence geometry) — read it through [`FxEnv`]; without an environment
 //! (isolated tests, adjustment layers) they leave the image unchanged.
 
+mod background;
 mod blur;
 mod color;
 pub(crate) use color::cdl;
 mod distort;
 mod immersive;
 mod lights;
+mod object3d;
 mod stylize;
 mod temporal;
 mod text;
@@ -60,6 +62,10 @@ pub trait FxEnv: Sync {
     fn source_size(&self) -> (u32, u32);
     /// Identity of the clip and its source range (cache key for analyses).
     fn clip_key(&self) -> u64;
+    /// A sequence motion track sampled at the current timeline moment (3D follow).
+    fn motion_track(&self, _id: u64, _t: Tick) -> Option<filmcraft_project::TrackSample> {
+        None
+    }
 }
 
 /// The environment of a track item being rendered by [`crate::item_layer`].
@@ -159,6 +165,11 @@ impl FxEnv for ItemEnv<'_> {
     }
     fn source_size(&self) -> (u32, u32) {
         crate::source_size(self.project, self.item.item).unwrap_or((self.seq.settings.width, self.seq.settings.height))
+    }
+    fn motion_track(&self, id: u64, _t: Tick) -> Option<filmcraft_project::TrackSample> {
+        let track = self.seq.motion_tracks.iter().find(|t| t.id == id)?;
+        let start = self.seq.find_item(track.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
+        track.sample_at(self.t - start)
     }
     fn clip_key(&self) -> u64 {
         let mut h = 0xcbf2_9ce4_8422_2325u64;
@@ -524,6 +535,8 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         "warp_stabilizer" => temporal::warp_stabilizer(img, e, cx),
         "auto_reframe" => temporal::auto_reframe(img, e, cx),
         // Text
+        "object_3d" => object3d::apply(img, e, cx),
+        "background_removal" => background::apply(img, e, cx),
         "simple_text" => text::simple_text(img, e, cx),
         "metadata_burnin" => text::metadata_burnin(img, e, cx),
         id if id.starts_with("vr_") => immersive::apply(img, e, cx),

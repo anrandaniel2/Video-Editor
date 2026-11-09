@@ -11,6 +11,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
+import io.github.artcraftandroid.filmcraft.core.BackgroundState
 import io.github.artcraftandroid.filmcraft.core.CaptionInfo
 import io.github.artcraftandroid.filmcraft.core.CaptionLook
 import io.github.artcraftandroid.filmcraft.core.CaptionStatus
@@ -24,11 +26,18 @@ import io.github.artcraftandroid.filmcraft.core.MaskSettings
 import io.github.artcraftandroid.filmcraft.core.MaskShape
 import io.github.artcraftandroid.filmcraft.core.MaskState
 import io.github.artcraftandroid.filmcraft.core.MobileSession
+import io.github.artcraftandroid.filmcraft.core.MotionTrackInfo
+import io.github.artcraftandroid.filmcraft.core.NormPoint
+import io.github.artcraftandroid.filmcraft.core.Object3DMesh
+import io.github.artcraftandroid.filmcraft.core.Object3DSettings
+import io.github.artcraftandroid.filmcraft.core.Object3DState
 import io.github.artcraftandroid.filmcraft.core.Renderer
 import io.github.artcraftandroid.filmcraft.core.SessionStatus
 import io.github.artcraftandroid.filmcraft.core.SpeechAudio
 import io.github.artcraftandroid.filmcraft.core.SpeechSettings
+import io.github.artcraftandroid.filmcraft.core.StereoLayout
 import io.github.artcraftandroid.filmcraft.core.TextStyle
+import io.github.artcraftandroid.filmcraft.core.TrackOptions
 import io.github.artcraftandroid.filmcraft.core.TimelineInfo
 import io.github.artcraftandroid.filmcraft.core.TransitionInfo
 import io.github.artcraftandroid.filmcraft.engine.Engine
@@ -54,6 +63,9 @@ sealed interface Panel {
     data object Fade : Panel
     data object Opacity : Panel
     data object Mask : Panel
+    data object Object3D : Panel
+    data object Tracking : Panel
+    data object Background : Panel
     data object Filters : Panel
     data object Effects : Panel
     /** The transition between [from] and [to] (either empty at the ends). */
@@ -815,6 +827,163 @@ class EditorController(
             try { maskState = engine.command { clearClipMasks(c.id) } }
             catch (e: Exception) { host.tell(e.userMessage) }
             refresh()
+        }
+    }
+
+    // ---- 3D objects, tracking and background removal ----
+
+    enum class BackgroundPointMode { None, Keep, Remove }
+
+    var object3DState by mutableStateOf<Object3DState?>(null)
+        private set
+    var backgroundState by mutableStateOf<BackgroundState?>(null)
+        private set
+    var motionTracks by mutableStateOf<List<MotionTrackInfo>>(emptyList())
+        private set
+    var trackingTarget by mutableStateOf<Pair<Double, Double>?>(null)
+    var trackingLayout by mutableStateOf(StereoLayout.MONO)
+    var trackingBusy by mutableStateOf(false)
+        private set
+    var backgroundPointMode by mutableStateOf(BackgroundPointMode.None)
+    var selectedTrackId by mutableStateOf(0uL)
+
+    fun resetAdvancedTools() {
+        backgroundPointMode = BackgroundPointMode.None
+    }
+
+    suspend fun loadObject3D(clip: ULong) {
+        object3DState = runCatching { engine.command { object3dState(clip) } }.getOrNull()
+    }
+
+    suspend fun loadBackground(clip: ULong) {
+        backgroundState = runCatching { engine.command { backgroundState(clip) } }.getOrNull()
+    }
+
+    suspend fun loadTracks() {
+        motionTracks = runCatching { engine.command { motionTracks() } }.getOrDefault(emptyList())
+        if (motionTracks.none { it.id == selectedTrackId }) selectedTrackId = motionTracks.lastOrNull()?.id ?: 0uL
+    }
+
+    fun addObject(mesh: Object3DMesh) {
+        stop()
+        scope.launch {
+            try {
+                val id = engine.command { addObject3d(mesh) }
+                refresh()
+                panel = Panel.Object3D
+                loadObject3D(id)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    fun setObject(settings: Object3DSettings, merge: String? = null) {
+        val c = selectedClip ?: return
+        object3DState = object3DState?.copy(settings = settings)
+        stop()
+        scope.launch {
+            try { engine.command { setObject3d(c.id, settings, merge) } }
+            catch (e: Exception) { host.tell(e.userMessage) }
+            refreshSoon()
+        }
+    }
+
+    fun toggleObjectAnimation() {
+        val c = selectedClip ?: return
+        stop()
+        scope.launch {
+            try {
+                engine.command { toggleObject3dAnimation(c.id) }
+                loadObject3D(c.id)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun extrudeText(depth: Double = 48.0, bevel: Double = 4.0) {
+        val c = selectedClip ?: return
+        stop()
+        scope.launch {
+            try {
+                val id = engine.command { extrudeText(c.id, depth, bevel) }
+                refresh()
+                panel = Panel.Object3D
+                loadObject3D(id)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    fun trackMotion(stereo: StereoLayout, baseline: Double, maxSeconds: Double) {
+        val c = selectedClip ?: return
+        val target = trackingTarget ?: (0.5 to 0.5)
+        stop()
+        trackingBusy = true
+        scope.launch {
+            try {
+                val info = engine.command {
+                    trackMotion(c.id, TrackOptions(target.first, target.second, 15u, stereo, baseline, maxSeconds))
+                }
+                selectedTrackId = info.id
+                loadTracks()
+                host.tell("Tracked ${info.samples} frames.")
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            trackingBusy = false
+            refresh()
+        }
+    }
+
+    fun deleteTrack(id: ULong) {
+        scope.launch {
+            try { engine.command { deleteMotionTrack(id) } }
+            catch (e: Exception) { host.tell(e.userMessage) }
+            loadTracks()
+            refresh()
+        }
+    }
+
+    fun followTrack(trackId: ULong, follow: Boolean) {
+        val st = object3DState?.settings ?: return
+        setObject(st.copy(followTrack = follow, trackId = trackId))
+    }
+
+    fun removeBackground() {
+        val c = selectedClip ?: return
+        stop()
+        scope.launch {
+            try {
+                backgroundState = engine.command { removeBackground(c.id) }
+                refresh()
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    fun setBackground(settings: BackgroundSettings, merge: String? = null) {
+        val c = selectedClip ?: return
+        val current = backgroundState ?: BackgroundState(c.id, false, BackgroundSettings(38.0, 6.0, 2.0, false, 12.0, 70.0, emptyList(), emptyList()))
+        backgroundState = current.copy(enabled = true, settings = settings)
+        stop()
+        scope.launch {
+            try {
+                engine.command { setBackground(c.id, settings, merge) }
+                loadBackground(c.id)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refreshSoon()
+        }
+    }
+
+    fun onAdvancedTap(x: Double, y: Double) {
+        when (panel) {
+            Panel.Tracking -> trackingTarget = x to y
+            Panel.Background -> {
+                val st = backgroundState?.settings ?: BackgroundSettings(38.0, 6.0, 2.0, false, 12.0, 70.0, emptyList(), emptyList())
+                val p = NormPoint(x, y)
+                val next = when (backgroundPointMode) {
+                    BackgroundPointMode.Keep -> st.copy(keepPoints = st.keepPoints + p)
+                    BackgroundPointMode.Remove -> st.copy(removePoints = st.removePoints + p)
+                    BackgroundPointMode.None -> return
+                }
+                setBackground(next)
+            }
+            else -> {}
         }
     }
 

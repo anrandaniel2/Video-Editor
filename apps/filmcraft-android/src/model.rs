@@ -85,6 +85,8 @@ pub struct ClipInfo {
     /// The effect's id, empty for none; its intensity 0 to 100.
     pub effect: String,
     pub effect_amount: f64,
+    /// The clip carries a 3D object / extruded-text effect.
+    pub has_3d: bool,
     /// A recorded voice-over.
     pub voiceover: bool,
     /// Speech made from text (it can be said again differently).
@@ -229,9 +231,9 @@ pub(crate) fn volume_of(c: &TrackItem) -> f64 {
 pub(crate) fn text_of(c: &TrackItem) -> String {
     c.effects
         .iter()
-        .filter(|e| e.effect == TEXT_LAYER)
+        .filter(|e| e.effect == TEXT_LAYER || e.effect == "object_3d")
         .find_map(|e| match &e.param("text")?.value {
-            ParamValue::Text(t) => Some(t.clone()),
+            ParamValue::Text(t) if !t.is_empty() => Some(t.clone()),
             _ => None,
         })
         .unwrap_or_default()
@@ -331,6 +333,7 @@ fn clip_info(s: &Session, seq: &Sequence, f: &Found<'_>) -> ClipInfo {
         filter_amount,
         effect,
         effect_amount,
+        has_3d: c.effects.iter().any(|e| e.effect == "object_3d" && e.enabled),
         audio_clip: if f.kind == TrackKind::Video { sound.map(|a| a.clip.id.0) } else { None },
     }
 }

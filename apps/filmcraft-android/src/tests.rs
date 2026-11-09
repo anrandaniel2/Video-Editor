@@ -1220,3 +1220,98 @@ fn a_transition_on_a_cut_without_spare_footage_shortens_the_video_by_its_length(
     m.undo();
     assert_eq!(m.timeline().unwrap().duration, before);
 }
+
+#[test]
+fn advanced_object3d_rotation_keyframes_interpolate_and_toggle_off() {
+    let m = MobileSession::new();
+    m.new_project("3D".into(), 320, 240, 30).unwrap();
+    let id = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    let state = m.object3d_state(id).unwrap();
+    assert!(state.has_object && !state.animated);
+    assert_eq!(state.settings.mesh, advanced::Object3DMesh::Cube);
+    assert!((state.settings.depth - 220.0).abs() < 1e-6);
+    assert!(m.toggle_object3d_animation(id).unwrap());
+    let mut a = m.object3d_state(id).unwrap().settings;
+    a.rotation_y = 0.0;
+    m.set_object3d(id, a, None).unwrap();
+    m.set_playhead(SEC / 2);
+    let mut b = m.object3d_state(id).unwrap().settings;
+    b.rotation_y = 90.0;
+    m.set_object3d(id, b, None).unwrap();
+    m.set_playhead(SEC / 4);
+    let mid = m.object3d_state(id).unwrap();
+    assert!(mid.animated);
+    assert!((mid.settings.rotation_y - 45.0).abs() < 1.0, "{:?}", mid.settings.rotation_y);
+    assert!(!m.toggle_object3d_animation(id).unwrap());
+    assert!(!m.object3d_state(id).unwrap().animated);
+}
+
+#[test]
+fn advanced_extruding_text_carries_the_picked_style() {
+    let m = MobileSession::new();
+    m.new_project("Text".into(), 320, 240, 30).unwrap();
+    let id = m.add_text("Style".into()).unwrap().unwrap();
+    let st = m.text_style(id).unwrap();
+    m.set_text_style(
+        id,
+        text::TextStyle { font: "Inter".into(), font_style: "Bold".into(), color: 0xff11_2233, stroke: Some(0xff44_5566), ..st },
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(m.extrude_text(id, 60.0, 6.0).unwrap(), id);
+    let o = m.object3d_state(id).unwrap();
+    assert!(o.has_object);
+    assert_eq!(o.settings.mesh, advanced::Object3DMesh::Text);
+    assert_eq!(o.settings.text, "Style");
+    assert_eq!(o.settings.font_style, "Bold");
+    assert_eq!(o.settings.color, 0xff11_2233);
+    assert_eq!(o.settings.side_color, 0xff44_5566);
+    assert!((o.settings.depth - 60.0).abs() < 1e-6);
+    assert!((o.settings.bevel - 6.0).abs() < 1e-6);
+    assert!(clip(&m, id).has_3d);
+    assert_eq!(clip(&m, id).text, "Style");
+}
+
+#[test]
+fn advanced_background_removal_keeps_custom_points_and_controls() {
+    let (m, d, _) = two_clips();
+    let pic = m.add_media(vec![picture(&d)]).unwrap()[0];
+    let auto = m.remove_background(pic).unwrap();
+    assert!(auto.enabled);
+    let mut st = auto.settings;
+    st.keep_points.push(advanced::NormPoint { x: 0.25, y: 0.75 });
+    st.remove_points.push(advanced::NormPoint { x: 0.8, y: 0.2 });
+    st.threshold = 55.0;
+    st.point_radius = 20.0;
+    m.set_background(pic, st, None).unwrap();
+    let back = m.background_state(pic).unwrap();
+    assert!(back.enabled);
+    assert_eq!(back.settings.keep_points.len(), 1);
+    assert_eq!(back.settings.remove_points.len(), 1);
+    assert!((back.settings.threshold - 55.0).abs() < 1e-6);
+    assert!((back.settings.point_radius - 20.0).abs() < 1e-6);
+}
+
+#[test]
+fn advanced_motion_tracking_stores_a_track_a_3d_object_can_follow() {
+    let (m, _d, ids) = two_clips();
+    let info = m
+        .track_motion(
+            ids[0],
+            advanced::TrackOptions { target_x: 0.5, target_y: 0.5, patch_size: 15, stereo: advanced::StereoLayout::Mono, baseline: 32.0, max_seconds: 0.5 },
+        )
+        .unwrap();
+    assert!(info.samples >= 2, "{info:?}");
+    assert_eq!(m.motion_tracks().unwrap().len(), 1);
+    let obj = m.add_object3d(advanced::Object3DMesh::Sphere).unwrap();
+    let mut st = m.object3d_state(obj).unwrap().settings;
+    st.follow_track = true;
+    st.track_id = info.id;
+    m.set_object3d(obj, st, None).unwrap();
+    let followed = m.object3d_state(obj).unwrap().settings;
+    assert!(followed.follow_track);
+    assert_eq!(followed.track_id, info.id);
+    m.delete_motion_track(info.id).unwrap();
+    assert!(m.motion_tracks().unwrap().is_empty());
+}

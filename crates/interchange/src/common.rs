@@ -534,6 +534,7 @@ pub(crate) fn empty_sequence(settings: SequenceSettings) -> Sequence {
         caption_tracks: Vec::new(),
         multicam: None,
         merged: None,
+        motion_tracks: Vec::new(),
         split: Default::default(),
     }
 }

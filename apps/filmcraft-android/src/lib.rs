@@ -24,6 +24,7 @@ use filmcraft_engine::Session;
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
 
+pub mod advanced;
 pub mod edits;
 pub mod export;
 pub mod masks;
@@ -35,6 +36,7 @@ pub mod samples;
 pub mod speech;
 pub mod text;
 
+use advanced::{BackgroundSettings, BackgroundState, MotionTrackInfo, NormPoint, Object3DMesh, Object3DSettings, Object3DState, TrackOptions};
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use masks::{MaskPoint, MaskSettings, MaskShape, MaskState};
 use model::TimelineInfo;
@@ -636,6 +638,66 @@ impl MobileSession {
     /// The longest transition a slot takes, in seconds (0 when none fits).
     pub fn max_transition(&self, from: Option<u64>, to: Option<u64>) -> f64 {
         edits::max_transition(&self.lock(), from, to)
+    }
+
+    // ---- 3D objects, tracking and background removal ----
+
+    /// Add a keyframable 3D primitive (or extruded-text placeholder) on an overlay at the playhead.
+    pub fn add_object3d(&self, mesh: Object3DMesh) -> Result<u64, MobileError> {
+        self.main_edit(|s| advanced::add_object(s, mesh))
+    }
+
+    /// The selected clip's 3D object settings at the playhead.
+    pub fn object3d_state(&self, clip: u64) -> Result<Object3DState, MobileError> {
+        advanced::object_state(&self.lock(), clip)
+    }
+
+    /// Write 3D object settings; animated parameters keyframe at the playhead. `merge` folds a drag.
+    pub fn set_object3d(&self, clip: u64, settings: Object3DSettings, merge: Option<String>) -> Result<(), MobileError> {
+        self.main_edit(|s| advanced::set_object(s, clip, &settings, merge.as_deref()))
+    }
+
+    /// Toggle keyframes on the 3D object's transform/material parameters; returns the new state.
+    pub fn toggle_object3d_animation(&self, clip: u64) -> Result<bool, MobileError> {
+        self.main_edit(|s| advanced::toggle_object_animation(s, clip))
+    }
+
+    /// Convert a text clip into extruded 3D text, carrying its font/style/colour.
+    pub fn extrude_text(&self, clip: u64, depth: f64, bevel: f64) -> Result<u64, MobileError> {
+        self.main_edit(|s| advanced::extrude_text(s, clip, depth, bevel))
+    }
+
+    /// Analyse a video clip from the playhead and store a sequence motion track.
+    pub fn track_motion(&self, clip: u64, options: TrackOptions) -> Result<MotionTrackInfo, MobileError> {
+        self.main_edit(|s| advanced::track_motion(s, clip, &options))
+    }
+
+    /// Motion tracks in the open sequence.
+    pub fn motion_tracks(&self) -> Result<Vec<MotionTrackInfo>, MobileError> {
+        advanced::motion_tracks(&self.lock())
+    }
+
+    pub fn delete_motion_track(&self, id: u64) -> Result<(), MobileError> {
+        self.main_edit(|s| advanced::delete_motion_track(s, id))
+    }
+
+    /// One-click background removal (automatic centre/border seeds until the user adds points).
+    pub fn remove_background(&self, clip: u64) -> Result<BackgroundState, MobileError> {
+        self.main_edit(|s| advanced::remove_background(s, clip))
+    }
+
+    pub fn background_state(&self, clip: u64) -> Result<BackgroundState, MobileError> {
+        advanced::background_state(&self.lock(), clip)
+    }
+
+    /// Refine background removal with keep/remove points and matte controls.
+    pub fn set_background(&self, clip: u64, settings: BackgroundSettings, merge: Option<String>) -> Result<(), MobileError> {
+        self.main_edit(|s| advanced::set_background(s, clip, &settings, merge.as_deref()))
+    }
+
+    /// A normalised point for background keep/remove seeds.
+    pub fn background_point(&self, x: f64, y: f64) -> NormPoint {
+        NormPoint { x, y }
     }
 
     // ---- text ----

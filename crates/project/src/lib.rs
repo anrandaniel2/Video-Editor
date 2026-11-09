@@ -22,6 +22,7 @@ pub mod mixer;
 pub mod multicam;
 pub mod narration;
 pub mod transcript;
+pub mod tracking;
 pub mod vtransition;
 
 use std::collections::BTreeMap;
@@ -42,6 +43,7 @@ pub use mixer::{AutomationMode, InputMap, MixerStrip, TrackSend};
 pub use multicam::{Camera, MergedClip, MulticamAudio, MulticamSel, MulticamSource};
 pub use narration::{Narration, VocalPitch};
 pub use transcript::{Speaker, Transcript, Word};
+pub use tracking::{MotionTrack, StereoLayout, TrackSample};
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -180,6 +182,7 @@ impl Project {
                 ItemKind::Subclip { parent, .. } => see(parent.0),
                 ItemKind::Sequence(s) => {
                     s.markers.iter().for_each(|mk| see(mk.id.0));
+                    s.motion_tracks.iter().for_each(|t| see(t.id));
                     mixer(&s.master_mixer).for_each(&mut see);
                     for t in s.all_tracks().chain(&s.submix_tracks) {
                         see(t.id.0);
@@ -372,6 +375,7 @@ impl Project {
             caption_tracks: Vec::new(),
             multicam: None,
             merged: None,
+            motion_tracks: Vec::new(),
             split: SplitMarks::default(),
         };
         for i in 0..v {

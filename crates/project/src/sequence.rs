@@ -166,6 +166,9 @@ pub struct Sequence {
     /// Set on merged clips (the merged video and audio items).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merged: Option<MergedClip>,
+    /// Motion analyses shared by 3D layers (schema v16). Older files have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub motion_tracks: Vec<crate::tracking::MotionTrack>,
     /// Split In/Out points (Markers ▸ Mark Split): per-channel overrides of `mark_in`/`mark_out`.
     #[serde(default, skip_serializing_if = "SplitMarks::is_empty")]
     pub split: SplitMarks,
