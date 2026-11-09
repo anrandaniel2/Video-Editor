@@ -539,7 +539,7 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         return;
     }
     let mut buf = Buf::new(img.w, img.h);
-    let cam = (img.w as f32 * 0.5, img.h as f32 * 0.5, img.h as f32.max(1.0));
+    let cam = (img.w as f32 * 0.5, img.h as f32 * 0.5, (img.h as f32).max(1.0));
     if p.mesh == 6 {
         draw_text(&mut buf, &p, cam);
     } else {

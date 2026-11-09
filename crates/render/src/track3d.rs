@@ -52,8 +52,6 @@ pub struct TrackPoint {
 
 fn klt(prev: &Gray, next: &Gray, start: (f32, f32), radius: i32) -> Option<(f32, f32)> {
     let r = radius.max(3);
-    let mut gx = 0.0f32;
-    let mut gy = 0.0f32;
     let mut gxx = 0.0f32;
     let mut gyy = 0.0f32;
     let mut gxy = 0.0f32;
@@ -66,8 +64,6 @@ fn klt(prev: &Gray, next: &Gray, start: (f32, f32), radius: i32) -> Option<(f32,
             gxx += ix * ix;
             gyy += iy * iy;
             gxy += ix * iy;
-            gx += ix;
-            gy += iy;
         }
     }
     let det = gxx * gyy - gxy * gxy;
@@ -140,9 +136,9 @@ pub fn track_sequence(left: &[Gray], right: Option<&[Gray]>, start: (f32, f32), 
         return Vec::new();
     }
     let patch = patch.clamp(7, 31) as i32;
-    let r = patch / 2;
+    let radius = patch / 2;
     // Satellites sit two patch radii out so scale/rotation have a usable baseline.
-    let spread = (r * 2) as f32;
+    let spread = (radius * 2) as f32;
     let offsets = [(0.0, 0.0), (spread, 0.0), (-spread, 0.0), (0.0, spread), (0.0, -spread)];
     let mut pts: Vec<(f32, f32)> = offsets.iter().map(|&(dx, dy)| (start.0 + dx, start.1 + dy)).collect();
     let mut out = Vec::new();
@@ -151,7 +147,7 @@ pub fn track_sequence(left: &[Gray], right: Option<&[Gray]>, start: (f32, f32), 
         if i > 0 {
             let prev = &left[i - 1];
             for p in &mut pts {
-                if let Some(q) = klt(prev, frame, *p, r) {
+                if let Some(q) = klt(prev, frame, *p, radius) {
                     *p = q;
                 }
             }
@@ -179,7 +175,7 @@ pub fn track_sequence(left: &[Gray], right: Option<&[Gray]>, start: (f32, f32), 
         };
         let z = right
             .and_then(|r| r.get(i))
-            .map(|r| disparity(frame, r, center, r.min(7), max_disp.max(1.0)))
+            .map(|right_frame| disparity(frame, right_frame, center, radius.min(7), max_disp.max(1.0)))
             .unwrap_or(0.0);
         out.push(TrackPoint { x: center.0, y: center.1, z, scale, rotation });
     }
