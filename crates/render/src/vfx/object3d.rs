@@ -621,6 +621,24 @@ mod tests {
         ((sx / n as f64) as f32, (sy / n as f64) as f32, (x1 - x0 + 1) as f32, (y1 - y0 + 1) as f32, n)
     }
 
+    /// The middle of the bounding box of what was drawn. Unlike the ink centroid this is exactly
+    /// the object's position: glyph contours are centred on their bounds before extrusion, and
+    /// every face projects symmetrically about the principal point.
+    fn box_centre(img: &Image) -> (f32, f32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (i, p) in img.px.chunks(4).enumerate() {
+            if p[3] <= 0.5 {
+                continue;
+            }
+            let (x, y) = (i % img.w, i / img.w);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+        ((x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0)
+    }
+
     /// The regression that mattered on device: at 1080 x 1920 the default position (the frame
     /// centre) used to be added to the vertices before projecting, which threw the object more
     /// than a frame away. Small test images hid it — the error scales with the frame height.
@@ -681,9 +699,10 @@ mod tests {
         e.params.get_mut("text").unwrap().value = filmcraft_project::ParamValue::Text("Ag".into());
         let mut img = Image::new(1080, 1920);
         apply(&mut img, &e, &ctx());
-        let (cx, cy, _, _, n) = drawn(&img);
+        let (_, _, _, _, n) = drawn(&img);
         assert!(n > 20_000, "3D text covered only {n} pixels at 1080x1920");
-        assert!((cx - 540.0).abs() < 40.0 && (cy - 960.0).abs() < 40.0, "3D text sat at ({cx}, {cy})");
+        let (cx, cy) = box_centre(&img);
+        assert!((cx - 540.0).abs() < 3.0 && (cy - 960.0).abs() < 3.0, "3D text sat at ({cx}, {cy})");
     }
 
     #[test]

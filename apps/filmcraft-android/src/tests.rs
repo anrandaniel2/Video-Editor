@@ -1326,13 +1326,15 @@ fn advanced_object3d_previews_over_video_at_monitor_scale() {
     let mut st = m.object3d_state(id).unwrap().settings;
     st.mesh = advanced::Object3DMesh::Text;
     st.text = "3D".into();
-    st.size = 200.0;
+    st.size = 140.0;
     m.set_object3d(id, st, None).unwrap();
     let text = m.renderer().unwrap().frame(t, 720, false, None).unwrap();
     let (n, cx, cy, bbox) = changed_pixels(&before.rgba, &text.rgba, 405);
     let msg = format!("{n} changed pixels, centre ({cx:.0}, {cy:.0}), box {bbox:?}");
     assert!(n > 1_500, "3D text was invisible over the video: {msg}");
-    assert!((cx - 202.5).abs() < 25.0 && (cy - 360.0).abs() < 35.0, "3D text was not centred: {msg}");
+    // The box, not the ink centroid: a glyph run carries its weight unevenly.
+    let (bx, by) = ((bbox.0 + bbox.2) as f64 / 2.0, (bbox.1 + bbox.3) as f64 / 2.0);
+    assert!((bx - 202.5).abs() < 8.0 && (by - 360.0).abs() < 8.0, "3D text was not centred: {msg}");
 }
 
 #[test]
