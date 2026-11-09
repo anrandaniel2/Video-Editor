@@ -540,7 +540,7 @@ impl Tracker {
                 }
             }
         }
-        let confidence = if self.feats.is_empty() { 0.0 } else { to.len() as f32 / self.feats.len() };
+        let confidence: f32 = if self.feats.is_empty() { 0.0 } else { to.len() as f32 / self.feats.len() as f32 };
         if let Some((a, b, tx, ty)) = similarity(&from, &to) {
             let (x, y) = self.target;
             self.target = (a * x - b * y + tx, b * x + a * y + ty);

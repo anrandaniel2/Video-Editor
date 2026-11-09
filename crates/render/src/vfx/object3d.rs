@@ -714,7 +714,7 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         // Cut curves to the size they actually appear at, so a big sphere is round and a small
         // one does not cost thousands of triangles.
         let radius = k * cam.2 / p.z.max(1.0);
-        let tris: Vec<[Vert; 3]> = mesh_tris(p.mesh, k, dz, radius).into_iter().map(|t| t.map(place)).collect();
+        let tris: Vec<[Vert; 3]> = mesh_tris(p.mesh, k, dz, radius).into_iter().map(|t| [place(t[0]), place(t[1]), place(t[2])]).collect();
         let pts: Vec<V3> = tris.iter().flat_map(|t| t.iter().map(|v| v.p)).collect();
         let Some(b) = bounds(&pts, cam) else { return };
         let Some(mut buf) = Buf::new(img, b) else { return };
