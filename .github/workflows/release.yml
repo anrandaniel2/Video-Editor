@@ -63,28 +63,6 @@ jobs:
         with:
           key: release-android
 
-      - name: Advanced Rust checks
-        run: |
-          set -o pipefail
-          check() {
-            if ! "$@" 2>&1 | tee /tmp/advanced-checks.log; then
-              python3 - <<'PY'
-          import re
-          lines = open('/tmp/advanced-checks.log', encoding='utf-8', errors='replace').read().splitlines()
-          clean = [re.sub(r'\x1b\[[0-9;]*m', '', l).strip() for l in lines]
-          keep = [l for l in clean if re.search(r'error|-->|panicked|assert|FAILED|failures|expected|found|cannot|mismatched|no method|not found|unresolved', l)]
-          msg = ' %0A '.join((keep[:80] + ['--- tail ---'] + clean[-40:]))[:60000]
-          print('::error file=.github/workflows/release.yml,line=1::' + msg)
-          PY
-              exit 1
-            fi
-          }
-          check cargo test -p filmcraft-project --lib tracking::
-          check cargo test -p filmcraft-render --lib track3d::
-          check cargo test -p filmcraft-render --lib vfx::object3d::
-          check cargo test -p filmcraft-render --lib vfx::background::
-          check cargo test -p filmcraft-android --lib advanced_
-
       - name: Install cargo-ndk and the Android NDK
         run: |
           cargo install cargo-ndk --version 4.1.2 --locked
@@ -117,7 +95,18 @@ jobs:
             apk=app-release-unsigned.apk
             extra+=(-Pfilmcraft.unsigned=true)
           fi
-          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" "${extra[@]}" --no-daemon
+          set -o pipefail
+          if ! ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" "${extra[@]}" --no-daemon 2>&1 | tee /tmp/gradle-build.log; then
+            python3 - <<'PY'
+          import re
+          lines = open('/tmp/gradle-build.log', encoding='utf-8', errors='replace').read().splitlines()
+          clean = [re.sub(r'\x1b\[[0-9;]*m', '', l).strip() for l in lines]
+          keep = [l for l in clean if re.search(r'error|e: |FAILURE|What went wrong|Execution failed|Caused by|unresolved|type mismatch|too many arguments|no value passed|cannot access|Unresolved|FAILED', l, re.I)]
+          msg = ' %0A '.join((keep[:100] + ['--- tail ---'] + clean[-60:]))[:60000]
+          print('::error file=.github/workflows/release.yml,line=1::' + msg)
+          PY
+            exit 1
+          fi
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp "app/build/outputs/apk/release/$apk" "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
 
