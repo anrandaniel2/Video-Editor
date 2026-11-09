@@ -1234,11 +1234,11 @@ fn advanced_object3d_rotation_keyframes_interpolate_and_toggle_off() {
     let mut a = m.object3d_state(id).unwrap().settings;
     a.rotation_y = 0.0;
     m.set_object3d(id, a, None).unwrap();
-    m.set_playhead(SEC / 2);
+    m.set_playhead(SEC);
     let mut b = m.object3d_state(id).unwrap().settings;
     b.rotation_y = 90.0;
     m.set_object3d(id, b, None).unwrap();
-    m.set_playhead(SEC / 4);
+    m.set_playhead(SEC / 2);
     let mid = m.object3d_state(id).unwrap();
     assert!(mid.animated);
     assert!((mid.settings.rotation_y - 45.0).abs() < 1.0, "{:?}", mid.settings.rotation_y);
