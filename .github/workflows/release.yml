@@ -13,6 +13,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: ['arena/694df4ef-video-editor']
   workflow_dispatch:
 
 permissions:
@@ -63,6 +64,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-android
+
+      - name: Advanced Rust checks
+        run: |
+          set -o pipefail
+          check() {
+            if ! "$@" 2>&1 | tee /tmp/advanced-checks.log; then
+              python3 - <<'PY'
+          import re
+          lines = open('/tmp/advanced-checks.log', encoding='utf-8', errors='replace').read().splitlines()
+          clean = [re.sub(r'\x1b\[[0-9;]*m', '', l).strip() for l in lines]
+          keep = [l for l in clean if re.search(r'error|-->|panicked|assert|FAILED|failures|expected|found|cannot|mismatched|no method|not found|unresolved|warning: unused', l)]
+          msg = ' %0A '.join((keep[:80] + ['--- tail ---'] + clean[-40:]))[:60000]
+          print('::error file=.github/workflows/release.yml,line=1::' + msg)
+          PY
+              exit 1
+            fi
+          }
+          check cargo test -p filmcraft-render --lib track3d::
+          check cargo test -p filmcraft-render --lib vfx::object3d::
+          check cargo test -p filmcraft-project --lib tracking::
+          check cargo test -p filmcraft-android --lib advanced_
 
       - name: Install cargo-ndk and the Android NDK
         run: |

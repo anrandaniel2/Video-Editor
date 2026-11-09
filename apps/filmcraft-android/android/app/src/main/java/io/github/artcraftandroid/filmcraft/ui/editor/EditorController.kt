@@ -924,7 +924,11 @@ class EditorController(
                 }
                 selectedTrackId = info.id
                 loadTracks()
-                host.tell("Tracked ${info.samples} frames.")
+                val lock = info.quality.toInt()
+                host.tell(
+                    if (lock < 40) "Tracked ${info.samples} frames but only $lock% stayed locked. Tap a spot with more detail and track again."
+                    else "Tracked ${info.samples} frames · $lock% lock" + if (info.lost > 0u) " · lost ${info.lost}" else "",
+                )
             } catch (e: Exception) { host.tell(e.userMessage) }
             trackingBusy = false
             refresh()

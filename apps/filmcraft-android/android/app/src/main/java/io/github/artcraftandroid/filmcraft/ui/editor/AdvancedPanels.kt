@@ -5,14 +5,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -20,6 +25,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -30,8 +36,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
+import io.github.artcraftandroid.filmcraft.core.FontFamily
 import io.github.artcraftandroid.filmcraft.core.Object3DMesh
 import io.github.artcraftandroid.filmcraft.core.Object3DSettings
 import io.github.artcraftandroid.filmcraft.core.StereoLayout
@@ -39,6 +47,7 @@ import io.github.artcraftandroid.filmcraft.ui.Fc
 import io.github.artcraftandroid.filmcraft.ui.FcSlider
 import io.github.artcraftandroid.filmcraft.ui.FcSize
 import io.github.artcraftandroid.filmcraft.ui.FcType
+import io.github.artcraftandroid.filmcraft.ui.GlyphIcon
 import io.github.artcraftandroid.filmcraft.ui.LucideIcons
 import io.github.artcraftandroid.filmcraft.ui.PanelAction
 import io.github.artcraftandroid.filmcraft.ui.SelectChip
@@ -112,19 +121,22 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
             label = { Text("Text") },
             modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 8.dp).testTag("object3d_text"),
         )
-        Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = st.font,
-                onValueChange = { change((ed.object3DState?.settings ?: st).copy(font = it)) },
-                label = { Text("Font") },
-                modifier = Modifier.weight(1f).testTag("object3d_font"),
-            )
-            OutlinedTextField(
-                value = st.fontStyle,
-                onValueChange = { change((ed.object3DState?.settings ?: st).copy(fontStyle = it)) },
-                label = { Text("Style") },
-                modifier = Modifier.weight(1f).testTag("object3d_font_style"),
-            )
+        val families by produceState<List<FontFamily>>(emptyList()) {
+            value = runCatching { ed.engine.command { fontFamilies() } }.getOrDefault(emptyList())
+        }
+        val styles = families.firstOrNull { it.name == st.font }?.styles ?: listOf(st.fontStyle.ifBlank { "Regular" })
+        PickerRow("Font", st.font, families.map { it.name }.ifEmpty { listOf(st.font) }, "object3d_font") { picked ->
+            val next = families.firstOrNull { it.name == picked }?.styles ?: emptyList()
+            // Keep the style when the new family has it, else fall back to Regular/its first.
+            val style = when {
+                next.contains(st.fontStyle) -> st.fontStyle
+                next.contains("Regular") -> "Regular"
+                else -> next.firstOrNull() ?: "Regular"
+            }
+            change((ed.object3DState?.settings ?: st).copy(font = picked, fontStyle = style))
+        }
+        PickerRow("Style", st.fontStyle, styles, "object3d_font_style") { picked ->
+            change((ed.object3DState?.settings ?: st).copy(fontStyle = picked))
         }
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
@@ -183,6 +195,65 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         }
         AdvancedSlider("Track depth", st.trackDepth, -1000.0, 1000.0, 5.0, "object3d_track_depth") { v, k ->
             change((ed.object3DState?.settings ?: st).copy(trackDepth = v), k)
+        }
+    }
+}
+
+/**
+ * A labelled dropdown. Long lists (the phone can have hundreds of fonts) get a search field and
+ * scroll; the current value stays visible on the closed row.
+ */
+@Composable
+private fun PickerRow(label: String, value: String, options: List<String>, tag: String, onPick: (String) -> Unit) {
+    var showList by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp)) {
+        Text(label, style = FcType.Caption, color = Fc.Detail)
+        Spacer(Modifier.height(4.dp))
+        Box {
+            Row(
+                Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp)).background(Fc.Raised)
+                    .clickable(onClick = { showList = true })
+                    .padding(horizontal = 12.dp)
+                    .testTag(tag),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    value.ifBlank { "—" },
+                    style = FcType.Body,
+                    color = Fc.Title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                GlyphIcon(LucideIcons.ChevronDown.glyph(), Fc.Detail, size = 18.dp)
+            }
+            DropdownMenu(
+                expanded = showList,
+                onDismissRequest = { showList = false; query = "" },
+                modifier = Modifier.heightIn(max = 360.dp).testTag("${tag}_menu"),
+            ) {
+                if (options.size > 10) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        label = { Text("Search") },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("${tag}_search"),
+                    )
+                }
+                val shown = options.filter { query.isBlank() || it.contains(query.trim(), ignoreCase = true) }
+                if (shown.isEmpty()) {
+                    DropdownMenuItem(text = { Text("No match", color = Fc.Detail) }, onClick = { }, enabled = false)
+                }
+                shown.forEachIndexed { i, option ->
+                    DropdownMenuItem(
+                        text = { Text(option, color = if (option == value) Fc.Accent else Fc.Title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = { showList = false; query = ""; onPick(option) },
+                        modifier = Modifier.testTag("${tag}_item_$i"),
+                    )
+                }
+            }
         }
     }
 }
@@ -253,7 +324,7 @@ fun TrackingPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ed.motionTracks.forEach { t ->
-                    SelectChip("${t.name} · ${t.samples}", ed.selectedTrackId == t.id, { ed.selectedTrackId = t.id }, tag = "tracking_item_${t.id}")
+                    SelectChip("${t.name} · ${t.samples}f · ${t.quality.toInt()}%", ed.selectedTrackId == t.id, { ed.selectedTrackId = t.id }, tag = "tracking_item_${t.id}")
                 }
             }
             Text(

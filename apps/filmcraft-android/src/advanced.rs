@@ -12,7 +12,7 @@ use filmcraft_engine::{EngineError, Session};
 use filmcraft_media::FrameRequest;
 use filmcraft_project::{ClipId, EffectInstance, ItemKind, ParamValue, Sequence, TrackItem, find_effect, graphic};
 use filmcraft_render::SourceProvider;
-use filmcraft_render::track3d::{Gray, track_sequence};
+use filmcraft_render::track3d::{Gray, Tracker};
 use filmcraft_time::Tick;
 use serde_json::json;
 
@@ -202,6 +202,11 @@ pub struct MotionTrackInfo {
     pub samples: u32,
     pub start: i64,
     pub end: i64,
+    /// Mean tracking confidence, 0..100: how much of the feature set stayed locked. A low
+    /// number means the subject was occluded, left the frame, or had no texture to follow.
+    pub quality: f64,
+    /// Frames where the target was lost and the sample only holds its last known place.
+    pub lost: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -623,52 +628,56 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
     let source = provider.source(c.item).ok_or_else(|| MobileError::Command("The clip's media could not be opened.".into()))?;
     let (src_w, src_h) = source.info().video.as_ref().map(|v| (v.width, v.height)).unwrap_or((seq.settings.width, seq.settings.height));
     let scale = (480.0f32 / src_w.max(src_h).max(1) as f32).min(1.0);
-    let mut left = Vec::new();
-    let mut right = Vec::new();
-    let mut times = Vec::new();
+    let patch = opts.patch_size.clamp(7, 41) as usize;
+    let max_disp = finite(opts.baseline, 64.0).clamp(4.0, 256.0) as f32;
+    // Streamed: one decoded frame and two pyramids at a time. Buffering a whole analysis was
+    // hundreds of megabytes on a phone for a few seconds of footage.
+    let mut tracker: Option<Tracker> = None;
+    let mut samples: Vec<filmcraft_project::TrackSample> = Vec::new();
     let mut t = start;
-    let mut view = (0usize, 0usize, 1usize, 1usize);
-    let mut full = (1usize, 1usize);
-    while t < end && times.len() < 2000 {
+    while t < end && samples.len() < 2000 {
+        if filmcraft_media::cancel::cancelled() {
+            break;
+        }
         let st = c.source_time_at(t);
         let Ok(f) = source.video_frame(FrameRequest { time: st, scale }) else { break };
         let rgba = f.to_rgba8();
         let g = Gray::from_rgba8(&rgba, f.width as usize, f.height as usize);
-        full = (g.w, g.h);
-        let (x0, y0, vw, vh) = view_rect(opts.stereo, g.w, g.h);
-        view = (x0, y0, vw, vh);
-        left.push(crop_gray(&g, x0, y0, vw, vh));
-        if opts.stereo != StereoLayout::Mono {
-            let (rx, ry) = match opts.stereo {
-                StereoLayout::SideBySide => (vw, 0),
-                StereoLayout::TopBottom => (0, vh),
-                StereoLayout::Mono => (0, 0),
-            };
-            right.push(crop_gray(&g, rx, ry, vw, vh));
-        }
-        times.push(t - c.start);
-        t += frame;
-    }
-    if left.len() < 2 {
-        return Err(MobileError::Command("Not enough frames to track.".into()));
-    }
-    let (vx, vy, vw, vh) = view;
-    let tx = (finite(opts.target_x, 0.5).clamp(0.0, 1.0) * vw as f64) as f32;
-    let ty = (finite(opts.target_y, 0.5).clamp(0.0, 1.0) * vh as f64) as f32;
-    let pts = track_sequence(&left, if right.is_empty() { None } else { Some(&right) }, (tx, ty), opts.patch_size as usize, finite(opts.baseline, 64.0).clamp(4.0, 256.0) as f32);
-    let samples: Vec<filmcraft_project::TrackSample> = pts
-        .iter()
-        .zip(times)
-        .map(|(p, time)| filmcraft_project::TrackSample {
-            time,
-            x: ((vx as f32 + p.x) / full.0.max(1) as f32).clamp(0.0, 1.0),
-            y: ((vy as f32 + p.y) / full.1.max(1) as f32).clamp(0.0, 1.0),
+        let (full_w, full_h) = (g.w.max(1), g.h.max(1));
+        let (vx, vy, vw, vh) = view_rect(opts.stereo, g.w, g.h);
+        let left = crop_gray(&g, vx, vy, vw, vh);
+        let right = match opts.stereo {
+            StereoLayout::Mono => None,
+            StereoLayout::SideBySide => Some(crop_gray(&g, vx + vw, vy, vw, vh)),
+            StereoLayout::TopBottom => Some(crop_gray(&g, vx, vy + vh, vw, vh)),
+        };
+        let p = match &mut tracker {
+            None => {
+                let target = ((finite(opts.target_x, 0.5).clamp(0.0, 1.0) * vw as f64) as f32, (finite(opts.target_y, 0.5).clamp(0.0, 1.0) * vh as f64) as f32);
+                let tr = Tracker::new(&left, target, patch, max_disp);
+                let a = tr.anchor();
+                tracker = Some(tr);
+                a
+            }
+            Some(tr) => tr.push(&left, right.as_ref()),
+        };
+        samples.push(filmcraft_project::TrackSample {
+            time: t - c.start,
+            x: ((vx as f32 + p.x) / full_w as f32).clamp(0.0, 1.0),
+            y: ((vy as f32 + p.y) / full_h as f32).clamp(0.0, 1.0),
             z: p.z,
             scale: p.scale,
             rotation: p.rotation,
-        })
-        .collect();
+            confidence: p.confidence,
+        });
+        t += frame;
+    }
+    if samples.len() < 2 {
+        return Err(MobileError::Command("Not enough frames to track.".into()));
+    }
     let count = samples.len() as u32;
+    let quality = f64::from(samples.iter().map(|s| s.confidence).sum::<f32>()) / f64::from(count) * 100.0;
+    let lost = samples.iter().filter(|s| s.confidence <= 0.0).count() as u32;
     let first = samples.first().map(|s| s.time).unwrap_or(Tick::ZERO);
     let last = samples.last().map(|s| s.time).unwrap_or(Tick::ZERO);
     let layout = opts.stereo;
@@ -680,7 +689,7 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
         q.motion_tracks.push(filmcraft_project::MotionTrack { id, clip: c.id, name: track_name, layout: layout.project(), samples });
         Ok(id)
     })?;
-    Ok(MotionTrackInfo { id: track_id, clip: c.id.0, name, layout, samples: count, start: c.start.0 + first.0, end: c.start.0 + last.0 })
+    Ok(MotionTrackInfo { id: track_id, clip: c.id.0, name, layout, samples: count, start: c.start.0 + first.0, end: c.start.0 + last.0, quality, lost })
 }
 
 pub(crate) fn motion_tracks(s: &Session) -> Result<Vec<MotionTrackInfo>, MobileError> {
@@ -696,6 +705,8 @@ pub(crate) fn motion_tracks(s: &Session) -> Result<Vec<MotionTrackInfo>, MobileE
             samples: t.samples.len() as u32,
             start: seq.find_item(t.clip).map(|(_, c)| c.start.0).unwrap_or(0) + t.samples.first().map(|s| s.time.0).unwrap_or(0),
             end: seq.find_item(t.clip).map(|(_, c)| c.start.0).unwrap_or(0) + t.samples.last().map(|s| s.time.0).unwrap_or(0),
+            quality: if t.samples.is_empty() { 0.0 } else { f64::from(t.samples.iter().map(|s| s.confidence).sum::<f32>()) / t.samples.len() as f64 * 100.0 },
+            lost: t.samples.iter().filter(|s| s.confidence <= 0.0).count() as u32,
         })
         .collect())
 }

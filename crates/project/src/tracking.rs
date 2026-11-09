@@ -43,6 +43,10 @@ pub struct TrackSample {
     pub scale: f32,
     #[serde(default)]
     pub rotation: f32,
+    /// 0..1: how much of the tracked feature set stayed locked at this sample. Older projects
+    /// have no confidence recorded; they read as fully trusted.
+    #[serde(default = "one")]
+    pub confidence: f32,
 }
 
 fn one() -> f32 {
@@ -59,6 +63,7 @@ impl TrackSample {
             z: l(a.z, b.z),
             scale: l(a.scale, b.scale),
             rotation: l(a.rotation, b.rotation),
+            confidence: l(a.confidence, b.confidence),
         }
     }
 }
@@ -106,8 +111,8 @@ mod tests {
             name: "Track".into(),
             layout: StereoLayout::Mono,
             samples: vec![
-                TrackSample { time: Tick(0), x: 0.0, y: 0.0, z: 0.0, scale: 1.0, rotation: 0.0 },
-                TrackSample { time: Tick(100), x: 1.0, y: 2.0, z: 0.5, scale: 2.0, rotation: 90.0 },
+                TrackSample { time: Tick(0), x: 0.0, y: 0.0, z: 0.0, scale: 1.0, rotation: 0.0, confidence: 1.0 },
+                TrackSample { time: Tick(100), x: 1.0, y: 2.0, z: 0.5, scale: 2.0, rotation: 90.0, confidence: 1.0 },
             ],
         }
     }

@@ -728,6 +728,11 @@ impl MobileSession {
         text::fonts(&mut self.lock())
     }
 
+    /// Font families with the styles each one has, for the 3D text pickers.
+    pub fn font_families(&self) -> Vec<text::FontFamily> {
+        text::font_families(&mut self.lock())
+    }
+
     /// Where a picture, video or text clip sits on the frame.
     pub fn placement(&self, clip: u64) -> Result<Placement, MobileError> {
         placement::placement(&mut self.lock(), clip)

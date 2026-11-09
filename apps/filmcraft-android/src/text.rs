@@ -348,6 +348,48 @@ pub(crate) fn plain_style(own: &TextStyle) -> TextStyle {
     TextStyle { font: "Inter".into(), font_style: "SemiBold".into(), color: 0xffff_ffff, background: None, stroke: None, shadow: false, ..own.clone() }
 }
 
+/// A font family and the styles it actually ships, for the pickers.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FontFamily {
+    pub name: String,
+    pub styles: Vec<String>,
+}
+
+/// The families with their styles. A picker that offers "Bold" for a family that only has
+/// Regular silently draws the wrong face, so the style list comes from the font itself.
+pub(crate) fn font_families(s: &mut Session) -> Vec<FontFamily> {
+    let Ok(v) = s.execute("fonts.list", json!({"system": true})) else {
+        return vec![FontFamily { name: "Inter".into(), styles: vec!["Regular".into(), "Medium".into(), "SemiBold".into(), "Bold".into()] }];
+    };
+    let mut out: Vec<FontFamily> = v
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| {
+                    let name = f["family"].as_str()?.to_string();
+                    let script = (name.starts_with("Noto Sans ") || name.starts_with("Noto Serif ")) && !name.ends_with(" Display");
+                    if name.is_empty() || script {
+                        return None;
+                    }
+                    let mut styles: Vec<String> = f["styles"].as_array().map(|s| s.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                    if styles.is_empty() {
+                        styles.push("Regular".into());
+                    }
+                    styles.sort();
+                    styles.dedup();
+                    Some(FontFamily { name, styles })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort_by_key(|f| f.name.to_lowercase());
+    out.dedup_by(|a, b| a.name == b.name);
+    if out.is_empty() {
+        out.push(FontFamily { name: "Inter".into(), styles: vec!["Regular".into()] });
+    }
+    out
+}
+
 /// The font families text can use, sorted.
 pub(crate) fn fonts(s: &mut Session) -> Vec<String> {
     let Ok(v) = s.execute("fonts.list", json!({"system": true})) else { return vec!["Inter".into()] };

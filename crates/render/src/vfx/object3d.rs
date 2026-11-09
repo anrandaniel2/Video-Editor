@@ -146,7 +146,12 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
     }
 }
 
+/// The rasteriser's target: the object's bounding box inside the layer, optionally at 2x so
+/// silhouettes and highlights are antialiased. `x0`/`y0` are whole layer pixels.
 struct Buf {
+    x0: i32,
+    y0: i32,
+    ss: usize,
     w: usize,
     h: usize,
     px: Vec<[f32; 4]>,
@@ -154,22 +159,93 @@ struct Buf {
 }
 
 impl Buf {
-    fn new(w: usize, h: usize) -> Self {
-        Self { w, h, px: vec![[0.0; 4]; w * h], z: vec![0.0; w * h] }
+    /// A buffer over the layer rectangle covering `bounds` (in layer pixels), supersampled when
+    /// that stays affordable. Nothing is allocated for an object that is entirely off screen.
+    fn new(img: &Image, bounds: (f32, f32, f32, f32)) -> Option<Self> {
+        let (bx0, by0, bx1, by1) = bounds;
+        if !bx0.is_finite() || !by0.is_finite() || !bx1.is_finite() || !by1.is_finite() {
+            return None;
+        }
+        let x0 = (bx0.floor() as i32 - 2).max(0);
+        let y0 = (by0.floor() as i32 - 2).max(0);
+        let x1 = (bx1.ceil() as i32 + 2).min(img.w as i32);
+        let y1 = (by1.ceil() as i32 + 2).min(img.h as i32);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        // 2x2 samples per pixel where the box is small enough; a full-frame object at 4K would
+        // otherwise ask for hundreds of megabytes.
+        let ss = if w * h <= 1_000_000 { 2 } else { 1 };
+        let n = w * ss * h * ss;
+        Some(Self { x0, y0, ss, w: w * ss, h: h * ss, px: vec![[0.0; 4]; n], z: vec![0.0; n] })
     }
+
+    /// The layer-pixel centre of a buffer sample.
+    fn centre(&self, x: usize, y: usize) -> (f32, f32) {
+        let s = self.ss as f32;
+        (self.x0 as f32 + (x as f32 + 0.5) / s, self.y0 as f32 + (y as f32 + 0.5) / s)
+    }
+
+    /// The buffer range covering a layer-space rectangle.
+    fn range(&self, x_lo: f32, x_hi: f32, y_lo: f32, y_hi: f32) -> Option<(usize, usize, usize, usize)> {
+        let s = self.ss as f32;
+        let to = |v: f32, o: i32| ((v - o as f32) * s).floor() as i64;
+        let x0 = to(x_lo, self.x0).max(0) as usize;
+        let y0 = to(y_lo, self.y0).max(0) as usize;
+        let x1 = to(x_hi, self.x0).min(self.w as i64 - 1);
+        let y1 = to(y_hi, self.y0).min(self.h as i64 - 1);
+        if x1 < x0 as i64 || y1 < y0 as i64 {
+            return None;
+        }
+        Some((x0, x1 as usize, y0, y1 as usize))
+    }
+
     fn put(&mut self, x: f32, y: f32, inv_z: f32, c: [f32; 4]) {
         if inv_z <= 0.0 || c[3] <= 0.0 {
             return;
         }
-        let xi = x.floor() as isize;
-        let yi = y.floor() as isize;
-        if xi < 0 || yi < 0 || xi >= self.w as isize || yi >= self.h as isize {
+        let s = self.ss as f32;
+        let xi = ((x - self.x0 as f32) * s).floor() as i64;
+        let yi = ((y - self.y0 as f32) * s).floor() as i64;
+        if xi < 0 || yi < 0 || xi >= self.w as i64 || yi >= self.h as i64 {
             return;
         }
         let i = yi as usize * self.w + xi as usize;
         if inv_z > self.z[i] {
             self.z[i] = inv_z;
             self.px[i] = c;
+        }
+    }
+
+    /// Box-filter the samples down to layer pixels and mix them over the layer.
+    fn composite(self, img: &mut Image) {
+        let s = self.ss;
+        let n = (s * s) as f32;
+        for y in 0..self.h / s {
+            for x in 0..self.w / s {
+                let mut acc = [0.0f32; 4];
+                for oy in 0..s {
+                    for ox in 0..s {
+                        let p = self.px[(y * s + oy) * self.w + x * s + ox];
+                        for c in 0..4 {
+                            acc[c] += p[c];
+                        }
+                    }
+                }
+                for c in &mut acc {
+                    *c /= n;
+                }
+                if acc[3] <= 0.0 {
+                    continue;
+                }
+                let (ix, iy) = (self.x0 as usize + x, self.y0 as usize + y);
+                if ix >= img.w || iy >= img.h {
+                    continue;
+                }
+                let i = (iy * img.w + ix) * 4;
+                super::over(&mut img.px[i..i + 4], acc);
+            }
         }
     }
 }
@@ -180,6 +256,23 @@ fn project(v: V3, cx: f32, cy: f32, f: f32) -> Option<(f32, f32, f32)> {
     }
     let iz = 1.0 / v.z;
     Some((cx + f * v.x * iz, cy + f * v.y * iz, iz))
+}
+
+/// The layer rectangle a set of world points projects into.
+fn bounds(pts: &[V3], cam: (f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
+    let (cx, cy, f) = cam;
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let mut any = false;
+    for &v in pts {
+        if let Some((x, y, _)) = project(v, cx, cy, f) {
+            any = true;
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+    }
+    any.then_some((x0, y0, x1, y1))
 }
 
 fn shade(n: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
@@ -201,99 +294,134 @@ fn shade(n: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
     [c[0], c[1], c[2], alpha]
 }
 
-fn tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], c: [f32; 4]) {
+/// A triangle with a colour per corner: shading is interpolated across the face (Gouraud), so
+/// a curved surface reads as curved instead of as a fan of flat facets.
+fn tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], cols: [[f32; 4]; 3]) {
     let [a, b, d] = pts;
     let area = (b.0 - a.0) * (d.1 - a.1) - (b.1 - a.1) * (d.0 - a.0);
     if area.abs() < 1e-6 {
         return;
     }
-    let min_x = a.0.min(b.0).min(d.0).floor().max(0.0) as usize;
-    let max_x = a.0.max(b.0).max(d.0).ceil().min(buf.w as f32 - 1.0).max(0.0) as usize;
-    let min_y = a.1.min(b.1).min(d.1).floor().max(0.0) as usize;
-    let max_y = a.1.max(b.1).max(d.1).ceil().min(buf.h as f32 - 1.0).max(0.0) as usize;
-    if min_x > max_x || min_y > max_y {
+    let Some((x0, x1, y0, y1)) = buf.range(a.0.min(b.0).min(d.0), a.0.max(b.0).max(d.0), a.1.min(b.1).min(d.1), a.1.max(b.1).max(d.1)) else {
         return;
-    }
-    for y in min_y..=max_y {
-        let py = y as f32 + 0.5;
-        for x in min_x..=max_x {
-            let px = x as f32 + 0.5;
-            let w0 = ((b.0 - a.0) * (py - a.1) - (b.1 - a.1) * (px - a.0)) / area;
-            let w1 = ((d.0 - b.0) * (py - b.1) - (d.1 - b.1) * (px - b.0)) / area;
+    };
+    let inv = 1.0 / area;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let (px, py) = buf.centre(x, y);
+            let w0 = ((b.0 - a.0) * (py - a.1) - (b.1 - a.1) * (px - a.0)) * inv;
+            let w1 = ((d.0 - b.0) * (py - b.1) - (d.1 - b.1) * (px - b.0)) * inv;
             let w2 = 1.0 - w0 - w1;
-            if w0 < -0.001 || w1 < -0.001 || w2 < -0.001 {
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                 continue;
             }
             // w0/w1/w2 are the barycentric weights of d/a/b respectively.
             let iz = w0 * d.2 + w1 * a.2 + w2 * b.2;
-            buf.put(px, py, iz, c);
+            let mut c = [0.0f32; 4];
+            for k in 0..4 {
+                c[k] = w1 * cols[0][k] + w2 * cols[1][k] + w0 * cols[2][k];
+            }
+            let i = y * buf.w + x;
+            if iz > buf.z[i] {
+                buf.z[i] = iz;
+                buf.px[i] = c;
+            }
         }
     }
 }
 
-fn draw_tri(buf: &mut Buf, v: [V3; 3], n: V3, p: &Params, base: [f32; 3], alpha: f32, cam: (f32, f32, f32)) {
+/// A triangle already in world space (rotated and placed), with a normal per corner.
+fn draw_tri(buf: &mut Buf, v: [Vert; 3], p: &Params, base: [f32; 3], alpha: f32, cam: (f32, f32, f32)) {
     let (cx, cy, f) = cam;
-    let Some(a) = project(v[0], cx, cy, f) else { return };
-    let Some(b) = project(v[1], cx, cy, f) else { return };
-    let Some(d) = project(v[2], cx, cy, f) else { return };
+    let Some(a) = project(v[0].p, cx, cy, f) else { return };
+    let Some(b) = project(v[1].p, cx, cy, f) else { return };
+    let Some(d) = project(v[2].p, cx, cy, f) else { return };
     // Two-sided lighting: parametric windings are not all outward, and the z-buffer already
     // keeps the nearest surface; `shade` faces the visible side toward the camera.
-    let c = shade(rotate(n, p.rot), p, base, alpha);
-    tri(buf, [a, b, d], c);
+    let cols = [shade(v[0].n, p, base, alpha), shade(v[1].n, p, base, alpha), shade(v[2].n, p, base, alpha)];
+    tri(buf, [a, b, d], cols);
 }
 
+/// A flat-shaded quad already in world space (text walls and bevels).
 fn quad(buf: &mut Buf, v: [V3; 4], n: V3, p: &Params, base: [f32; 3], alpha: f32, cam: (f32, f32, f32)) {
-    draw_tri(buf, [v[0], v[1], v[2]], n, p, base, alpha, cam);
-    draw_tri(buf, [v[0], v[2], v[3]], n, p, base, alpha, cam);
+    let t = [Vert { p: v[0], n }, Vert { p: v[1], n }, Vert { p: v[2], n }, Vert { p: v[3], n }];
+    draw_tri(buf, [t[0], t[1], t[2]], p, base, alpha, cam);
+    draw_tri(buf, [t[0], t[2], t[3]], p, base, alpha, cam);
 }
 
-fn mesh_tris(mesh: u32) -> Vec<([V3; 3], V3)> {
-    let mut t = Vec::new();
-    let mut push = |a: V3, b: V3, c: V3| {
-        let n = b.sub(a).cross(c.sub(a)).norm();
-        t.push(([a, b, c], n));
+/// A mesh vertex: where it is and which way its surface faces. Curved primitives carry the
+/// analytic normal at each vertex so shading can be interpolated; the cube and plane carry the
+/// face normal at all three corners, which keeps their edges crisp.
+#[derive(Clone, Copy)]
+struct Vert {
+    p: V3,
+    n: V3,
+}
+
+/// How many segments a circle of `radius` layer pixels needs for its facets to stay under half
+/// a pixel: the sagitta of a chord is r(1-cos(θ/2)) ≈ rθ²/8.
+fn segments(radius: f32) -> usize {
+    ((std::f32::consts::PI * radius.max(1.0).sqrt()).ceil() as usize).clamp(24, 192)
+}
+
+/// The triangles of a primitive, scaled to `k` (half width) by `dz` (half depth). `radius` is
+/// the object's approximate size on screen, which sets how finely curves are cut.
+fn mesh_tris(mesh: u32, k: f32, dz: f32, radius: f32) -> Vec<[Vert; 3]> {
+    let mut t: Vec<[Vert; 3]> = Vec::new();
+    // Positions scale by (k, k, dz); normals by the inverse transpose, so a stretched sphere
+    // still lights like a stretched sphere.
+    let vert = |x: f32, y: f32, z: f32, nx: f32, ny: f32, nz: f32| Vert {
+        p: V3::new(x * k, y * k, z * dz),
+        n: V3::new(nx / k.max(1e-4), ny / k.max(1e-4), nz / dz.max(1e-4)).norm(),
     };
+    let seg = segments(radius);
     match mesh {
         1 => {
-            let (lat, lon) = (14usize, 28usize);
+            let (lat, lon) = ((seg / 2).max(12), seg);
             for i in 0..lat {
                 let v0 = std::f32::consts::PI * i as f32 / lat as f32;
                 let v1 = std::f32::consts::PI * (i + 1) as f32 / lat as f32;
                 for j in 0..lon {
                     let u0 = std::f32::consts::TAU * j as f32 / lon as f32;
                     let u1 = std::f32::consts::TAU * (j + 1) as f32 / lon as f32;
-                    let s = |v: f32, u: f32| V3::new(v.sin() * u.cos(), v.cos(), v.sin() * u.sin());
-                    let a = s(v0, u0);
-                    let b = s(v1, u0);
-                    let c = s(v1, u1);
-                    let d = s(v0, u1);
-                    push(a, b, c);
-                    push(a, c, d);
+                    let s = |v: f32, u: f32| (v.sin() * u.cos(), v.cos(), v.sin() * u.sin());
+                    let (a, b, c, d) = (s(v0, u0), s(v1, u0), s(v1, u1), s(v0, u1));
+                    let mv = |(x, y, z): (f32, f32, f32)| vert(x, y, z, x, y, z);
+                    let (a, b, c, d) = (mv(a), mv(b), mv(c), mv(d));
+                    t.push([a, b, c]);
+                    t.push([a, c, d]);
                 }
             }
         }
         2 | 3 => {
-            let n = 28usize;
+            let n = seg;
             let top = if mesh == 3 { 0.0 } else { 1.0 };
+            // A cone's side leans: its normal tilts up by the slope of the wall.
+            let lean = if mesh == 3 { 0.5 } else { 0.0 };
             for j in 0..n {
                 let a0 = std::f32::consts::TAU * j as f32 / n as f32;
                 let a1 = std::f32::consts::TAU * (j + 1) as f32 / n as f32;
-                let b0 = V3::new(a0.cos(), -1.0, a0.sin());
-                let b1 = V3::new(a1.cos(), -1.0, a1.sin());
-                let t0 = V3::new(a0.cos() * top, 1.0, a0.sin() * top);
-                let t1 = V3::new(a1.cos() * top, 1.0, a1.sin() * top);
+                let (s0, c0, s1, c1) = (a0.sin(), a0.cos(), a1.sin(), a1.cos());
+                let b0 = vert(c0, -1.0, s0, c0, lean, s0);
+                let b1 = vert(c1, -1.0, s1, c1, lean, s1);
+                let t0 = vert(c0 * top, 1.0, s0 * top, c0, lean, s0);
+                let t1 = vert(c1 * top, 1.0, s1 * top, c1, lean, s1);
                 if mesh == 3 {
-                    push(b0, b1, t0);
+                    // The apex is a point: its normal is the average of the wall around it.
+                    let apex = vert(0.0, 1.0, 0.0, (c0 + c1) * 0.5, 1.0, (s0 + s1) * 0.5);
+                    t.push([b0, b1, apex]);
                 } else {
-                    push(b0, b1, t1);
-                    push(b0, t1, t0);
-                    push(V3::new(0.0, 1.0, 0.0), t0, t1);
+                    t.push([b0, b1, t1]);
+                    t.push([b0, t1, t0]);
+                    let cap = vert(0.0, 1.0, 0.0, 0.0, 1.0, 0.0);
+                    t.push([cap, t0, t1]);
                 }
-                push(V3::new(0.0, -1.0, 0.0), b1, b0);
+                let base = vert(0.0, -1.0, 0.0, 0.0, -1.0, 0.0);
+                t.push([base, b1, b0]);
             }
         }
         4 => {
-            let (n, m) = (28usize, 12usize);
+            let (n, m) = (seg, (seg / 2).max(12));
             let (r0, r1) = (0.72f32, 0.28f32);
             for i in 0..n {
                 let a0 = std::f32::consts::TAU * i as f32 / n as f32;
@@ -301,39 +429,49 @@ fn mesh_tris(mesh: u32) -> Vec<([V3; 3], V3)> {
                 for j in 0..m {
                     let b0 = std::f32::consts::TAU * j as f32 / m as f32;
                     let b1 = std::f32::consts::TAU * (j + 1) as f32 / m as f32;
-                    let pt = |a: f32, b: f32| V3::new((r0 + r1 * b.cos()) * a.cos(), r1 * b.sin(), (r0 + r1 * b.cos()) * a.sin());
-                    let a = pt(a0, b0);
-                    let b = pt(a1, b0);
-                    let c = pt(a1, b1);
-                    let d = pt(a0, b1);
-                    push(a, b, c);
-                    push(a, c, d);
+                    let s = |a: f32, b: f32| {
+                        let (sb, cb) = (b.sin(), b.cos());
+                        let (sa, ca) = (a.sin(), a.cos());
+                        let r = r0 + r1 * cb;
+                        vert(r * ca, r1 * sb, r * sa, cb * ca, sb, cb * sa)
+                    };
+                    let (a, b, c, d) = (s(a0, b0), s(a1, b0), s(a1, b1), s(a0, b1));
+                    t.push([a, b, c]);
+                    t.push([a, c, d]);
                 }
             }
         }
         5 => {
-            let a = V3::new(-1.0, -1.0, 0.0);
-            let b = V3::new(1.0, -1.0, 0.0);
-            let c = V3::new(1.0, 1.0, 0.0);
-            let d = V3::new(-1.0, 1.0, 0.0);
-            push(a, b, c);
-            push(a, c, d);
+            let v = [
+                vert(-1.0, -1.0, 0.0, 0.0, 0.0, -1.0),
+                vert(1.0, -1.0, 0.0, 0.0, 0.0, -1.0),
+                vert(1.0, 1.0, 0.0, 0.0, 0.0, -1.0),
+                vert(-1.0, 1.0, 0.0, 0.0, 0.0, -1.0),
+            ];
+            t.push([v[0], v[1], v[2]]);
+            t.push([v[0], v[2], v[3]]);
         }
         _ => {
             let v = [
-                V3::new(-1.0, -1.0, -1.0),
-                V3::new(1.0, -1.0, -1.0),
-                V3::new(1.0, 1.0, -1.0),
-                V3::new(-1.0, 1.0, -1.0),
-                V3::new(-1.0, -1.0, 1.0),
-                V3::new(1.0, -1.0, 1.0),
-                V3::new(1.0, 1.0, 1.0),
-                V3::new(-1.0, 1.0, 1.0),
+                (-1.0, -1.0, -1.0),
+                (1.0, -1.0, -1.0),
+                (1.0, 1.0, -1.0),
+                (-1.0, 1.0, -1.0),
+                (-1.0, -1.0, 1.0),
+                (1.0, -1.0, 1.0),
+                (1.0, 1.0, 1.0),
+                (-1.0, 1.0, 1.0),
             ];
             let f = [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]];
             for q in f {
-                push(v[q[0]], v[q[1]], v[q[2]]);
-                push(v[q[0]], v[q[2]], v[q[3]]);
+                let a = V3::new(v[q[0]].0, v[q[0]].1, v[q[0]].2);
+                let b = V3::new(v[q[1]].0, v[q[1]].1, v[q[1]].2);
+                let c = V3::new(v[q[2]].0, v[q[2]].1, v[q[2]].2);
+                let n = b.sub(a).cross(c.sub(a)).norm();
+                let mv = |i: usize| vert(v[i].0, v[i].1, v[i].2, n.x, n.y, n.z);
+                let (a, b, c, d) = (mv(q[0]), mv(q[1]), mv(q[2]), mv(q[3]));
+                t.push([a, b, c]);
+                t.push([a, c, d]);
             }
         }
     }
@@ -428,20 +566,21 @@ fn fill_face(buf: &mut Buf, contours: &[Vec<(f32, f32)>], plane: (f32, f32, f32)
     if contours.is_empty() || c[3] <= 0.0 {
         return;
     }
-    let mut ymin = f32::MAX;
-    let mut ymax = f32::MIN;
+    let (mut xmin, mut ymin, mut xmax, mut ymax) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     for ct in contours {
-        for &(_, y) in ct {
+        for &(x, y) in ct {
+            xmin = xmin.min(x);
+            xmax = xmax.max(x);
             ymin = ymin.min(y);
             ymax = ymax.max(y);
         }
     }
-    let y0 = (ymin.floor().max(0.0) as usize).min(buf.h.saturating_sub(1));
-    let y1 = (ymax.ceil().max(0.0) as usize).min(buf.h.saturating_sub(1));
+    let Some((bx0, bx1, by0, by1)) = buf.range(xmin, xmax, ymin, ymax) else { return };
     let (pa, pb, pc) = plane;
+    let ss = buf.ss as f32;
     let mut xs = Vec::new();
-    for y in y0..=y1 {
-        let py = y as f32 + 0.5;
+    for by in by0..=by1 {
+        let py = buf.y0 as f32 + (by as f32 + 0.5) / ss;
         xs.clear();
         for ct in contours {
             for i in 0..ct.len() {
@@ -454,21 +593,25 @@ fn fill_face(buf: &mut Buf, contours: &[Vec<(f32, f32)>], plane: (f32, f32, f32)
         }
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         for pair in xs.chunks_exact(2) {
-            let xa = (pair[0].ceil().max(0.0) as usize).min(buf.w.saturating_sub(1));
-            let xb = (pair[1].floor().max(0.0) as usize).min(buf.w.saturating_sub(1));
-            if xa > xb {
+            let xa = (((pair[0] - buf.x0 as f32) * ss).ceil() as i64).max(bx0 as i64);
+            let xb = (((pair[1] - buf.x0 as f32) * ss).floor() as i64).min(bx1 as i64);
+            if xa > xb || xa >= buf.w as i64 {
                 continue;
             }
-            for x in xa..=xb {
-                let px = x as f32 + 0.5;
-                buf.put(px, py, pa * px + pb * py + pc, c);
+            for bx in xa as usize..=xb as usize {
+                let px = buf.x0 as f32 + (bx as f32 + 0.5) / ss;
+                let iz = pa * px + pb * py + pc;
+                let i = by * buf.w + bx;
+                if iz > buf.z[i] {
+                    buf.z[i] = iz;
+                    buf.px[i] = c;
+                }
             }
         }
     }
 }
 
-fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32)) {
-    let cs = text_contours(p);
+fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f32)>]) {
     if cs.is_empty() {
         return;
     }
@@ -476,7 +619,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32)) {
     // The camera looks down +z, so the front face sits at negative z (nearer the viewer).
     let depth = p.depth.max(0.5);
     let bevel = p.bevel.min(depth * 0.45);
-    let front = if bevel > 0.25 { cs.iter().map(|c| inset(c, 0.94)).collect::<Vec<_>>() } else { cs.clone() };
+    let front = if bevel > 0.25 { cs.iter().map(|c| inset(c, 0.94)).collect::<Vec<_>>() } else { cs.to_vec() };
     let alpha = p.opacity * p.color[3].clamp(0.0, 1.0);
     let side_alpha = p.opacity * p.side[3].clamp(0.0, 1.0);
     let base = lin(p.color);
@@ -487,7 +630,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32)) {
         ct.iter().filter_map(|&(x, y)| project(to_v(x, y, z), cx, cy, f).map(|(sx, sy, _)| (sx, sy))).collect()
     };
     // Back and front faces (planar; even-odd scanline fill keeps glyph holes open).
-    for (ct, z, n, col, a) in [(&cs, 0.0, V3::new(0.0, 0.0, 1.0), side, side_alpha), (&front, -depth, V3::new(0.0, 0.0, -1.0), base, alpha)] {
+    for (ct, z, n, col, a) in [(cs, 0.0, V3::new(0.0, 0.0, 1.0), side, side_alpha), (front.as_slice(), -depth, V3::new(0.0, 0.0, -1.0), base, alpha)] {
         let pc: Vec<Vec<(f32, f32)>> = ct.iter().map(|c| proj_ct(c, z)).filter(|c| c.len() >= 3).collect();
         let flat: Vec<(f32, f32, f32)> = ct
             .iter()
@@ -498,13 +641,13 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32)) {
         }
     }
     // Walls and chamfer.
-    for ct in &cs {
+    for ct in cs {
         let ins = inset(ct, 0.94);
         for i in 0..ct.len() {
             let j = (i + 1) % ct.len();
             let (x0, y0) = ct[i];
             let (x1, y1) = ct[j];
-            let n = V3::new(y1 - y0, x0 - x1, 0.0).norm();
+            let n = rotate(V3::new(y1 - y0, x0 - x1, 0.0).norm(), p.rot);
             let z_top = -depth + bevel;
             quad(
                 buf,
@@ -518,7 +661,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32)) {
             if bevel > 0.25 && ins.len() == ct.len() {
                 let (bx0, by0) = ins[i];
                 let (bx1, by1) = ins[j];
-                let bn = V3::new(y1 - y0, x0 - x1, -(x1 - x0).hypot(y1 - y0) * 0.7).norm();
+                let bn = rotate(V3::new(y1 - y0, x0 - x1, -(x1 - x0).hypot(y1 - y0) * 0.7).norm(), p.rot);
                 quad(
                     buf,
                     [to_v(x0, y0, z_top), to_v(x1, y1, z_top), to_v(bx1, by1, -depth), to_v(bx0, by0, -depth)],
@@ -541,30 +684,44 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     if p.opacity <= 0.0 || p.scale <= 0.0 {
         return;
     }
-    let mut buf = Buf::new(img.w, img.h);
     // `position` is where the object sits in the layer, in layer pixels (the frame centre by
     // default), so it is the camera's principal point. It must not be added to the vertices as
     // well: that would move the object by f/z times its position — a few pixels in a thumbnail,
     // but well over a thousand at 1080p, which put every object outside the frame.
     let cam = (p.pos.0, p.pos.1, (img.h as f32).max(1.0));
+    let off = V3::new(0.0, 0.0, p.z);
+    let place = |v: Vert| Vert { p: rotate(v.p, p.rot).add(off), n: rotate(v.n, p.rot) };
     if p.mesh == 6 {
-        draw_text(&mut buf, &p, cam);
+        let cs = text_contours(&p);
+        if cs.is_empty() {
+            return;
+        }
+        let depth = p.depth.max(0.5);
+        let pts: Vec<V3> = cs
+            .iter()
+            .flat_map(|c| c.iter())
+            .flat_map(|&(x, y)| [rotate(V3::new(x, y, 0.0), p.rot).add(off), rotate(V3::new(x, y, -depth), p.rot).add(off)])
+            .collect();
+        let Some(b) = bounds(&pts, cam) else { return };
+        let Some(mut buf) = Buf::new(img, b) else { return };
+        draw_text(&mut buf, &p, cam, &cs);
+        buf.composite(img);
     } else {
         let k = p.size * p.scale * 0.5;
         let dz = if p.mesh == 5 { 0.0 } else if p.depth > 0.0 { p.depth * p.scale * 0.5 } else { k };
         let base = lin(p.color);
         let alpha = p.opacity * p.color[3].clamp(0.0, 1.0);
-        for (v, n) in mesh_tris(p.mesh) {
-            let v = v.map(|x| V3::new(x.x * k, x.y * k, x.z * dz));
-            let n = V3::new(n.x / k.max(1e-4), n.y / k.max(1e-4), n.z / dz.max(1e-4)).norm();
-            let v = v.map(|x| rotate(x, p.rot).add(V3::new(0.0, 0.0, p.z)));
-            draw_tri(&mut buf, v, n, &p, base, alpha, cam);
+        // Cut curves to the size they actually appear at, so a big sphere is round and a small
+        // one does not cost thousands of triangles.
+        let radius = k * cam.2 / p.z.max(1.0);
+        let tris: Vec<[Vert; 3]> = mesh_tris(p.mesh, k, dz, radius).into_iter().map(|t| t.map(place)).collect();
+        let pts: Vec<V3> = tris.iter().flat_map(|t| t.iter().map(|v| v.p)).collect();
+        let Some(b) = bounds(&pts, cam) else { return };
+        let Some(mut buf) = Buf::new(img, b) else { return };
+        for t in tris {
+            draw_tri(&mut buf, t, &p, base, alpha, cam);
         }
-    }
-    for (dst, src) in img.px.chunks_mut(4).zip(buf.px) {
-        if src[3] > 0.0 {
-            super::over(dst, src);
-        }
+        buf.composite(img);
     }
 }
 
@@ -703,6 +860,44 @@ mod tests {
         assert!(n > 20_000, "3D text covered only {n} pixels at 1080x1920");
         let (cx, cy) = box_centre(&img);
         assert!((cx - 540.0).abs() < 3.0 && (cy - 960.0).abs() < 3.0, "3D text sat at ({cx}, {cy})");
+    }
+
+    /// A curved surface must shade as a gradient, not as a fan of flat facets: a scan across
+    /// the middle of a sphere should pass through many distinct brightnesses.
+    #[test]
+    fn a_sphere_shades_smoothly() {
+        let mut e = find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("mesh").unwrap().value = filmcraft_project::ParamValue::Choice(1);
+        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(300.0);
+        let mut img = Image::new(512, 512);
+        apply(&mut img, &e, &ctx());
+        let row = &img.px[(256 * 512) * 4..(257 * 512) * 4];
+        let mut seen = std::collections::HashSet::new();
+        for p in row.chunks(4) {
+            if p[3] > 0.9 {
+                seen.insert(((p[0] * 255.0) as u16, (p[1] * 255.0) as u16, (p[2] * 255.0) as u16));
+            }
+        }
+        assert!(seen.len() > 40, "the sphere had only {} shades across its middle: still faceted", seen.len());
+    }
+
+    /// Silhouettes are supersampled, so edges carry partial coverage instead of stair-stepping.
+    #[test]
+    fn edges_are_antialiased() {
+        let mut e = find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("mesh").unwrap().value = filmcraft_project::ParamValue::Choice(1);
+        let mut img = Image::new(256, 256);
+        apply(&mut img, &e, &ctx());
+        let partial = img.px.chunks(4).filter(|p| p[3] > 0.02 && p[3] < 0.98).count();
+        assert!(partial > 100, "only {partial} partially covered pixels: the edge is not antialiased");
+    }
+
+    /// Curves are cut to the size they are drawn at, so a large sphere is rounder than a small one.
+    #[test]
+    fn tessellation_follows_the_size_on_screen() {
+        assert!(segments(10.0) >= 24);
+        assert!(segments(400.0) > segments(40.0));
+        assert!(segments(100_000.0) <= 192, "tessellation must stay bounded");
     }
 
     #[test]
