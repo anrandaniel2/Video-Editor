@@ -151,8 +151,8 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     AdvancedSlider("X", st.x, -2000.0, 4000.0, 1.0, "object3d_x") { v, k -> change((ed.object3DState?.settings ?: st).copy(x = v), k) }
     AdvancedSlider("Y", st.y, -2000.0, 4000.0, 1.0, "object3d_y") { v, k -> change((ed.object3DState?.settings ?: st).copy(y = v), k) }
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
-    ColorRow("Front", st.color) { c -> change((ed.object3DState?.settings ?: st).copy(color = c)) }
-    ColorRow("Sides", st.sideColor) { c -> change((ed.object3DState?.settings ?: st).copy(sideColor = c)) }
+    ColorRow("Front", st.color.toLong().toULong()) { c -> change((ed.object3DState?.settings ?: st).copy(color = c.toUInt())) }
+    ColorRow("Sides", st.sideColor.toLong().toULong()) { c -> change((ed.object3DState?.settings ?: st).copy(sideColor = c.toUInt())) }
     AdvancedSlider("Metalness", st.metalness, 0.0, 100.0, 1.0, "object3d_metal") { v, k -> change((ed.object3DState?.settings ?: st).copy(metalness = v), k) }
     AdvancedSlider("Roughness", st.roughness, 0.0, 100.0, 1.0, "object3d_rough") { v, k -> change((ed.object3DState?.settings ?: st).copy(roughness = v), k) }
     AdvancedSlider("Opacity", st.opacity, 0.0, 100.0, 1.0, "object3d_opacity") { v, k -> change((ed.object3DState?.settings ?: st).copy(opacity = v), k) }
