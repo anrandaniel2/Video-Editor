@@ -481,7 +481,8 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32)) {
     let side_alpha = p.opacity * p.side[3].clamp(0.0, 1.0);
     let base = lin(p.color);
     let side = lin(p.side);
-    let to_v = |x: f32, y: f32, z: f32| rotate(V3::new(x, y, z), p.rot).add(V3::new(p.pos.0, p.pos.1, p.z));
+    // Glyphs are centred on the origin; `cam` carries the position (see `apply`).
+    let to_v = |x: f32, y: f32, z: f32| rotate(V3::new(x, y, z), p.rot).add(V3::new(0.0, 0.0, p.z));
     let proj_ct = |ct: &[(f32, f32)], z: f32| -> Vec<(f32, f32)> {
         ct.iter().filter_map(|&(x, y)| project(to_v(x, y, z), cx, cy, f).map(|(sx, sy, _)| (sx, sy))).collect()
     };
@@ -541,7 +542,11 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         return;
     }
     let mut buf = Buf::new(img.w, img.h);
-    let cam = (img.w as f32 * 0.5, img.h as f32 * 0.5, (img.h as f32).max(1.0));
+    // `position` is where the object sits in the layer, in layer pixels (the frame centre by
+    // default), so it is the camera's principal point. It must not be added to the vertices as
+    // well: that would move the object by f/z times its position — a few pixels in a thumbnail,
+    // but well over a thousand at 1080p, which put every object outside the frame.
+    let cam = (p.pos.0, p.pos.1, (img.h as f32).max(1.0));
     if p.mesh == 6 {
         draw_text(&mut buf, &p, cam);
     } else {
@@ -552,7 +557,7 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         for (v, n) in mesh_tris(p.mesh) {
             let v = v.map(|x| V3::new(x.x * k, x.y * k, x.z * dz));
             let n = V3::new(n.x / k.max(1e-4), n.y / k.max(1e-4), n.z / dz.max(1e-4)).norm();
-            let v = v.map(|x| rotate(x, p.rot).add(V3::new(p.pos.0, p.pos.1, p.z)));
+            let v = v.map(|x| rotate(x, p.rot).add(V3::new(0.0, 0.0, p.z)));
             draw_tri(&mut buf, v, n, &p, base, alpha, cam);
         }
     }
@@ -591,6 +596,94 @@ mod tests {
         let lit = img.px.chunks(4).filter(|p| p[3] > 0.5).count();
         assert!(lit > 20, "cube covered only {lit} pixels");
         assert!(img.px.chunks(4).any(|p| p[3] > 0.5 && p[0] + p[1] + p[2] > 0.05), "cube was black");
+    }
+
+    /// Centre, size and pixel count of what was drawn, in pixels of `img`.
+    fn drawn(img: &Image) -> (f32, f32, f32, f32, usize) {
+        let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0usize);
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (i, p) in img.px.chunks(4).enumerate() {
+            if p[3] <= 0.5 {
+                continue;
+            }
+            let (x, y) = (i % img.w, i / img.w);
+            sx += x as f64;
+            sy += y as f64;
+            n += 1;
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+        if n == 0 {
+            return (f32::NAN, f32::NAN, 0.0, 0.0, 0);
+        }
+        ((sx / n as f64) as f32, (sy / n as f64) as f32, (x1 - x0 + 1) as f32, (y1 - y0 + 1) as f32, n)
+    }
+
+    /// The regression that mattered on device: at 1080 x 1920 the default position (the frame
+    /// centre) used to be added to the vertices before projecting, which threw the object more
+    /// than a frame away. Small test images hid it — the error scales with the frame height.
+    #[test]
+    fn a_default_object_sits_in_the_middle_of_a_full_size_frame() {
+        let e = find_effect("object_3d").unwrap().instance();
+        for (w, h) in [(1080usize, 1920usize), (1920, 1080)] {
+            let mut img = Image::new(w, h);
+            apply(&mut img, &e, &ctx());
+            let (cx, cy, bw, bh, n) = drawn(&img);
+            assert!(n > 50_000, "{w}x{h}: the cube covered only {n} pixels");
+            assert!((cx - w as f32 / 2.0).abs() < w as f32 * 0.01, "{w}x{h}: centre x was {cx}");
+            assert!((cy - h as f32 / 2.0).abs() < h as f32 * 0.01, "{w}x{h}: centre y was {cy}");
+            assert!(bw < w as f32 && bh < h as f32, "{w}x{h}: the cube filled the frame ({bw}x{bh})");
+        }
+    }
+
+    /// The monitor renders at a fraction of the sequence size; the object must keep its place
+    /// and its relative size, not shrink away or drift out of the picture.
+    #[test]
+    fn preview_scale_keeps_the_object_in_the_same_place() {
+        let e = find_effect("object_3d").unwrap().instance();
+        let mut full = Image::new(1080, 1920);
+        apply(&mut full, &e, &ctx());
+        let (fx, fy, fw, fh, _) = drawn(&full);
+        let mut small = Image::new(405, 720);
+        apply(&mut small, &e, &FxCtx { px_scale: 0.375, ..ctx() });
+        let (sx, sy, sw, sh, n) = drawn(&small);
+        assert!(n > 5_000, "the preview covered only {n} pixels");
+        assert!((sx / 405.0 - fx / 1080.0).abs() < 0.01, "x moved: {sx} vs {fx}");
+        assert!((sy / 720.0 - fy / 1920.0).abs() < 0.01, "y moved: {sy} vs {fy}");
+        assert!((sw / 405.0 - fw / 1080.0).abs() < 0.02, "width changed: {sw} vs {fw}");
+        assert!((sh / 720.0 - fh / 1920.0).abs() < 0.02, "height changed: {sh} vs {fh}");
+    }
+
+    /// X and Y are frame pixels, as the sliders and the motion tracks write them.
+    #[test]
+    fn position_moves_the_object_in_frame_pixels() {
+        let mut e = find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(120.0);
+        e.params.get_mut("position").unwrap().value = filmcraft_project::ParamValue::Vec2(filmcraft_geom::Vec2::new(300.0, 500.0));
+        let mut img = Image::new(1080, 1920);
+        apply(&mut img, &e, &ctx());
+        let (cx, cy, _, _, n) = drawn(&img);
+        assert!(n > 10_000, "the moved cube covered only {n} pixels");
+        assert!((cx - 300.0).abs() < 3.0, "x was {cx}, wanted 300");
+        assert!((cy - 500.0).abs() < 3.0, "y was {cy}, wanted 500");
+        let mut small = Image::new(405, 720);
+        apply(&mut small, &e, &FxCtx { px_scale: 0.375, ..ctx() });
+        let (sx, sy, _, _, _) = drawn(&small);
+        assert!((sx - 112.5).abs() < 2.0 && (sy - 187.5).abs() < 2.0, "scaled position was ({sx}, {sy})");
+    }
+
+    #[test]
+    fn extruded_text_sits_in_the_middle_of_a_full_size_frame() {
+        let mut e = find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("mesh").unwrap().value = filmcraft_project::ParamValue::Choice(6);
+        e.params.get_mut("text").unwrap().value = filmcraft_project::ParamValue::Text("Ag".into());
+        let mut img = Image::new(1080, 1920);
+        apply(&mut img, &e, &ctx());
+        let (cx, cy, _, _, n) = drawn(&img);
+        assert!(n > 20_000, "3D text covered only {n} pixels at 1080x1920");
+        assert!((cx - 540.0).abs() < 40.0 && (cy - 960.0).abs() < 40.0, "3D text sat at ({cx}, {cy})");
     }
 
     #[test]

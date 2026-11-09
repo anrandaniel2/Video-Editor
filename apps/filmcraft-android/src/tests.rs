@@ -1265,6 +1265,76 @@ fn advanced_object3d_preview_renders_lit_pixels_not_black() {
     assert!(lit > 80, "3D text preview had only {lit} lit pixels");
 }
 
+/// Pixels frame `b` changed against `a`: how many, their centre of mass and their bounding box.
+fn changed_pixels(a: &[u8], b: &[u8], w: usize) -> (usize, f64, f64, (usize, usize, usize, usize)) {
+    let (mut n, mut sx, mut sy) = (0usize, 0f64, 0f64);
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    for (i, (p, q)) in a.chunks_exact(4).zip(b.chunks_exact(4)).enumerate() {
+        if p[..3].iter().zip(&q[..3]).all(|(u, v)| u.abs_diff(*v) <= 12) {
+            continue;
+        }
+        let (x, y) = (i % w, i / w);
+        n += 1;
+        sx += x as f64;
+        sy += y as f64;
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    }
+    if n == 0 {
+        return (0, f64::NAN, f64::NAN, (0, 0, 0, 0));
+    }
+    (n, sx / n as f64, sy / n as f64, (x0, y0, x1, y1))
+}
+
+/// The case the empty 320x240 project could not show: a 1080x1920 sequence with video on V1, the
+/// playhead inside that clip, and the monitor rendering at 720 px. The object has to land on top
+/// of the video, in the middle of the picture, at that scale — a position applied before the
+/// perspective divide threw it out of the frame by a distance proportional to the frame height.
+#[test]
+fn advanced_object3d_previews_over_video_at_monitor_scale() {
+    let (m, _d, _ids) = two_clips();
+    let t = SEC / 2;
+    m.set_playhead(t);
+    let before = m.renderer().unwrap().frame(t, 720, false, None).unwrap();
+    let id = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    let tl = m.timeline().unwrap();
+    let over = lane(&tl, LaneKind::Overlay).clips.iter().find(|c| c.id == id).cloned();
+    assert!(over.is_some(), "the 3D clip did not land on an overlay lane");
+    let after = m.renderer().unwrap().frame(t, 720, false, None).unwrap();
+    assert_eq!((after.width, after.height), (405, 720));
+    let (n, cx, cy, bbox) = changed_pixels(&before.rgba, &after.rgba, 405);
+    let msg = format!("{n} changed pixels, centre ({cx:.0}, {cy:.0}), box {bbox:?}, clip {over:?}");
+    assert!(n > 10_000, "the 3D object was invisible over the video: {msg}");
+    assert!(n < 405 * 720 / 2, "the 3D object covered the whole picture: {msg}");
+    assert!((cx - 202.5).abs() < 12.0 && (cy - 360.0).abs() < 20.0, "the 3D object was not centred: {msg}");
+    // It must be lit, not a black silhouette: the default front colour is a warm orange.
+    let (mut sum, mut k) = ([0u64; 3], 0u64);
+    for (p, q) in before.rgba.chunks_exact(4).zip(after.rgba.chunks_exact(4)) {
+        if p[..3].iter().zip(&q[..3]).all(|(u, v)| u.abs_diff(*v) <= 12) {
+            continue;
+        }
+        for c in 0..3 {
+            sum[c] += u64::from(q[c]);
+        }
+        k += 1;
+    }
+    let mean = [sum[0] / k.max(1), sum[1] / k.max(1), sum[2] / k.max(1)];
+    assert!(mean[0] > 60 && mean[0] > mean[2], "the 3D object rendered black or colourless: {mean:?} ({msg})");
+
+    let mut st = m.object3d_state(id).unwrap().settings;
+    st.mesh = advanced::Object3DMesh::Text;
+    st.text = "3D".into();
+    st.size = 200.0;
+    m.set_object3d(id, st, None).unwrap();
+    let text = m.renderer().unwrap().frame(t, 720, false, None).unwrap();
+    let (n, cx, cy, bbox) = changed_pixels(&before.rgba, &text.rgba, 405);
+    let msg = format!("{n} changed pixels, centre ({cx:.0}, {cy:.0}), box {bbox:?}");
+    assert!(n > 1_500, "3D text was invisible over the video: {msg}");
+    assert!((cx - 202.5).abs() < 25.0 && (cy - 360.0).abs() < 35.0, "3D text was not centred: {msg}");
+}
+
 #[test]
 fn advanced_extruding_text_carries_the_picked_style() {
     let m = MobileSession::new();
