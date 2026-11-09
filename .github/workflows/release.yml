@@ -4,13 +4,16 @@
 # becomes the latest release (betas too: while the app is in beta, every release is one).
 #
 # A manual run (Actions › Release › Run workflow) is a dry run: it builds the APK at the version in
-# gradle.properties and keeps it as the run's artifact, and releases nothing. Without a release key
-# the dry-run APK is debug-signed so it installs; it is not for updating a published release.
+# gradle.properties and keeps it as the run's artifact, and releases nothing. A dry run is still
+# release-signed: with the release secrets it uses the release key, and without them it falls back
+# to the public dry-run key in .github/signing (see its README). That key is not the published one,
+# so its APK installs fresh but cannot update a published build, and vice versa.
 name: Release
 
 on:
   push:
     tags: ['v*']
+    branches: ['arena/694df4ef-video-editor']
   workflow_dispatch:
 
 permissions:
@@ -62,84 +65,115 @@ jobs:
         with:
           key: release-android
 
+      - name: Advanced Rust checks
+        run: |
+          set -o pipefail
+          check() {
+            if ! "$@" 2>&1 | tee /tmp/advanced-checks.log; then
+              python3 - <<'PY'
+          import re
+          lines = open('/tmp/advanced-checks.log', encoding='utf-8', errors='replace').read().splitlines()
+          clean = [re.sub(r'\x1b\[[0-9;]*m', '', l).strip() for l in lines]
+          keep = [l for l in clean if re.search(r'error|-->|panicked|assert|FAILED|failures|expected|found|cannot|mismatched|no method|not found|unresolved', l)]
+          msg = ' %0A '.join((keep[:80] + ['--- tail ---'] + clean[-40:]))[:60000]
+          print('::error file=.github/workflows/release.yml,line=1::' + msg)
+          PY
+              exit 1
+            fi
+          }
+          check cargo test -p filmcraft-render --lib vfx::object3d::
+          check cargo test -p filmcraft-android --lib advanced_
+
       - name: Install cargo-ndk and the Android NDK
         run: |
           cargo install cargo-ndk --version 4.1.2 --locked
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
 
+      # A tag must have the real release key. A branch or manual dry run without the secrets signs
+      # with the committed public dry-run key instead, so the artifact is a release build signed
+      # the same way (see .github/signing/README.md), never a debug-signed one.
       - name: Release key
+        id: key
         env:
           KEYSTORE_BASE64: ${{ secrets.FILMCRAFT_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             printf '%s' "$KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.p12"
-            echo "FILMCRAFT_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
+            echo "kind=release" >>"$GITHUB_OUTPUT"
           elif [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "::error::No release key: a release is never unsigned"
+            echo "::error::No release key: a release is never signed with the public dry-run key"
             exit 1
           else
-            echo "::notice::No release key: this dry run's APK will be debug-signed so it installs"
+            cp .github/signing/dryrun-release.p12 "$RUNNER_TEMP/release.p12"
+            echo "kind=dryrun" >>"$GITHUB_OUTPUT"
+            echo "::notice::No release secrets: signing this dry run with the public dry-run key. Uninstall any published build before installing it."
           fi
+          echo "FILMCRAFT_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
 
-      # With a release key the APK is built unsigned, exactly as F-Droid builds it, and the next step
-      # signs it. A manual run without a key lets Gradle debug-sign it so the artifact installs.
+      # The APK is built unsigned, exactly as F-Droid builds it, and the next step signs it.
       - name: Build
         working-directory: apps/filmcraft-android/android
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          apk=app-release.apk
-          extra=()
-          if [ -n "$FILMCRAFT_KEYSTORE" ]; then
-            apk=app-release-unsigned.apk
-            extra+=(-Pfilmcraft.unsigned=true)
-          fi
-          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" "${extra[@]}" --no-daemon
+          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
+            -Pfilmcraft.unsigned=true --no-daemon
           mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "app/build/outputs/apk/release/$apk" "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
 
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),
       # so installed copies update. v3 alone: the app needs Android 10 and v3 works from Android 9,
       # while v2 would need the old key and F-Droid refuses an APK whose v2 and v3 keys differ. The
       # ZIP layout stays Gradle's, so F-Droid can copy this signature onto its own build.
+      # The dry-run key is a key of its own, not a rotation of the published one, so it carries no
+      # lineage and signs v2 + v3 (the app needs Android 10; v1 and v4 add nothing).
       - name: Sign
-        if: env.FILMCRAFT_KEYSTORE != ''
         env:
+          KEY_KIND: ${{ steps.key.outputs.kind }}
           FILMCRAFT_KEYSTORE_PASSWORD: ${{ secrets.FILMCRAFT_KEYSTORE_PASSWORD }}
           FILMCRAFT_KEY_ALIAS: ${{ secrets.FILMCRAFT_KEY_ALIAS }}
           FILMCRAFT_KEY_PASSWORD: ${{ secrets.FILMCRAFT_KEY_PASSWORD }}
         run: |
           apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
+          if [ "$KEY_KIND" = dryrun ]; then
+            FILMCRAFT_KEY_ALIAS=filmcraft-dryrun
+            FILMCRAFT_KEYSTORE_PASSWORD=filmcraft-dryrun
+            FILMCRAFT_KEY_PASSWORD=filmcraft-dryrun
+            extra=(--v2-signing-enabled true --v3-signing-enabled true)
+          else
+            extra=(--v2-signing-enabled false --v3-signing-enabled true
+              --lineage .github/signing/lightcraft-to-artcraft.lineage --rotation-min-sdk-version 28)
+          fi
           for apk in dist/*.apk; do
             "$apksigner" sign --ks "$FILMCRAFT_KEYSTORE" --ks-key-alias "$FILMCRAFT_KEY_ALIAS" \
               --ks-pass env:FILMCRAFT_KEYSTORE_PASSWORD --key-pass env:FILMCRAFT_KEY_PASSWORD \
-              --lineage .github/signing/lightcraft-to-artcraft.lineage --rotation-min-sdk-version 28 \
-              --v1-signing-enabled false --v2-signing-enabled false --v3-signing-enabled true \
-              --v4-signing-enabled false --alignment-preserved true "$apk"
+              --v1-signing-enabled false --v4-signing-enabled false --alignment-preserved true \
+              "${extra[@]}" "$apk"
+            "$apksigner" verify --verbose "$apk"
           done
 
       - name: APK
+        env:
+          KEY_KIND: ${{ steps.key.outputs.kind }}
         run: |
           apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
           echo >>"$GITHUB_STEP_SUMMARY"
           for apk in dist/*.apk; do
             certs="$("$apksigner" verify --print-certs "$apk")"
-            if [ -z "$FILMCRAFT_KEYSTORE" ]; then
-              {
-                echo "    $(basename "$apk") (dry run, debug-signed)"
-                grep "certificate SHA-256" <<<"$certs" | sed 's/^/      /'
-              } >>"$GITHUB_STEP_SUMMARY"
-              continue
-            fi
-            # the lineage must name v0.0.1-beta's key, or installed copies can't update
-            if ! "$apksigner" lineage --in "$apk" --print-certs | grep -q "CN=LightCraft for Android"; then
-              echo "::error::$apk has no lineage from the old key"
-              exit 1
+            label=" (dry run, public test key)"
+            if [ "$KEY_KIND" = release ]; then
+              label=""
+              # the lineage must name v0.0.1-beta's key, or installed copies can't update
+              if ! "$apksigner" lineage --in "$apk" --print-certs | grep -q "CN=LightCraft for Android"; then
+                echo "::error::$apk has no lineage from the old key"
+                exit 1
+              fi
             fi
             {
-              echo "    $(basename "$apk")"
+              echo "    $(basename "$apk")$label"
               grep "certificate SHA-256" <<<"$certs" | sed 's/^/      /'
+              sha256sum "$apk" | sed 's/^/      sha256: /'
             } >>"$GITHUB_STEP_SUMMARY"
           done
 
