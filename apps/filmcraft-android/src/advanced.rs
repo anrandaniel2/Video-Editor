@@ -11,6 +11,7 @@ use std::sync::Arc;
 use filmcraft_engine::{EngineError, Session};
 use filmcraft_media::FrameRequest;
 use filmcraft_project::{ClipId, EffectInstance, ItemKind, ParamValue, Sequence, TrackItem, find_effect, graphic};
+use filmcraft_render::SourceProvider;
 use filmcraft_render::track3d::{Gray, track_sequence};
 use filmcraft_time::Tick;
 use serde_json::json;
@@ -449,7 +450,7 @@ fn object_animated(e: &EffectInstance) -> bool {
 
 pub(crate) fn add_object(s: &mut Session, mesh: Object3DMesh) -> Result<u64, MobileError> {
     let (_, seq) = model::sequence(s)?;
-    let (w, h) = (seq.settings.width, seq.settings.height);
+    let w = seq.settings.width;
     let rate = s.sequence_rate();
     let at = rate.snap(s.playhead());
     let end = at + rate.snap_nearest(Tick::from_seconds_f64(STILL_SECONDS));
@@ -621,7 +622,7 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
     let provider = s.media.provider(s.project.clone(), s.services.clone());
     let source = provider.source(c.item).ok_or_else(|| MobileError::Command("The clip's media could not be opened.".into()))?;
     let (src_w, src_h) = source.info().video.as_ref().map(|v| (v.width, v.height)).unwrap_or((seq.settings.width, seq.settings.height));
-    let scale = (480.0 / src_w.max(src_h).max(1) as f32).min(1.0);
+    let scale = (480.0f32 / src_w.max(src_h).max(1) as f32).min(1.0);
     let mut left = Vec::new();
     let mut right = Vec::new();
     let mut times = Vec::new();

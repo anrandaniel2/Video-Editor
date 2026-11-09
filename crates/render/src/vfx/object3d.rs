@@ -9,7 +9,6 @@
 use filmcraft_project::EffectInstance;
 use filmcraft_project::graphic::TextProps;
 use filmcraft_text::render;
-use filmcraft_time::Tick;
 
 use crate::effects::FxCtx;
 use crate::image::Image;
@@ -565,6 +564,7 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
 mod tests {
     use super::*;
     use filmcraft_project::find_effect;
+    use filmcraft_time::Tick;
 
     fn ctx() -> FxCtx<'static> {
         FxCtx {
