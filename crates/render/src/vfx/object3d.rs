@@ -184,9 +184,14 @@ fn project(v: V3, cx: f32, cy: f32, f: f32) -> Option<(f32, f32, f32)> {
 
 fn shade(n: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
     let n = n.norm();
-    let diff = n.dot(p.light).max(0.0);
+    // The camera looks down +z, so a visible face has a normal pointing back toward -z.
+    let n = if n.z > 0.0 { n.mul(-1.0) } else { n };
+    // Light lives in camera space: elevation lifts it toward the viewer (-z), so a front face
+    // is lit at the default 45° instead of being lit from behind and falling to ambient only.
+    let light = V3::new(p.light.x, p.light.y, -p.light.z).norm();
+    let diff = n.dot(light).max(0.0);
     let view = V3::new(0.0, 0.0, -1.0);
-    let h = p.light.add(view).norm();
+    let h = light.add(view).norm();
     let shin = 2.0 + (1.0 - p.rough) * 96.0;
     let spec = n.dot(h).max(0.0).powf(shin) * p.metal * 0.9;
     let mut c = [0.0; 3];
@@ -232,10 +237,8 @@ fn draw_tri(buf: &mut Buf, v: [V3; 3], n: V3, p: &Params, base: [f32; 3], alpha:
     let Some(b) = project(v[1], cx, cy, f) else { return };
     let Some(d) = project(v[2], cx, cy, f) else { return };
     // Two-sided lighting: parametric windings are not all outward, and the z-buffer already
-    // keeps the nearest surface, so face the visible side toward the camera for shading.
-    let n = rotate(n, p.rot);
-    let n = if n.z > 0.0 { n.mul(-1.0) } else { n };
-    let c = shade(n, p, base, alpha);
+    // keeps the nearest surface; `shade` faces the visible side toward the camera.
+    let c = shade(rotate(n, p.rot), p, base, alpha);
     tri(buf, [a, b, d], c);
 }
 
@@ -585,7 +588,9 @@ mod tests {
         let e = find_effect("object_3d").unwrap().instance();
         let mut img = Image::new(96, 96);
         apply(&mut img, &e, &ctx());
-        assert!(img.px.chunks(4).any(|p| p[3] > 0.5));
+        let lit = img.px.chunks(4).filter(|p| p[3] > 0.5).count();
+        assert!(lit > 20, "cube covered only {lit} pixels");
+        assert!(img.px.chunks(4).any(|p| p[3] > 0.5 && p[0] + p[1] + p[2] > 0.05), "cube was black");
     }
 
     #[test]
@@ -596,6 +601,6 @@ mod tests {
         e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(120.0);
         let mut img = Image::new(160, 96);
         apply(&mut img, &e, &ctx());
-        assert!(img.px.chunks(4).any(|p| p[3] > 0.2));
+        assert!(img.px.chunks(4).any(|p| p[3] > 0.2 && p[0] + p[1] + p[2] > 0.03), "text was invisible or black");
     }
 }
