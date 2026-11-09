@@ -11,8 +11,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-    # Temporary: run the dry run from a branch push while CLI dispatch is unavailable.
-    branches: ['arena/694df4ef-video-editor']
   workflow_dispatch:
 
 permissions:
