@@ -65,11 +65,23 @@ jobs:
 
       - name: Advanced Rust checks
         run: |
-          cargo test -p filmcraft-project --lib tracking::
-          cargo test -p filmcraft-render --lib track3d::
-          cargo test -p filmcraft-render --lib vfx::object3d::
-          cargo test -p filmcraft-render --lib vfx::background::
-          cargo test -p filmcraft-android --lib advanced_
+          set -o pipefail
+          check() {
+            if ! "$@" 2>&1 | tee /tmp/advanced-checks.log; then
+              python3 - <<'PY'
+          for line in open('/tmp/advanced-checks.log', encoding='utf-8', errors='replace'):
+              t = line.strip()
+              if t.startswith('error') or t.startswith('-->'):
+                  print('::error::' + t[:900])
+          PY
+              exit 1
+            fi
+          }
+          check cargo test -p filmcraft-project --lib tracking::
+          check cargo test -p filmcraft-render --lib track3d::
+          check cargo test -p filmcraft-render --lib vfx::object3d::
+          check cargo test -p filmcraft-render --lib vfx::background::
+          check cargo test -p filmcraft-android --lib advanced_
 
       - name: Install cargo-ndk and the Android NDK
         run: |
