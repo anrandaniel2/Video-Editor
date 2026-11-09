@@ -13,7 +13,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-    branches: ['arena/694df4ef-video-editor']
   workflow_dispatch:
 
 permissions:
@@ -159,8 +158,8 @@ jobs:
             } >>"$GITHUB_STEP_SUMMARY"
             # Also an annotation: the summary is only on the run page, this is readable from the
             # API and from the file list, so the signing identity is easy to check.
-            who="$(grep -m1 'Signer #1 certificate DN:' <<<"$certs" | sed 's/.*DN: //')"
-            fp="$(grep -m1 'certificate SHA-256' <<<"$certs" | sed 's/.*SHA-256: //')"
+            who="$(sed -n 's/.*certificate DN: //p' <<<"$certs" | head -n 1)"
+            fp="$(sed -n 's/.*certificate SHA-256 digest: //p' <<<"$certs" | head -n 1)"
             echo "::notice title=APK signed$label::$(basename "$apk") — $who — cert SHA-256 $fp — APK SHA-256 $sha"
           done
 
