@@ -600,16 +600,32 @@ fn resolve(inst: &mut [EffectInstance], w: u32, h: u32) {
     }
 }
 
-/// Replace a clip's preset instances (`slots`) with `new`.
-fn swap_instances(c: &mut TrackItem, slots: &[usize], new: Vec<EffectInstance>) {
+/// Replace a clip's preset instances (`slots`) with `new`. Masks belong to the effect instance,
+/// so carry masks across a replacement of the same effect (changing a filter/effect amount or
+/// look must not silently delete them). Intrinsic Opacity masks are never in `slots`.
+pub(crate) fn swap_instances(c: &mut TrackItem, slots: &[usize], new: Vec<EffectInstance>) {
     let at = slots.first().copied();
-    for &i in slots.iter().rev() {
+    let mut old_masks: Vec<(String, Vec<filmcraft_project::Mask>)> = Vec::new();
+    let mut ordered = slots.to_vec();
+    ordered.sort_unstable();
+    ordered.dedup();
+    for &i in &ordered {
+        if let Some(old) = c.effects.get(i).filter(|e| !e.masks.is_empty()) {
+            old_masks.push((old.effect.clone(), old.masks.clone()));
+        }
+    }
+    for &i in ordered.iter().rev() {
         if i < c.effects.len() {
             c.effects.remove(i);
         }
     }
     let pos = at.filter(|&i| i <= c.effects.len()).unwrap_or_else(|| effect_pos(c));
-    for (k, e) in new.into_iter().enumerate() {
+    for (k, mut e) in new.into_iter().enumerate() {
+        for (id, masks) in &mut old_masks {
+            if *id == e.effect && !masks.is_empty() {
+                e.masks.append(masks);
+            }
+        }
         c.effects.insert(pos + k, e);
     }
 }

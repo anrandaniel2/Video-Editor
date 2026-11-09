@@ -141,6 +141,7 @@ private fun clipTools(ed: EditorController, c: ClipInfo): List<Tool> {
         Tool("editor_tool_filters", "Filters", LucideIcons.SwatchBook.glyph()) { ed.panel = Panel.Filters },
         if (onMain) Tool("editor_tool_effects", "Effects", LucideIcons.WandSparkles.glyph()) { ed.panel = Panel.Effects } else null,
         Tool("editor_tool_opacity", "Opacity", Glyphs.Checker) { ed.panel = Panel.Opacity },
+        Tool("editor_tool_mask", "Mask", Glyphs.Mask, active = ed.panel == Panel.Mask) { ed.panel = Panel.Mask },
         // Lucide names these by their axis line: "flip-vertical-2" has left/right arrows (a mirror)
         // one-tap toggles with no on/off look: the preview shows which way the picture faces
         Tool("editor_tool_flip_h", "Mirror", LucideIcons.FlipVertical2.glyph()) { ed.toggleMirror() },

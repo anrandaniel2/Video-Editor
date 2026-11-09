@@ -292,10 +292,14 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val sel = ed.selectedClip
-    val movable = sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput
+    val masking = ed.panel == Panel.Mask && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
+    val movable = sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking
     var placement by remember { mutableStateOf<Placement?>(null) }
     LaunchedEffect(sel?.id, t?.revision) {
         placement = if (movable && sel != null) ed.placementOf(sel.id) else null
+    }
+    LaunchedEffect(sel?.id, t?.revision, ed.playhead, ed.panel) {
+        if (masking && sel != null) ed.loadMasks(sel.id)
     }
     BoxWithConstraints(modifier.background(Fc.Black).testTag("editor_player_area"), contentAlignment = Alignment.Center) {
         val aspect = if (t != null && t.height.toInt() > 0) t.width.toFloat() / t.height.toFloat() else 9f / 16f
@@ -309,7 +313,8 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
             Modifier
                 .size(boxW, boxH)
                 .border(1.dp, Fc.Raised)
-                .pointerInput(sel?.id, movable, t?.width, t?.height) {
+                .pointerInput(sel?.id, movable, ed.panel, t?.width, t?.height) {
+                    if (ed.panel == Panel.Mask) return@pointerInput
                     val frameW = t?.width?.toFloat() ?: return@pointerInput
                     val k = size.width / frameW // screen px per frame px
                     awaitEachGesture {
@@ -392,6 +397,10 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                     }
                     drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
                 }
+            }
+            val maskState = ed.maskState
+            if (masking && maskState != null && t != null) {
+                MaskOverlay(ed, maskState, t.width.toFloat(), Modifier.fillMaxSize())
             }
         }
     }

@@ -74,6 +74,21 @@
 
 <br>
 
+## Masking
+
+Select a video or image and open **Mask**. Add an ellipse, rectangle or polygon, or turn on **Draw**
+and sketch one closed stroke on the preview. Drag a mask to move it, drag a corner to resize it, and
+drag its points to reshape it; **Add point** inserts a point on the nearest edge. Feather, expansion,
+mask opacity, invert and the combine modes shape the cut-out. Masks reveal the layers underneath,
+follow the clip's placement, mirror and flip, and are saved with the project. Every drag is one undo
+step, and the same Rust renderer draws masks in the preview and in exported video.
+
+Masks live on the clip's Opacity effect in the Rust engine (`masks.*` commands); Kotlin only draws the
+handles and sends source-pixel geometry back through the UniFFI bridge. Changing a filter or effect
+keeps the clip's masks.
+
+<br>
+
 ## Text
 
 <p align="center">
@@ -134,6 +149,7 @@ FilmCraft for Android is in beta.
 | The timeline: trim, move, reorder, split, delete, duplicate, replace, undo and redo; pinch to zoom | ✅ |
 | Speed (0.1–10×, the sound keeps its pitch), freeze frame, volume, fades, extract audio, voiceover | ✅ |
 | 31 filters, 23 effects, opacity, mirror and flip; move, scale and turn on the preview | ✅ |
+| Clip masks: ellipse, rectangle, polygon and free-draw; feather, expansion, opacity, invert and combine; drag on the preview | ✅ |
 | 50 transitions, intro and outro, apply to all | ✅ |
 | Text: presets, the phone's fonts, colours and layout | ✅ |
 | Captions made on the phone (Whisper, downloaded once when you ask), edited and burned in | ✅ |

@@ -78,6 +78,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Volume -> clip?.let { VolumePanel(ed, it, close, modifier) }
         Panel.Fade -> clip?.let { FadePanel(ed, it, close, modifier) }
         Panel.Opacity -> clip?.let { OpacityPanel(ed, it, close, modifier) }
+        Panel.Mask -> clip?.let { MaskPanel(ed, close, modifier) }
         Panel.Filters -> clip?.let { LookPanel(ed, it, filters = true, close, modifier) }
         Panel.Effects -> clip?.let { LookPanel(ed, it, filters = false, close, modifier) }
         is Panel.Transitions -> TransitionPanel(ed, panel, close, modifier)
@@ -87,6 +88,9 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Captions -> CaptionsPanel(ed, close, modifier)
         is Panel.Speech -> SpeechPanel(ed, panel, close, modifier)
         is Panel.TextInput -> {}
+    }
+    LaunchedEffect(panel, clip?.id) {
+        if (panel != Panel.Mask) ed.resetMaskTool() else { ed.selectedMaskIndex = 0u; ed.selectedMaskVertex = -1 }
     }
     // a panel whose clip went away closes
     val standalone = panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech

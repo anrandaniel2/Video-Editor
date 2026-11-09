@@ -101,6 +101,15 @@ object Glyphs {
         }
     }
 
+    /** A dashed picture frame with an elliptical cut-out (the phone's clip mask tool). */
+    val Mask = Glyph.Drawn { c ->
+        drawRoundRect(
+            c, Offset(u(3f), u(3f)), Size(u(18f), u(18f)), CornerRadius(u(2f)),
+            style = Stroke(u(1.6f), pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(u(3f), u(2f)))),
+        )
+        drawOval(c, Offset(u(7f), u(8f)), Size(u(10f), u(8f)), style = Stroke(u(1.6f)))
+    }
+
     /** A filled record dot. */
     val Record = Glyph.Drawn { c -> drawCircle(c, u(8f), Offset(u(12f), u(12f))) }
 

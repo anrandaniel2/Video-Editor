@@ -213,20 +213,11 @@ impl Renderer {
         let seq = project.sequence_mut(self.seq).ok_or(MobileError::NoSequence)?;
         let (w, h) = (seq.settings.width, seq.settings.height);
         let c = seq.find_item_mut(filmcraft_project::ClipId(clip)).map(|x| x.1).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
-        let swap = |c: &mut filmcraft_project::TrackItem, slots: Vec<usize>, new: Vec<filmcraft_project::EffectInstance>| {
-            let at = slots.first().copied();
-            for &i in slots.iter().rev() {
-                if i < c.effects.len() {
-                    c.effects.remove(i);
-                }
+        let swap = |c: &mut filmcraft_project::TrackItem, slots: Vec<usize>, mut new: Vec<filmcraft_project::EffectInstance>| {
+            for e in &mut new {
+                filmcraft_project::resolve_auto_points(e, (w, h), (w, h));
             }
-            let pos = at
-                .filter(|&i| i <= c.effects.len())
-                .unwrap_or_else(|| c.effects.iter().position(|e| e.def().is_some_and(|d| d.intrinsic)).unwrap_or(c.effects.len()));
-            for (k, mut e) in new.into_iter().enumerate() {
-                filmcraft_project::resolve_auto_points(&mut e, (w, h), (w, h));
-                c.effects.insert(pos + k, e);
-            }
+            crate::edits::swap_instances(c, &slots, new);
         };
         let filter_new = if filter.is_empty() { Vec::new() } else { crate::presets::filter_instances(&filter, filter_amount).unwrap_or_default() };
         let slots = crate::presets::filter_slots(c);

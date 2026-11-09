@@ -26,6 +26,7 @@ use serde_json::{Value, json};
 
 pub mod edits;
 pub mod export;
+pub mod masks;
 pub mod model;
 pub mod placement;
 pub mod presets;
@@ -35,6 +36,7 @@ pub mod speech;
 pub mod text;
 
 use export::{ExportPlan, ExportSettings, ExportStatus};
+use masks::{MaskPoint, MaskSettings, MaskShape, MaskState};
 use model::TimelineInfo;
 use presets::PresetInfo;
 use render::Renderer;
@@ -573,6 +575,50 @@ impl MobileSession {
     /// Move an overlay or audio clip to `start` on lane `index`.
     pub fn move_clip(&self, clip: u64, index: i32, start: i64) -> Result<(), MobileError> {
         self.main_edit(|s| edits::move_clip(s, clip, index, start))
+    }
+
+    // ---- clip masks ----
+
+    /// The clip's masks and source-to-frame transform at the playhead. Geometry is in source pixels.
+    pub fn clip_masks(&self, clip: u64) -> Result<MaskState, MobileError> {
+        masks::state(&mut self.lock(), clip)
+    }
+
+    /// Add an opacity mask. Empty `points` use the shape's default; supplied points make a polygon.
+    pub fn add_clip_mask(&self, clip: u64, shape: MaskShape, points: Vec<MaskPoint>) -> Result<MaskState, MobileError> {
+        masks::add(&mut self.lock(), clip, shape, points)
+    }
+
+    /// Change mask controls. Reuse `merge` throughout one slider drag; use null for a discrete edit.
+    pub fn set_clip_mask(&self, clip: u64, mask: u32, settings: MaskSettings, merge: Option<String>) -> Result<MaskState, MobileError> {
+        masks::set(&mut self.lock(), clip, mask, settings, merge)
+    }
+
+    /// Move a mask by source pixels. Reuse `merge` throughout one gesture.
+    pub fn move_clip_mask(&self, clip: u64, mask: u32, dx: f64, dy: f64, merge: Option<String>) -> Result<MaskState, MobileError> {
+        masks::move_mask(&mut self.lock(), clip, mask, dx, dy, merge)
+    }
+
+    /// Set the whole path at the playhead (for vertex drags and shape resizing).
+    pub fn set_clip_mask_path(&self, clip: u64, mask: u32, path: masks::MaskPath, merge: Option<String>) -> Result<MaskState, MobileError> {
+        masks::set_path(&mut self.lock(), clip, mask, path, merge)
+    }
+
+    pub fn add_clip_mask_vertex(&self, clip: u64, mask: u32, after: u32, at: MaskPoint) -> Result<MaskState, MobileError> {
+        masks::add_vertex(&mut self.lock(), clip, mask, after, at)
+    }
+
+    pub fn remove_clip_mask_vertex(&self, clip: u64, mask: u32, vertex: u32) -> Result<MaskState, MobileError> {
+        masks::remove_vertex(&mut self.lock(), clip, mask, vertex)
+    }
+
+    pub fn delete_clip_mask(&self, clip: u64, mask: u32) -> Result<MaskState, MobileError> {
+        masks::remove(&mut self.lock(), clip, mask)
+    }
+
+    /// Remove all of this clip's masks in one undo step.
+    pub fn clear_clip_masks(&self, clip: u64) -> Result<MaskState, MobileError> {
+        masks::clear(&mut self.lock(), clip)
     }
 
     // ---- transitions ----

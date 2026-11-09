@@ -17,6 +17,12 @@ import io.github.artcraftandroid.filmcraft.core.CaptionStatus
 import io.github.artcraftandroid.filmcraft.core.ClipInfo
 import io.github.artcraftandroid.filmcraft.core.ClipKind
 import io.github.artcraftandroid.filmcraft.core.LaneKind
+import io.github.artcraftandroid.filmcraft.core.MaskInfo
+import io.github.artcraftandroid.filmcraft.core.MaskPath
+import io.github.artcraftandroid.filmcraft.core.MaskPoint
+import io.github.artcraftandroid.filmcraft.core.MaskSettings
+import io.github.artcraftandroid.filmcraft.core.MaskShape
+import io.github.artcraftandroid.filmcraft.core.MaskState
 import io.github.artcraftandroid.filmcraft.core.MobileSession
 import io.github.artcraftandroid.filmcraft.core.Renderer
 import io.github.artcraftandroid.filmcraft.core.SessionStatus
@@ -39,6 +45,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 /** A tool's panel. */
 sealed interface Panel {
@@ -46,6 +53,7 @@ sealed interface Panel {
     data object Volume : Panel
     data object Fade : Panel
     data object Opacity : Panel
+    data object Mask : Panel
     data object Filters : Panel
     data object Effects : Panel
     /** The transition between [from] and [to] (either empty at the ends). */
@@ -302,6 +310,7 @@ class EditorController(
     fun redo() = edit { redo() }
 
     fun select(clip: ULong?) {
+        resetMaskTool()
         submenu = Submenu.None
         if (panel !is Panel.TextInput) panel = null
         selectedCaption = null
@@ -654,6 +663,157 @@ class EditorController(
         refreshJob?.cancel()
         refreshJob = scope.launch {
             delay(60)
+            refresh()
+        }
+    }
+
+    // ---- clip masks ----
+
+    /** A snapshot for the mask panel; null until the selected picture has been read. */
+    var maskState by mutableStateOf<MaskState?>(null)
+        private set
+    var selectedMaskIndex by mutableStateOf(0u)
+    var selectedMaskVertex by mutableStateOf(-1)
+    /** A free-draw stroke is being captured on the preview. */
+    var maskDrawing by mutableStateOf(false)
+    /** The next tap on a path inserts a point on its nearest edge. */
+    var maskAddingPoint by mutableStateOf(false)
+    /** Suppress snapshot reloads while a finger owns the optimistic path. */
+    var maskGesture by mutableStateOf(false)
+        private set
+
+    val selectedMask: MaskInfo? get() = maskState?.masks?.firstOrNull { it.index == selectedMaskIndex }
+
+    fun newMaskGesture(): String = UUID.randomUUID().toString()
+
+    fun resetMaskTool() {
+        maskState = null
+        selectedMaskIndex = 0u
+        selectedMaskVertex = -1
+        maskDrawing = false
+        maskAddingPoint = false
+        maskGesture = false
+    }
+
+    suspend fun loadMasks(clip: ULong) {
+        if (maskGesture) return
+        val st = runCatching { engine.command { clipMasks(clip) } }.getOrNull() ?: return
+        maskState = st
+        if (st.masks.none { it.index == selectedMaskIndex }) selectedMaskIndex = st.masks.lastOrNull()?.index ?: 0u
+        if ((selectedMask?.path?.vertices?.size ?: 0) <= selectedMaskVertex) selectedMaskVertex = -1
+    }
+
+    fun selectMask(index: UInt) {
+        selectedMaskIndex = index
+        selectedMaskVertex = -1
+        maskAddingPoint = false
+    }
+
+    fun beginMaskGesture() {
+        stop()
+        maskGesture = true
+    }
+
+    fun endMaskGesture() {
+        maskGesture = false
+        refreshSoon()
+    }
+
+    /** Mask drags use the placement gesture's coalesced refresh, not a save/render per pointer event. */
+    private fun maskCommand(block: MobileSession.() -> Unit) {
+        stop()
+        scope.launch {
+            try {
+                engine.command { block() }
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refreshSoon()
+        }
+    }
+
+    private fun optimisticMask(change: (MaskInfo) -> MaskInfo) {
+        val st = maskState ?: return
+        maskState = st.copy(masks = st.masks.map { if (it.index == selectedMaskIndex) change(it) else it })
+    }
+
+    fun addMask(shape: MaskShape, points: List<Pair<Double, Double>> = emptyList()) {
+        val c = selectedClip ?: return
+        stop()
+        maskDrawing = false
+        scope.launch {
+            try {
+                val st = engine.command { addClipMask(c.id, shape, points.map { MaskPoint(it.first, it.second) }) }
+                maskState = st
+                selectedMaskIndex = st.masks.lastOrNull()?.index ?: 0u
+                selectedMaskVertex = -1
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
+    }
+
+    fun setMaskSettings(settings: MaskSettings, merge: String? = null) {
+        val c = selectedClip ?: return
+        val index = selectedMaskIndex
+        optimisticMask { it.copy(settings = settings) }
+        maskCommand { setClipMask(c.id, index, settings, merge) }
+    }
+
+    fun setMaskPath(path: MaskPath, merge: String? = null) {
+        val c = selectedClip ?: return
+        val index = selectedMaskIndex
+        optimisticMask { it.copy(path = path) }
+        maskCommand { setClipMaskPath(c.id, index, path, merge) }
+    }
+
+    fun addMaskVertex(after: Int, at: Pair<Double, Double>) {
+        val c = selectedClip ?: return
+        val index = selectedMaskIndex
+        maskAddingPoint = false
+        scope.launch {
+            try {
+                maskState = engine.command { addClipMaskVertex(c.id, index, after.toUInt(), MaskPoint(at.first, at.second)) }
+                selectedMaskVertex = after + 1
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun removeMaskVertex() {
+        val c = selectedClip ?: return
+        val index = selectedMaskIndex
+        val vertex = selectedMaskVertex
+        if (vertex < 0 || (selectedMask?.path?.vertices?.size ?: 0) <= 3) return
+        selectedMaskVertex = -1
+        scope.launch {
+            try { maskState = engine.command { removeClipMaskVertex(c.id, index, vertex.toUInt()) } }
+            catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun deleteMask() {
+        val c = selectedClip ?: return
+        val index = selectedMaskIndex
+        selectedMaskVertex = -1
+        scope.launch {
+            try {
+                val st = engine.command { deleteClipMask(c.id, index) }
+                maskState = st
+                selectedMaskIndex = st.masks.lastOrNull()?.index ?: 0u
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun clearMasks() {
+        val c = selectedClip ?: return
+        resetMaskTool()
+        scope.launch {
+            try { maskState = engine.command { clearClipMasks(c.id) } }
+            catch (e: Exception) { host.tell(e.userMessage) }
             refresh()
         }
     }

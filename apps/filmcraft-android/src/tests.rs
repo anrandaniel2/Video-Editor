@@ -699,6 +699,209 @@ fn clips_are_moved_scaled_and_turned_on_the_frame_as_one_undo_step() {
     assert!((after.x - before.x - 100.0).abs() < 2.0 && (after.y - before.y + 50.0).abs() < 2.0, "{before:?} {after:?}");
 }
 
+/// A square, full-frame still whose pixels are easy to reason about in mask tests.
+fn mask_still() -> (Arc<MobileSession>, PathBuf, u64) {
+    let d = tmp();
+    let path = picture(&d);
+    let m = MobileSession::new();
+    m.new_project("Masks".into(), 64, 64, 30).unwrap();
+    let id = m.add_media(vec![path]).unwrap()[0];
+    (m, d, id)
+}
+
+fn mask_settings(feather: f64) -> masks::MaskSettings {
+    masks::MaskSettings { combine: masks::MaskCombine::Add, inverted: false, feather, opacity: 100.0, expansion: 0.0 }
+}
+
+fn mask_rect(x0: f64, y0: f64, x1: f64, y1: f64) -> masks::MaskPath {
+    masks::MaskPath {
+        closed: true,
+        vertices: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().map(|(x, y)| masks::MaskVertex {
+            point: masks::MaskPoint { x, y },
+            handle_in: masks::MaskPoint { x: 0.0, y: 0.0 },
+            handle_out: masks::MaskPoint { x: 0.0, y: 0.0 },
+        }).collect(),
+    }
+}
+
+fn mask_pixel(f: &Frame, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * f.width + x) * 4) as usize;
+    [f.rgba[i], f.rgba[i + 1], f.rgba[i + 2], f.rgba[i + 3]]
+}
+
+#[test]
+fn clip_masks_cut_out_the_picture_and_every_shape_and_control_round_trips() {
+    let (m, _d, id) = mask_still();
+    assert!(m.clip_masks(id).unwrap().masks.is_empty());
+    let st = m.add_clip_mask(id, masks::MaskShape::Rectangle, vec![]).unwrap();
+    assert_eq!(st.masks.len(), 1);
+    assert_eq!(st.masks[0].path.vertices.len(), 4);
+    m.set_clip_mask(id, 0, mask_settings(0.0), None).unwrap();
+    m.set_clip_mask_path(id, 0, mask_rect(16.0, 16.0, 48.0, 48.0), None).unwrap();
+    let f = m.renderer().unwrap().frame(0, 64, false, None).unwrap();
+    assert!(mask_pixel(&f, 2, 2)[..3].iter().all(|&v| v < 3), "outside is cut out: {:?}", mask_pixel(&f, 2, 2));
+    assert!(mask_pixel(&f, 32, 32)[0] > 80, "inside keeps the picture");
+
+    let mut settings = mask_settings(0.0);
+    settings.inverted = true;
+    m.set_clip_mask(id, 0, settings, None).unwrap();
+    let f = m.renderer().unwrap().frame(0, 64, false, None).unwrap();
+    assert!(mask_pixel(&f, 2, 2)[0] > 0 && mask_pixel(&f, 32, 32)[0] < 3, "inversion swaps inside and outside");
+    settings.inverted = false;
+    settings.combine = masks::MaskCombine::None;
+    m.set_clip_mask(id, 0, settings, None).unwrap();
+    let f = m.renderer().unwrap().frame(0, 64, false, None).unwrap();
+    assert!(mask_pixel(&f, 2, 2)[0] > 0, "None bypasses the mask without deleting it");
+
+    // Multiple masks and the engine's combine modes remain ordinary project data.
+    settings.combine = masks::MaskCombine::Add;
+    m.set_clip_mask(id, 0, settings, None).unwrap();
+    let st = m.add_clip_mask(id, masks::MaskShape::Ellipse, vec![]).unwrap();
+    assert_eq!(st.masks.len(), 2);
+    assert_eq!(st.masks[1].path.vertices.len(), 4);
+    let st = m.add_clip_mask(id, masks::MaskShape::Polygon, vec![]).unwrap();
+    assert_eq!(st.masks.last().unwrap().path.vertices.len(), 5);
+    let triangle = vec![masks::MaskPoint { x: 4.0, y: 4.0 }, masks::MaskPoint { x: 20.0, y: 6.0 }, masks::MaskPoint { x: 10.0, y: 22.0 }];
+    let st = m.add_clip_mask(id, masks::MaskShape::Polygon, triangle).unwrap();
+    assert_eq!(st.masks.len(), 4);
+    for combine in [masks::MaskCombine::Subtract, masks::MaskCombine::Intersect, masks::MaskCombine::Lighten, masks::MaskCombine::Darken, masks::MaskCombine::Difference] {
+        settings.combine = combine;
+        m.set_clip_mask(id, 3, settings, None).unwrap();
+        assert_eq!(m.clip_masks(id).unwrap().masks[3].settings.combine, combine);
+    }
+    assert!(m.set_clip_mask(id, 99, settings, None).is_err());
+    assert!(m.set_clip_mask_path(id, 0, mask_rect(0.0, 0.0, f64::NAN, 4.0), None).is_err());
+    m.delete_clip_mask(id, 3).unwrap();
+    assert_eq!(m.clip_masks(id).unwrap().masks.len(), 3);
+    m.clear_clip_masks(id).unwrap();
+    assert!(m.clip_masks(id).unwrap().masks.is_empty());
+    m.undo();
+    assert_eq!(m.clip_masks(id).unwrap().masks.len(), 3, "clear is one undo step");
+}
+
+#[test]
+fn mask_gestures_merge_and_animated_paths_save_and_reopen() {
+    let (m, d, id) = mask_still();
+    m.add_clip_mask(id, masks::MaskShape::Rectangle, vec![]).unwrap();
+    let original = mask_rect(10.0, 10.0, 30.0, 30.0);
+    m.set_clip_mask_path(id, 0, original.clone(), None).unwrap();
+    let before = m.poll().revision;
+    for step in 1..=5 {
+        m.set_clip_mask_path(id, 0, mask_rect(10.0 + f64::from(step), 10.0, 30.0 + f64::from(step), 30.0), Some("drag-one".into())).unwrap();
+    }
+    assert_eq!(m.poll().revision, before + 5);
+    m.undo();
+    assert_eq!(m.clip_masks(id).unwrap().masks[0].path, original, "the whole drag is one undo step");
+    m.redo();
+    assert!((m.clip_masks(id).unwrap().masks[0].path.vertices[0].point.x - 15.0).abs() < 1e-9);
+    // A separate token is a separate edit even when no other command came between.
+    m.set_clip_mask_path(id, 0, mask_rect(20.0, 10.0, 40.0, 30.0), Some("drag-two".into())).unwrap();
+    m.undo();
+    assert!((m.clip_masks(id).unwrap().masks[0].path.vertices[0].point.x - 15.0).abs() < 1e-9);
+
+    m.set_playhead(0);
+    m.set_clip_mask_path(id, 0, mask_rect(10.0, 10.0, 30.0, 30.0), None).unwrap();
+    m.execute("effects.toggleAnimation".into(), json!({"clip": id, "effect": "opacity", "mask": 0, "param": "path"}).to_string()).unwrap();
+    m.set_playhead(SEC);
+    m.move_clip_mask(id, 0, 20.0, 0.0, None).unwrap();
+    let st = m.clip_masks(id).unwrap();
+    assert!(st.masks[0].animated);
+    assert_eq!(st.masks[0].path_keyframes.len(), 2);
+    m.set_playhead(SEC / 2);
+    let mid = m.clip_masks(id).unwrap();
+    assert!((mid.masks[0].path.vertices[0].point.x - 20.0).abs() < 1e-6, "path interpolates at the playhead");
+
+    let path = d.join("masks.fcproj").to_string_lossy().into_owned();
+    m.save_project(path.clone()).unwrap();
+    let opened = MobileSession::new();
+    opened.open_project(path).unwrap();
+    let c = main_clips(&opened)[0].id;
+    opened.set_playhead(SEC / 2);
+    assert_eq!(opened.clip_masks(c).unwrap().masks, mid.masks);
+    assert_eq!(opened.clip_masks(c).unwrap().transform, mid.transform);
+}
+
+#[test]
+fn mask_overlay_transform_follows_placement_and_mirror() {
+    let (m, _d, ids) = two_clips();
+    let id = ids[0];
+    m.add_clip_mask(id, masks::MaskShape::Ellipse, vec![]).unwrap();
+    let p = m.placement(id).unwrap();
+    m.set_placement(id, 300.0, 700.0, p.scale * 0.5, 30.0, false).unwrap();
+    let st = m.clip_masks(id).unwrap();
+    let center = filmcraft_geom::Vec2::new(f64::from(st.source_width) / 2.0, f64::from(st.source_height) / 2.0);
+    let mapped = filmcraft_geom::Affine { a: st.transform.a, b: st.transform.b, c: st.transform.c, d: st.transform.d, e: st.transform.e, f: st.transform.f }.apply(center);
+    assert!((mapped.x - 300.0).abs() < 1e-6 && (mapped.y - 700.0).abs() < 1e-6);
+    m.set_flip(id, true, true).unwrap();
+    let flipped = m.clip_masks(id).unwrap();
+    assert!(flipped.transform.a * st.transform.a + flipped.transform.b * st.transform.b < 0.0, "mirror reverses the source x axis");
+    assert!(m.renderer().unwrap().frame(SEC / 2, 180, false, None).is_ok());
+}
+
+#[test]
+fn mask_vertex_tools_keep_a_closed_shape_and_reject_other_clip_kinds() {
+    let (m, d, id) = mask_still();
+    m.add_clip_mask(id, masks::MaskShape::Polygon, vec![]).unwrap();
+    let st = m.add_clip_mask_vertex(id, 0, 0, masks::MaskPoint { x: 32.0, y: 4.0 }).unwrap();
+    assert_eq!(st.masks[0].path.vertices.len(), 6);
+    let st = m.remove_clip_mask_vertex(id, 0, 1).unwrap();
+    assert_eq!(st.masks[0].path.vertices.len(), 5);
+    for i in (3..5).rev() { m.remove_clip_mask_vertex(id, 0, i).unwrap(); }
+    assert!(m.remove_clip_mask_vertex(id, 0, 0).is_err(), "a mask keeps at least three points");
+    let text = m.add_text("hello".into()).unwrap().unwrap();
+    assert!(m.clip_masks(text).is_err());
+    let sound = m.add_audio(vec![tone(&d, 0.2)]).unwrap()[0];
+    assert!(m.add_clip_mask(sound, masks::MaskShape::Ellipse, vec![]).is_err());
+}
+
+#[test]
+fn changing_filters_and_effects_keeps_clip_and_effect_masks() {
+    let (m, _d, id) = mask_still();
+    m.add_clip_mask(id, masks::MaskShape::Rectangle, vec![]).unwrap();
+    m.set_clip_mask_path(id, 0, mask_rect(12.0, 12.0, 52.0, 52.0), None).unwrap();
+    let before = m.clip_masks(id).unwrap().masks;
+    m.set_filter(id, "vivid".into(), 80.0, false, false).unwrap();
+    m.set_effect(id, "gaussian".into(), 60.0, false, false).unwrap();
+    assert_eq!(m.clip_masks(id).unwrap().masks, before, "preset swaps leave Opacity masks alone");
+    // A mask on the replaced standard effect itself is carried to the new instance of that effect.
+    m.execute("masks.add".into(), json!({"clip": id, "effect": "gaussian_blur", "shape": "ellipse"}).to_string()).unwrap();
+    m.set_effect(id, "gaussian".into(), 30.0, false, false).unwrap();
+    let listed: serde_json::Value = serde_json::from_str(&m.execute("masks.list".into(), json!({"clip": id}).to_string()).unwrap()).unwrap();
+    let arr = listed["masks"].as_array().unwrap();
+    assert!(arr.iter().any(|v| v["effectId"].as_str() == Some("gaussian_blur")), "effect mask survives amount change: {arr:?}");
+    assert_eq!(m.clip_masks(id).unwrap().masks, before, "the phone snapshot still exposes only clip masks");
+    let preview = m.renderer().unwrap().look_preview(id, "noir".into(), 100.0, String::new(), 0.0, 0, 64).unwrap();
+    assert!(mask_pixel(&preview, 2, 2)[..3].iter().all(|&v| v < 3), "look preview keeps the cut-out");
+    assert!(mask_pixel(&preview, 32, 32)[3] > 0);
+}
+
+#[test]
+fn exported_video_keeps_the_mask_from_the_preview() {
+    let (m, d, id) = mask_still();
+    m.add_clip_mask(id, masks::MaskShape::Rectangle, vec![]).unwrap();
+    m.set_clip_mask(id, 0, mask_settings(0.0), None).unwrap();
+    m.set_clip_mask_path(id, 0, mask_rect(16.0, 16.0, 48.0, 48.0), None).unwrap();
+    let preview = m.renderer().unwrap().frame(0, 64, false, None).unwrap();
+    let out = d.join("masked.mp4").to_string_lossy().into_owned();
+    // The phone's own export path (not a separate renderer): 144 px is its smallest short side.
+    let job = m.start_export(out.clone(), export::ExportSettings { short_side: 144, fps: 30, quality: export::ExportQuality::High }).unwrap();
+    let start = std::time::Instant::now();
+    let status = loop {
+        let st = m.export_status(job).unwrap();
+        if st.finished || start.elapsed().as_secs() > 120 { break st; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert!(status.finished && status.error.is_none(), "{status:?}");
+    let src = filmcraft_media::open_path(Path::new(&out), &[]).unwrap();
+    let frame = src.video_frame(filmcraft_media::FrameRequest { time: Tick::ZERO, scale: 1.0 }).unwrap();
+    assert_eq!((frame.width, frame.height), (144, 144));
+    let rgba = frame.to_rgba8();
+    let at = |x: usize, y: usize| rgba[(y * frame.width as usize + x) * 4];
+    assert!(at(4, 4) < 20, "exported corner is black");
+    assert!(at(72, 72) > 80, "exported center keeps the picture");
+    assert!(mask_pixel(&preview, 32, 32)[0] > 80);
+}
+
 #[test]
 fn look_and_transition_previews_draw_the_clip_with_the_candidate() {
     let (m, _d, ids) = two_clips();
