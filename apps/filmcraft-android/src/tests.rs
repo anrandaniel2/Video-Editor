@@ -1247,6 +1247,25 @@ fn advanced_object3d_rotation_keyframes_interpolate_and_toggle_off() {
 }
 
 #[test]
+fn advanced_object3d_preview_renders_lit_pixels_not_black() {
+    let m = MobileSession::new();
+    m.new_project("3D preview".into(), 320, 240, 30).unwrap();
+    let id = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    let f = m.renderer().unwrap().frame(0, 320, false, None).unwrap();
+    let lit = f.rgba.chunks_exact(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 60).count();
+    assert!(lit > 200, "3D preview had only {lit} lit pixels");
+    assert!(f.rgba.chunks_exact(4).any(|p| p[0] > 120 && p[1] > 40 && p[2] < 120), "cube did not render in its front colour");
+    let mut st = m.object3d_state(id).unwrap().settings;
+    st.mesh = advanced::Object3DMesh::Text;
+    st.text = "Ag".into();
+    st.size = 120.0;
+    m.set_object3d(id, st, None).unwrap();
+    let f = m.renderer().unwrap().frame(0, 320, false, None).unwrap();
+    let lit = f.rgba.chunks_exact(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 60).count();
+    assert!(lit > 80, "3D text preview had only {lit} lit pixels");
+}
+
+#[test]
 fn advanced_extruding_text_carries_the_picked_style() {
     let m = MobileSession::new();
     m.new_project("Text".into(), 320, 240, 30).unwrap();
