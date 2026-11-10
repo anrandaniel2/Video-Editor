@@ -13,6 +13,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+    # TEMPORARY: build a dry-run APK from the working branch; removed again after the run.
+    branches: ['arena/694df4ef-video-editor']
   workflow_dispatch:
 
 permissions:
