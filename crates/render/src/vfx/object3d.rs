@@ -868,20 +868,19 @@ fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam:
     let (mut bx0, mut by0, mut bx1, mut by1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     let mut any = false;
     for inst in &model.instances {
-        for prim in &model.meshes[inst.mesh].prims {
-            let verts: Vec<ModelVert> = (0..prim.verts.len()).map(|i| place(model.skin_vertex(&pose, inst, prim, i))).collect();
-            for t in prim.indices.chunks_exact(3) {
-                let tri = [verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]];
-                for clipped in clip_near(tri) {
-                    for v in clipped {
-                        if let Some((x, y, _)) = project(v.p, cam.0, cam.1, cam.2) {
-                            any = true; bx0 = bx0.min(x); by0 = by0.min(y); bx1 = bx1.max(x); by1 = by1.max(y);
-                        }
+        let prim = &model.meshes[inst.mesh].prims[inst.prim];
+        let verts: Vec<ModelVert> = (0..prim.verts.len()).map(|i| place(model.skin_vertex(&pose, inst, prim, i))).collect();
+        for t in prim.indices.chunks_exact(3) {
+            let tri = [verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]];
+            for clipped in clip_near(tri) {
+                for v in clipped {
+                    if let Some((x, y, _)) = project(v.p, cam.0, cam.1, cam.2) {
+                        any = true; bx0 = bx0.min(x); by0 = by0.min(y); bx1 = bx1.max(x); by1 = by1.max(y);
                     }
                 }
             }
-            prepared.push((prim, verts));
         }
+        prepared.push((prim, verts));
     }
     if !any { return; }
     let Some(mut buf) = Buf::new(img, (bx0, by0, bx1, by1)) else { return };

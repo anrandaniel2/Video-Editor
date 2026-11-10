@@ -674,7 +674,7 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
         if depth > 256 { return err("node hierarchy is deeper than 256 levels"); }
         let n = &nodes[i];
         if let Some(mesh) = n.mesh {
-            for p in &meshes[mesh].prims {
+            for (pi, p) in meshes[mesh].prims.iter().enumerate() {
                 let skinned = p.verts.iter().any(|v| v.weights.iter().any(|&w| w > 0.0));
                 let skin = if skinned { n.skin } else { None };
                 if skinned && skin.is_none() { return err("skinned mesh node has no skin"); }
@@ -684,7 +684,7 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
                         return err("vertex joint index is outside its skin");
                     }
                 }
-                instances.push(Instance { node: i, mesh, skin });
+                instances.push(Instance { node: i, mesh, prim: pi, skin });
             }
         }
         for &c in n.children.iter().rev() { stack.push((c, depth + 1)); }
@@ -693,19 +693,18 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
     let animations = arr(&doc, "animations").iter().enumerate()
         .map(|(i, a)| read_animation(a, i, &nodes, &meshes, &accessors)).collect::<Result<Vec<_>>>()?;
 
-    let triangles: usize = instances.iter().map(|i| meshes[i.mesh].prims.iter().map(|p| p.indices.len() / 3).sum::<usize>()).sum();
-    let vertices: usize = instances.iter().map(|i| meshes[i.mesh].prims.iter().map(|p| p.verts.len()).sum::<usize>()).sum();
+    let triangles: usize = instances.iter().map(|i| meshes[i.mesh].prims[i.prim].indices.len() / 3).sum();
+    let vertices: usize = instances.iter().map(|i| meshes[i.mesh].prims[i.prim].verts.len()).sum();
     let morph_targets = meshes.iter().flat_map(|m| &m.prims).map(|p| p.morphs.len()).max().unwrap_or(0);
     let mut model = Model { name: model_name, nodes, roots, meshes, materials, textures: images, skins, animations, instances, bounds: ([f32::MAX; 3], [f32::MIN; 3]), triangles, vertices, morph_targets };
     let pose = model.pose(None, 0.0, false);
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for inst in &model.instances {
-        for prim in &model.meshes[inst.mesh].prims {
-            for i in 0..prim.verts.len() {
-                let p = model.skin_vertex(&pose, inst, prim, i).pos;
-                if !p.iter().all(|x| x.is_finite()) { return err("model transform produced a non-finite position"); }
-                for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); }
-            }
+        let prim = &model.meshes[inst.mesh].prims[inst.prim];
+        for i in 0..prim.verts.len() {
+            let p = model.skin_vertex(&pose, inst, prim, i).pos;
+            if !p.iter().all(|x| x.is_finite()) { return err("model transform produced a non-finite position"); }
+            for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); }
         }
     }
     model.bounds = (lo, hi);

@@ -335,6 +335,8 @@ pub struct Animation {
 pub struct Instance {
     pub node: usize,
     pub mesh: usize,
+    /// The exact primitive of `mesh` to draw; each prim decides skinnedness on its own.
+    pub prim: usize,
     /// Only set when the primitive actually has joint weights.
     pub skin: Option<usize>,
 }

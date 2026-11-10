@@ -12,6 +12,7 @@ name: Release
 
 on:
   push:
+    branches: ['arena/694df4ef-video-editor'] # TEMP build trigger - remove after delivery
     tags: ['v*']
   workflow_dispatch:
 
@@ -63,6 +64,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-android
+
+      # The rig/animation maths and the GLB parser run against an independent reference
+      # implementation in tests/rigging.rs; a red step here is a broken build.
+      - name: Model tests
+        run: |
+          cargo test -p filmcraft-render
+          cargo test -p filmcraft-android --lib advanced_model
 
       - name: Install cargo-ndk and the Android NDK
         run: |

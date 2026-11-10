@@ -171,8 +171,6 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
                 change((ed.object3DState?.settings ?: st).copy(modelSpeed = v), k)
             }
         }
-        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
-        AdvancedSlider("Size", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
     } else if (st.mesh == Object3DMesh.TEXT) {
         OutlinedTextField(
             value = st.text,
@@ -208,10 +206,6 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
             SelectChip("Right", st.align == 2u, { change((ed.object3DState?.settings ?: st).copy(align = 2u)) }, tag = "object3d_align_right")
         }
         AdvancedSlider("Font size", st.size, 4.0, 600.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
-    } else {
-        AdvancedSlider("Size", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
-    }
-    if (st.mesh != Object3DMesh.MODEL) {
         AdvancedSlider("Extrusion", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }
         AdvancedSlider("Bevel", st.bevel, 0.0, 100.0, 0.5, "object3d_bevel") { v, k -> change((ed.object3DState?.settings ?: st).copy(bevel = v), k) }
     }
@@ -219,7 +213,7 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     AdvancedSlider("Rotate X", st.rotationX, -180.0, 180.0, 1.0, "object3d_rx") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationX = v), k) }
     AdvancedSlider("Rotate Y", st.rotationY, -180.0, 180.0, 1.0, "object3d_ry") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationY = v), k) }
     AdvancedSlider("Rotate Z", st.rotationZ, -180.0, 180.0, 1.0, "object3d_rz") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationZ = v), k) }
-    AdvancedSlider("Scale", st.scale, 0.0, 400.0, 1.0, "object3d_scale") { v, k -> change((ed.object3DState?.settings ?: st).copy(scale = v), k) }
+    AdvancedSlider("Scale factor", st.scale, 0.0, 400.0, 1.0, "object3d_scale") { v, k -> change((ed.object3DState?.settings ?: st).copy(scale = v), k) }
     AdvancedSlider("Camera distance", st.z, 50.0, 3000.0, 5.0, "object3d_z") { v, k -> change((ed.object3DState?.settings ?: st).copy(z = v), k) }
     AdvancedSlider("X", st.x, -2000.0, 4000.0, 1.0, "object3d_x") { v, k -> change((ed.object3DState?.settings ?: st).copy(x = v), k) }
     AdvancedSlider("Y", st.y, -2000.0, 4000.0, 1.0, "object3d_y") { v, k -> change((ed.object3DState?.settings ?: st).copy(y = v), k) }
@@ -260,6 +254,18 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         }
         AdvancedSlider("Track depth", st.trackDepth, -1000.0, 1000.0, 5.0, "object3d_track_depth") { v, k ->
             change((ed.object3DState?.settings ?: st).copy(trackDepth = v), k)
+        }
+    }
+    // Geometry sliders for 3D models and shapes live at the bottom, named for what they do.
+    if (st.mesh == Object3DMesh.MODEL) {
+        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+        AdvancedSlider("Scale", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
+    } else if (st.mesh != Object3DMesh.TEXT) {
+        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+        AdvancedSlider("Scale", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
+        AdvancedSlider("Depth", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }
+        if (st.mesh != Object3DMesh.SPHERE) {
+            AdvancedSlider("Edge bevel", st.bevel, 0.0, 100.0, 0.5, "object3d_bevel") { v, k -> change((ed.object3DState?.settings ?: st).copy(bevel = v), k) }
         }
     }
 }
