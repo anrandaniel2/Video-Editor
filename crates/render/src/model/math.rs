@@ -86,19 +86,19 @@ pub fn normal_matrix(m: &Mat4) -> Mat4 {
         return *m;
     }
     let k = 1.0 / det;
-    // Column-major inverse-transpose = cofactor matrix / determinant. The signs belong to
-    // the cofactors, not to the column-major storage order.
+    // Inverse-transpose = cofactor matrix / determinant. Stored column-major: the first
+    // column is (C00, C10, C20), not the first row of the cofactor matrix.
     [
         (e * i - f * h) * k,
-        (c * h - b * i) * k,
-        (b * f - c * e) * k,
-        0.0,
         (f * g - d * i) * k,
-        (a * i - c * g) * k,
-        (c * d - a * f) * k,
-        0.0,
         (d * h - e * g) * k,
+        0.0,
+        (c * h - b * i) * k,
+        (a * i - c * g) * k,
         (b * g - a * h) * k,
+        0.0,
+        (b * f - c * e) * k,
+        (c * d - a * f) * k,
         (a * e - b * d) * k,
         0.0,
         0.0, 0.0, 0.0, 1.0,
