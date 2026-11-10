@@ -226,11 +226,14 @@ fn read_component(b: &[u8], at: usize, ty: u64, normalized: bool) -> Result<f32>
     Ok(value as f32)
 }
 
-fn view_range(view: &Value, buffers: &[Vec<u8>], extra: usize) -> Result<(usize, usize)> {
+/// The view must fit its buffer; each consumer separately checks its own range inside the view
+/// (adding a consumer offset here would wrongly reject tightly packed views that end exactly
+/// with their buffer).
+fn view_range(view: &Value, buffers: &[Vec<u8>]) -> Result<(usize, usize)> {
     let buffer = index(view, "buffer", buffers.len())?;
     let start = uint(view, "byteOffset", 0);
     let len = uint(view, "byteLength", 0);
-    let end = start.checked_add(len).and_then(|e| e.checked_add(extra)).ok_or("buffer view range overflow")?;
+    let end = start.checked_add(len).ok_or("buffer view range overflow")?;
     if len == 0 || end > buffers[buffer].len() { return err("buffer view runs past its buffer"); }
     Ok((buffer, start))
 }
@@ -254,7 +257,7 @@ fn read_accessor(a: &Value, views: &[Value], buffers: &[Vec<u8>]) -> Result<Acce
         let stride = uint(view, "byteStride", element);
         if stride < element || stride > 255 || offset % size != 0 { return err("invalid accessor stride/offset"); }
         let last = offset.checked_add((count - 1).checked_mul(stride).ok_or("accessor stride overflow")?).and_then(|x| x.checked_add(element)).ok_or("accessor range overflow")?;
-        let (buffer, start) = view_range(view, buffers, offset)?;
+        let (buffer, start) = view_range(view, buffers)?;
         let view_len = uint(view, "byteLength", 0);
         if last > view_len { return err("accessor runs past its buffer view"); }
         backing = Some((buffer, start + offset, stride));
@@ -285,8 +288,8 @@ fn read_accessor(a: &Value, views: &[Value], buffers: &[Vec<u8>]) -> Result<Acce
         if views[iv].get("byteStride").is_some() || views[vv].get("byteStride").is_some() { return err("sparse buffer views cannot be interleaved"); }
         let io = uint(si, "byteOffset", 0);
         let vo = uint(sv, "byteOffset", 0);
-        let (ib, istart) = view_range(&views[iv], buffers, io)?;
-        let (vb, vstart) = view_range(&views[vv], buffers, vo)?;
+        let (ib, istart) = view_range(&views[iv], buffers)?;
+        let (vb, vstart) = view_range(&views[vv], buffers)?;
         if io % isz != 0 || vo % size != 0 { return err("misaligned sparse accessor") };
         if io + nreplace * isz > uint(&views[iv], "byteLength", 0) || vo + nreplace * element > uint(&views[vv], "byteLength", 0) { return err("sparse data runs past its buffer view"); }
         for j in 0..nreplace {
@@ -512,7 +515,7 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
         buffers.push(data);
     }
     for v in views {
-        view_range(v, &buffers, 0)?;
+        view_range(v, &buffers)?;
         if obj(v, "extensions").get("EXT_meshopt_compression").is_some() { return err("meshopt compression is not supported; export an uncompressed GLB"); }
     }
     let accessors: Vec<Accessor> = arr(&doc, "accessors").iter().map(|a| read_accessor(a, views, &buffers)).collect::<Result<_>>()?;
@@ -530,7 +533,7 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
             (name(image, format!("Texture {}", i + 1)), resource(base, uri)?)
         } else {
             let vi = index(image, "bufferView", views.len())?;
-            let (b, start) = view_range(&views[vi], &buffers, 0)?;
+            let (b, start) = view_range(&views[vi], &buffers)?;
             let end = start + uint(&views[vi], "byteLength", 0);
             (name(image, format!("Texture {}", i + 1)), buffers[b][start..end].to_vec())
         };
