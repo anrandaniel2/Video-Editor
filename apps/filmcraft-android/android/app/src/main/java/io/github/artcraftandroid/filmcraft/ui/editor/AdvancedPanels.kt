@@ -180,6 +180,7 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         )
         val families by produceState<List<FontFamily>>(emptyList()) {
             value = runCatching { ed.engine.command { fontFamilies() } }.getOrDefault(emptyList())
+                .ifEmpty { listOf(FontFamily("Inter", listOf("Regular", "Bold"))) }
         }
         val styles = families.firstOrNull { it.name == st.font }?.styles ?: listOf(st.fontStyle.ifBlank { "Regular" })
         PickerRow("Font", st.font, families.map { it.name }.ifEmpty { listOf(st.font) }, "object3d_font") { picked ->
@@ -213,7 +214,7 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     AdvancedSlider("Rotate X", st.rotationX, -180.0, 180.0, 1.0, "object3d_rx") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationX = v), k) }
     AdvancedSlider("Rotate Y", st.rotationY, -180.0, 180.0, 1.0, "object3d_ry") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationY = v), k) }
     AdvancedSlider("Rotate Z", st.rotationZ, -180.0, 180.0, 1.0, "object3d_rz") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationZ = v), k) }
-    AdvancedSlider("Scale factor", st.scale, 0.0, 400.0, 1.0, "object3d_scale") { v, k -> change((ed.object3DState?.settings ?: st).copy(scale = v), k) }
+    AdvancedSlider("Scale", st.scale, 0.0, 400.0, 1.0, "object3d_scale") { v, k -> change((ed.object3DState?.settings ?: st).copy(scale = v), k) }
     AdvancedSlider("Camera distance", st.z, 50.0, 3000.0, 5.0, "object3d_z") { v, k -> change((ed.object3DState?.settings ?: st).copy(z = v), k) }
     AdvancedSlider("X", st.x, -2000.0, 4000.0, 1.0, "object3d_x") { v, k -> change((ed.object3DState?.settings ?: st).copy(x = v), k) }
     AdvancedSlider("Y", st.y, -2000.0, 4000.0, 1.0, "object3d_y") { v, k -> change((ed.object3DState?.settings ?: st).copy(y = v), k) }
@@ -256,13 +257,11 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
             change((ed.object3DState?.settings ?: st).copy(trackDepth = v), k)
         }
     }
-    // Geometry sliders for 3D models and shapes live at the bottom, named for what they do.
-    if (st.mesh == Object3DMesh.MODEL) {
+    // Shape geometry sliders live at the bottom. A 3D model has no size/extrusion sliders —
+    // its Scale in the transform group above is the only size control.
+    if (st.mesh != Object3DMesh.MODEL && st.mesh != Object3DMesh.TEXT) {
         HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
-        AdvancedSlider("Scale", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
-    } else if (st.mesh != Object3DMesh.TEXT) {
-        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
-        AdvancedSlider("Scale", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
+        AdvancedSlider("Size", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
         AdvancedSlider("Depth", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }
         if (st.mesh != Object3DMesh.SPHERE) {
             AdvancedSlider("Edge bevel", st.bevel, 0.0, 100.0, 0.5, "object3d_bevel") { v, k -> change((ed.object3DState?.settings ?: st).copy(bevel = v), k) }

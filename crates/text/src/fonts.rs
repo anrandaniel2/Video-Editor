@@ -100,6 +100,13 @@ impl DirectorySource {
             if let Some(l) = std::env::var_os("LOCALAPPDATA") {
                 dirs.push(PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
             }
+        } else if cfg!(target_os = "android") {
+            // The phone's own fonts (Roboto, Noto, OEM faces) live here; /usr/share/fonts does
+            // not exist on Android, so without these the picker only offers bundled families.
+            dirs.extend(
+                ["/system/fonts", "/product/fonts", "/system_ext/fonts", "/vendor/fonts", "/data/fonts"]
+                    .map(PathBuf::from),
+            );
         } else if cfg!(unix) && !cfg!(target_arch = "wasm32") {
             dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(PathBuf::from));
             if let Some(h) = &home {

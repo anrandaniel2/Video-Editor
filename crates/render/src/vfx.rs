@@ -62,8 +62,9 @@ pub trait FxEnv: Sync {
     fn source_size(&self) -> (u32, u32);
     /// Identity of the clip and its source range (cache key for analyses).
     fn clip_key(&self) -> u64;
-    /// A sequence motion track sampled at the current timeline moment (3D follow).
-    fn motion_track(&self, _id: u64, _t: Tick) -> Option<filmcraft_project::TrackSample> {
+    /// A sequence motion track sampled at the current timeline moment, together with its anchor
+    /// (the first sample) so callers can apply the motion as a delta from where the track began.
+    fn motion_track(&self, _id: u64, _t: Tick) -> Option<(filmcraft_project::TrackSample, filmcraft_project::TrackSample)> {
         None
     }
 }
@@ -166,10 +167,11 @@ impl FxEnv for ItemEnv<'_> {
     fn source_size(&self) -> (u32, u32) {
         crate::source_size(self.project, self.item.item).unwrap_or((self.seq.settings.width, self.seq.settings.height))
     }
-    fn motion_track(&self, id: u64, _t: Tick) -> Option<filmcraft_project::TrackSample> {
+    fn motion_track(&self, id: u64, _t: Tick) -> Option<(filmcraft_project::TrackSample, filmcraft_project::TrackSample)> {
         let track = self.seq.motion_tracks.iter().find(|t| t.id == id)?;
         let start = self.seq.find_item(track.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
-        track.sample_at(self.t - start)
+        let anchor = *track.samples.first()?;
+        Some((track.sample_at(self.t - start)?, anchor))
     }
     fn clip_key(&self) -> u64 {
         let mut h = 0xcbf2_9ce4_8422_2325u64;

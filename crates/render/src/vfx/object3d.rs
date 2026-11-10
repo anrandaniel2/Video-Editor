@@ -107,11 +107,12 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
     let mut rz = fv(e, "rotation_z", cx);
     let track_id = fv(e, "track_id", cx).max(0.0) as u64;
     if bv(e, "follow_track") && track_id != 0 {
-        if let Some(s) = cx.env.and_then(|env| env.motion_track(track_id, cx.t)) {
-            let off = e.param("position").map(|p| p.vec2_at(cx.t)).unwrap_or_default();
-            let ox = if off.x.is_nan() { 0.0 } else { off.x as f32 * px };
-            let oy = if off.y.is_nan() { 0.0 } else { off.y as f32 * px };
-            pos = filmcraft_geom::Vec2::new((s.x * img.w as f32 + ox) as f64, (s.y * img.h as f32 + oy) as f64);
+        if let Some((s, anchor)) = cx.env.and_then(|env| env.motion_track(track_id, cx.t)) {
+            // Follow the tracked motion as a delta from the track's anchor: the object stays
+            // where the user placed it and rides along with the movement in the shot. (Taking
+            // the tracked point as an absolute position snapped the object onto it.)
+            pos.x += (s.x - anchor.x) as f64 * img.w as f64;
+            pos.y += (s.y - anchor.y) as f64 * img.h as f64;
             z += s.z * fv(e, "track_depth", cx) * px;
             scale *= s.scale.max(0.01);
             rz += s.rotation;
@@ -1158,5 +1159,84 @@ mod tests {
         let mut img = Image::new(160, 96);
         apply(&mut img, &e, &ctx());
         assert!(img.px.chunks(4).any(|p| p[3] > 0.2 && p[0] + p[1] + p[2] > 0.03), "text was invisible or black");
+    }
+
+    /// Follow motion track applies the tracked motion as a delta from the track's anchor: the
+    /// object stays where the user placed it and rides along with the movement in the shot. (The
+    /// old code snapped the object onto the tracked point plus the position offset, which threw
+    /// it across the frame the moment tracking engaged.)
+    #[test]
+    fn follow_motion_track_moves_the_object_by_the_tracked_delta() {
+        struct Env;
+        impl crate::vfx::FxEnv for Env {
+            fn frame(&self, _: f64, _: &EffectInstance) -> Option<Image> {
+                None
+            }
+            fn source_frame(&self, _: f64, _: f32) -> Option<Image> {
+                None
+            }
+            fn track(&self, _: usize) -> Option<Image> {
+                None
+            }
+            fn layer_to_output(&self) -> filmcraft_geom::Affine {
+                filmcraft_geom::Affine::IDENTITY
+            }
+            fn clip_seconds(&self) -> f64 {
+                10.0
+            }
+            fn clip_offset(&self) -> f64 {
+                0.0
+            }
+            fn frame_rate(&self) -> f64 {
+                30.0
+            }
+            fn media_timecode(&self) -> String {
+                String::new()
+            }
+            fn file_name(&self) -> String {
+                String::new()
+            }
+            fn sequence_name(&self) -> String {
+                String::new()
+            }
+            fn sequence_size(&self) -> (u32, u32) {
+                (256, 256)
+            }
+            fn source_size(&self) -> (u32, u32) {
+                (256, 256)
+            }
+            fn clip_key(&self) -> u64 {
+                1
+            }
+            fn motion_track(
+                &self,
+                _id: u64,
+                _t: Tick,
+            ) -> Option<(filmcraft_project::TrackSample, filmcraft_project::TrackSample)> {
+                let anchor = filmcraft_project::TrackSample {
+                    time: Tick::ZERO,
+                    x: 0.5,
+                    y: 0.5,
+                    z: 0.0,
+                    scale: 1.0,
+                    rotation: 0.0,
+                    confidence: 1.0,
+                };
+                let now = filmcraft_project::TrackSample { x: 0.75, y: 0.6, ..anchor };
+                Some((now, anchor))
+            }
+        }
+        let mut e = find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(80.0);
+        e.params.get_mut("position").unwrap().value =
+            filmcraft_project::ParamValue::Vec2(filmcraft_geom::Vec2::new(30.0, 30.0));
+        e.params.get_mut("follow_track").unwrap().value = filmcraft_project::ParamValue::Bool(true);
+        e.params.get_mut("track_id").unwrap().value = filmcraft_project::ParamValue::Float(1.0);
+        let env = Env;
+        let mut img = Image::new(256, 256);
+        apply(&mut img, &e, &FxCtx { env: Some(&env), ..ctx() });
+        let (cx, cy) = box_centre(&img);
+        // placement (30, 30) plus the tracked delta ((0.75−0.5)·256, (0.6−0.5)·256) = (94, 55.6)
+        assert!((cx - 94.0).abs() < 2.0 && (cy - 55.6).abs() < 2.0, "followed to ({cx}, {cy}), wanted (94, 55.6)");
     }
 }
