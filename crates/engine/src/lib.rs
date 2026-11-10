@@ -25,6 +25,7 @@ pub mod graphics;
 pub mod interchange;
 pub mod keyboard;
 mod keyframe_move;
+mod lighting;
 mod marker_export;
 pub mod masks;
 pub mod media_browser;

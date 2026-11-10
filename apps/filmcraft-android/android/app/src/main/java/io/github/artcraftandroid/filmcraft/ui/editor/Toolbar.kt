@@ -109,6 +109,7 @@ private fun addTools(ed: EditorController) = listOf(
     Tool("editor_tool_audio", "Audio", LucideIcons.Music.glyph()) { ed.submenu = Submenu.AddAudio },
     Tool("editor_tool_text", "Text", LucideIcons.Type.glyph()) { ed.panel = Panel.TextInput(null) },
     Tool("editor_tool_3d", "3D", LucideIcons.Layers.glyph()) { ed.panel = Panel.Object3D },
+    Tool("editor_tool_lights", "Lights", LucideIcons.Sun.glyph()) { ed.panel = Panel.Lights },
     Tool("editor_tool_captions", "Captions", LucideIcons.Captions.glyph(), enabled = ed.duration > 0) { ed.panel = Panel.Captions },
     Tool("editor_tool_files", "Files", LucideIcons.File.glyph()) { ed.submenu = Submenu.Files },
     Tool("editor_tool_blank", "Blank", LucideIcons.RectangleHorizontal.glyph()) { ed.addBlank() },

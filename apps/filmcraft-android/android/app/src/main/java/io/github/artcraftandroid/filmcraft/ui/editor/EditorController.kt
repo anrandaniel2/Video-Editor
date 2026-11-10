@@ -54,6 +54,8 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 
 /** A tool's panel. */
@@ -64,6 +66,8 @@ sealed interface Panel {
     data object Opacity : Panel
     data object Mask : Panel
     data object Object3D : Panel
+    /** The scene's coloured light objects. */
+    data object Lights : Panel
     data object Tracking : Panel
     data object Background : Panel
     data object Filters : Panel
@@ -96,6 +100,84 @@ interface EditorHost {
 }
 
 enum class PickKind { PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo, Model }
+
+/** A scene light object: coloured, placeable in 3D, one of several (fields mirror the engine's `Light3D`). */
+data class SceneLight(
+    val id: Long = 0,
+    val name: String = "Light",
+    val enabled: Boolean = true,
+    val kind: String = "directional",
+    val color: List<Float> = listOf(1f, 1f, 1f),
+    val intensity: Double = 1.0,
+    val position: List<Double> = listOf(0.0, 0.0, 1500.0),
+    val angle: Double = 135.0,
+    val elevation: Double = 45.0,
+    val range: Double = 0.0,
+    val cone: Double = 35.0,
+    val softness: Double = 0.5,
+) {
+    fun toJson(merge: String? = null): String {
+        val j = JSONObject()
+        j.put("id", id)
+        j.put("name", name)
+        j.put("enabled", enabled)
+        j.put("kind", kind)
+        j.put("color", JSONArray(color.map { it.toDouble() }))
+        j.put("intensity", intensity)
+        j.put("position", JSONArray(position))
+        j.put("angle", angle)
+        j.put("elevation", elevation)
+        j.put("range", range)
+        j.put("cone", cone)
+        j.put("softness", softness)
+        if (merge != null) j.put("merge", merge)
+        return j.toString()
+    }
+
+    companion object {
+        fun from(j: JSONObject) = SceneLight(
+            id = j.optLong("id"),
+            name = j.optString("name", "Light"),
+            enabled = j.optBoolean("enabled", true),
+            kind = j.optString("kind", "directional"),
+            color = (0..2).map { j.optJSONArray("color")?.optDouble(it, 1.0)?.toFloat() ?: 1f },
+            intensity = j.optDouble("intensity", 1.0),
+            position = (0..2).map { j.optJSONArray("position")?.optDouble(it, if (it == 2) 1500.0 else 0.0) ?: if (it == 2) 1500.0 else 0.0 },
+            angle = j.optDouble("angle", 135.0),
+            elevation = j.optDouble("elevation", 45.0),
+            range = j.optDouble("range", 0.0),
+            cone = j.optDouble("cone", 35.0),
+            softness = j.optDouble("softness", 0.5),
+        )
+    }
+}
+
+/** The sequence's lighting: its light objects and the ambient fill. */
+data class SceneLightingState(
+    val lights: List<SceneLight> = emptyList(),
+    val ambientColor: List<Float> = listOf(1f, 1f, 1f),
+    val ambientLevel: Double = 1.0,
+) {
+    fun ambientJson(merge: String? = null): String {
+        val j = JSONObject()
+        j.put("color", JSONArray(ambientColor.map { it.toDouble() }))
+        j.put("level", ambientLevel)
+        if (merge != null) j.put("merge", merge)
+        return j.toString()
+    }
+
+    companion object {
+        fun from(json: String): SceneLightingState {
+            val j = JSONObject(json)
+            val arr = j.optJSONArray("lights")
+            return SceneLightingState(
+                lights = (0 until (arr?.length() ?: 0)).map { SceneLight.from(arr!!.getJSONObject(it)) },
+                ambientColor = (0..2).map { j.optJSONArray("ambientColor")?.optDouble(it, 1.0)?.toFloat() ?: 1f },
+                ambientLevel = j.optDouble("ambientLevel", 1.0),
+            )
+        }
+    }
+}
 
 /**
  * The open project in the editor: the timeline as the engine last reported it, the playhead,
@@ -930,6 +1012,62 @@ class EditorController(
                 refresh()
                 panel = Panel.Object3D
                 loadObject3D(id)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    // ---- scene lights ----
+
+    var sceneLights by mutableStateOf(SceneLightingState())
+        private set
+
+    suspend fun loadLights() {
+        sceneLights = runCatching {
+            SceneLightingState.from(engine.command { execute("lights.list", "{}") })
+        }.getOrDefault(SceneLightingState())
+    }
+
+    /** Add a light object of `kind` ("directional", "point" or "spot"); `onAdded` gets its id. */
+    fun addLight(kind: String, onAdded: (Long) -> Unit = {}) {
+        stop()
+        scope.launch {
+            try {
+                val light = SceneLight(name = "Light ${sceneLights.lights.size + 1}", kind = kind)
+                val out = engine.command { execute("lights.set", light.toJson()) }
+                sceneLights = SceneLightingState.from(out)
+                onAdded(JSONObject(out).optLong("id"))
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    /** Put a light object in the scene (its `id` edits it; 0 creates one). */
+    fun setLight(light: SceneLight, merge: String? = null) {
+        val body = light.toJson(merge)
+        scope.launch {
+            try {
+                val out = engine.command { execute("lights.set", body) }
+                sceneLights = SceneLightingState.from(out)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    fun removeLight(id: Long) {
+        stop()
+        scope.launch {
+            try {
+                val out = engine.command { execute("lights.remove", """{"id":$id}""") }
+                sceneLights = SceneLightingState.from(out)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    /** The ambient fill: colour × level. */
+    fun setAmbient(ambientColor: List<Float>, ambientLevel: Double, merge: String? = null) {
+        val body = SceneLightingState(lights = emptyList(), ambientColor = ambientColor, ambientLevel = ambientLevel).ambientJson(merge)
+        scope.launch {
+            try {
+                val out = engine.command { execute("lights.ambient", body) }
+                sceneLights = SceneLightingState.from(out)
             } catch (e: Exception) { host.tell(e.userMessage) }
         }
     }

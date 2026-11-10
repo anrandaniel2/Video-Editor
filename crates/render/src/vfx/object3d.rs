@@ -13,7 +13,7 @@ use filmcraft_text::render;
 use crate::effects::FxCtx;
 use crate::image::Image;
 
-use super::{bv, chv, cv, fv, lin, tv};
+use super::{bv, chv, cv, fv, lin, smoothstep, tv};
 
 #[derive(Clone, Copy, Debug)]
 struct V3 {
@@ -78,7 +78,10 @@ struct Params {
     side: [f32; 4],
     metal: f32,
     rough: f32,
-    light: V3,
+    /// The scene's prepared lights (one classic directional light when the scene has none).
+    lights: Vec<LitLight>,
+    /// Ambient shadow fill (colour × level), linear; (1,1,1) is the classic look.
+    ambient: [f32; 3],
     opacity: f32,
     model_path: String,
     model_anim: i32,
@@ -97,6 +100,55 @@ fn rotate(v: V3, r: V3) -> V3 {
     let x = v.x * cy + z * sy;
     let z = -v.x * sy + z * cy;
     V3::new(x * cz - y * sz, x * sz + y * cz, z)
+}
+
+/// A scene light prepared for shading. Positions are in the object's world frame (the camera
+/// axis through the object's own position), which is where the rasteriser's vertices live.
+#[derive(Clone, Copy)]
+struct LitLight {
+    /// 0 = directional, 1 = point, 2 = spot.
+    kind: u8,
+    /// Colour × intensity, linear.
+    color: [f32; 3],
+    /// Unit vector from a surface toward the light (directional), or the spot's aim.
+    toward: V3,
+    /// Where the light is (point and spot).
+    pos: V3,
+    /// Falloff radius in layer pixels; 0 = the light reaches everything.
+    range: f32,
+    cos_outer: f32,
+    cos_inner: f32,
+}
+
+impl LitLight {
+    /// The unit vector from `p` toward the light and its attenuation × cone weight.
+    fn at(&self, p: V3) -> (V3, f32) {
+        match self.kind {
+            1 | 2 => {
+                let to = self.pos.sub(p);
+                let len = (to.x * to.x + to.y * to.y + to.z * to.z).sqrt().max(1e-4);
+                let toward = to.mul(1.0 / len);
+                let mut w = 1.0;
+                if self.range > 0.0 {
+                    let t = 1.0 - (len / self.range).min(1.0);
+                    w = (1.0 - (1.0 - t) * (1.0 - t)).powi(2);
+                }
+                if self.kind == 2 {
+                    w *= smoothstep(self.cos_outer, self.cos_inner, toward.dot(self.toward));
+                }
+                (toward, w)
+            }
+            _ => (self.toward, 1.0),
+        }
+    }
+}
+
+/// The direction from a surface toward a classic light (the old `light_angle`/`light_elevation`
+/// numbers: elevation lifts the light toward the viewer).
+fn aim(angle: f32, elevation: f32) -> V3 {
+    let la = angle.to_radians();
+    let le = elevation.to_radians();
+    V3::new(la.cos() * le.cos(), la.sin() * le.cos(), -le.sin()).norm()
 }
 
 fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
@@ -118,8 +170,53 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
             rz += s.rotation;
         }
     }
-    let la = fv(e, "light_angle", cx).to_radians();
-    let le = fv(e, "light_elevation", cx).to_radians();
+    let la = fv(e, "light_angle", cx);
+    let le = fv(e, "light_elevation", cx);
+    // The scene's lights: placeable, coloured light objects. With none configured the classic
+    // single light from the object's own angle/elevation keeps old projects looking the same.
+    let lighting = cx.env.map(|env| env.scene_lighting()).unwrap_or_default();
+    let ambient = [
+        lighting.ambient_color[0].max(0.0) * lighting.ambient_level.max(0.0),
+        lighting.ambient_color[1].max(0.0) * lighting.ambient_level.max(0.0),
+        lighting.ambient_color[2].max(0.0) * lighting.ambient_level.max(0.0),
+    ];
+    let mut lights: Vec<LitLight> = Vec::new();
+    if lighting.lights.is_empty() {
+        lights.push(LitLight {
+            kind: 0,
+            color: [1.0; 3],
+            toward: aim(la, le),
+            pos: V3::new(0.0, 0.0, 0.0),
+            range: 0.0,
+            cos_outer: 0.0,
+            cos_inner: 1.0,
+        });
+    } else {
+        // Light positions are the object placement units (output pixels); the vertices live in
+        // the object's own frame, whose camera axis runs through the object's position.
+        for l in &lighting.lights {
+            if !l.enabled || l.intensity <= 0.0 {
+                continue;
+            }
+            let col = lin([l.color[0].clamp(0.0, 1.0), l.color[1].clamp(0.0, 1.0), l.color[2].clamp(0.0, 1.0), 1.0]);
+            let k = l.intensity.max(0.0);
+            let cone = l.cone.clamp(1.0, 89.0);
+            let soft = l.softness.clamp(0.0, 1.0);
+            lights.push(LitLight {
+                kind: match l.kind {
+                    filmcraft_project::LightKind::Directional => 0,
+                    filmcraft_project::LightKind::Point => 1,
+                    filmcraft_project::LightKind::Spot => 2,
+                },
+                color: [col[0] * k, col[1] * k, col[2] * k],
+                toward: aim(l.angle, l.elevation),
+                pos: V3::new(l.position[0] * px - pos.x as f32, l.position[1] * px - pos.y as f32, l.position[2] * px),
+                range: l.range.max(0.0) * px,
+                cos_outer: (cone as f32).to_radians().cos(),
+                cos_inner: (cone as f32 * (1.0 - 0.95 * soft)).to_radians().cos(),
+            });
+        }
+    }
     Params {
         mesh: chv(e, "mesh"),
         text: tv(e, "text"),
@@ -148,7 +245,8 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
         side: cv(e, "side_color", cx),
         metal: (fv(e, "metalness", cx) / 100.0).clamp(0.0, 1.0),
         rough: (fv(e, "roughness", cx) / 100.0).clamp(0.0, 1.0),
-        light: V3::new(la.cos() * le.cos(), la.sin() * le.cos(), le.sin()).norm(),
+        lights,
+        ambient,
         opacity: (fv(e, "opacity", cx) / 100.0).clamp(0.0, 1.0),
         model_path: tv(e, "model_path"),
         model_anim: fv(e, "model_anim", cx).round() as i32,
@@ -288,21 +386,32 @@ fn bounds(pts: &[V3], cam: (f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
     any.then_some((x0, y0, x1, y1))
 }
 
-fn shade(n: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
+fn shade(n: V3, wp: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
     let n = n.norm();
     // The camera looks down +z, so a visible face has a normal pointing back toward -z.
     let n = if n.z > 0.0 { n.mul(-1.0) } else { n };
-    // Light lives in camera space: elevation lifts it toward the viewer (-z), so a front face
+    // Lights live in camera space: elevation lifts them toward the viewer (-z), so a front face
     // is lit at the default 45° instead of being lit from behind and falling to ambient only.
-    let light = V3::new(p.light.x, p.light.y, -p.light.z).norm();
-    let diff = n.dot(light).max(0.0);
     let view = V3::new(0.0, 0.0, -1.0);
-    let h = light.add(view).norm();
     let shin = 2.0 + (1.0 - p.rough) * 96.0;
-    let spec = n.dot(h).max(0.0).powf(shin) * p.metal * 0.9;
+    let mut diff = [0.0f32; 3];
+    let mut spec = [0.0f32; 3];
+    for l in &p.lights {
+        let (toward, w) = l.at(wp);
+        if w <= 0.0 {
+            continue;
+        }
+        let d = n.dot(toward).max(0.0) * w;
+        let h = toward.add(view).norm();
+        let s = n.dot(h).max(0.0).powf(shin) * w;
+        for k in 0..3 {
+            diff[k] += l.color[k] * d;
+            spec[k] += l.color[k] * s;
+        }
+    }
     let mut c = [0.0; 3];
     for k in 0..3 {
-        c[k] = (base[k] * (0.28 + 0.72 * diff) + spec).clamp(0.0, 1.0) * alpha;
+        c[k] = (base[k] * (0.28 * p.ambient[k] + 0.72 * diff[k]) + spec[k] * p.metal * 0.9).clamp(0.0, 1.0) * alpha;
     }
     [c[0], c[1], c[2], alpha]
 }
@@ -351,7 +460,7 @@ fn draw_tri(buf: &mut Buf, v: [Vert; 3], p: &Params, base: [f32; 3], alpha: f32,
     let Some(d) = project(v[2].p, cx, cy, f) else { return };
     // Two-sided lighting: parametric windings are not all outward, and the z-buffer already
     // keeps the nearest surface; `shade` faces the visible side toward the camera.
-    let cols = [shade(v[0].n, p, base, alpha), shade(v[1].n, p, base, alpha), shade(v[2].n, p, base, alpha)];
+    let cols = [shade(v[0].n, v[0].p, p, base, alpha), shade(v[1].n, v[1].p, p, base, alpha), shade(v[2].n, v[2].p, p, base, alpha)];
     tri(buf, [a, b, d], cols);
 }
 
@@ -650,7 +759,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f3
             .flat_map(|c| c.iter().filter_map(move |&(x, y)| project(to_v(x, y, z), cx, cy, f)))
             .collect();
         if let Some(plane) = face_plane(&flat) {
-            fill_face(buf, &pc, plane, shade(rotate(n, p.rot), p, col, a));
+            fill_face(buf, &pc, plane, shade(rotate(n, p.rot), to_v(0.0, 0.0, z), p, col, a));
         }
     }
     // Walls and chamfer.
@@ -739,44 +848,56 @@ fn sample_map(model: &crate::model::Model, r: Option<crate::model::TextureRef>, 
     model.textures.get(r.index).map(|t| t.sample(u, v))
 }
 
-/// Metallic-roughness shading with a GGX specular lobe. The editor's current directional light
-/// is used until the scene-light objects arrive; ambient is a cheap diffuse/specular environment.
-fn shade_pbr(n: V3, view: V3, light: V3, base: [f32; 3], metallic: f32, roughness: f32, ao: f32, emissive: [f32; 3], alpha: f32, unlit: bool) -> [f32; 4] {
+/// Metallic-roughness shading with a GGX specular lobe. The scene's lights (coloured light
+/// objects, or the classic single light) light the surface; ambient is a cheap diffuse/
+/// specular environment.
+fn shade_pbr(n: V3, view: V3, wp: V3, p: &Params, base: [f32; 3], metallic: f32, roughness: f32, ao: f32, emissive: [f32; 3], alpha: f32, unlit: bool) -> [f32; 4] {
     if unlit {
         return [(base[0] + emissive[0]) * alpha, (base[1] + emissive[1]) * alpha, (base[2] + emissive[2]) * alpha, alpha];
     }
     let n = n.norm();
     let v = view.norm();
-    let l = light.norm();
-    let h = v.add(l).norm();
-    let nl = n.dot(l).max(0.0);
     let nv = n.dot(v).max(1e-4);
-    let nh = n.dot(h).max(0.0);
-    let vh = v.dot(h).max(0.0);
     let rough = roughness.clamp(0.045, 1.0);
     let a = rough * rough;
     let a2 = a * a;
-    let den = nh * nh * (a2 - 1.0) + 1.0;
-    let d = a2 / (std::f32::consts::PI * den * den).max(1e-6);
     let k = (rough + 1.0) * (rough + 1.0) / 8.0;
-    let g = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k).max(1e-6));
     let f0 = std::array::from_fn::<_, 3, _>(|i| 0.04 + (base[i] - 0.04) * metallic);
-    let f = std::array::from_fn::<_, 3, _>(|i| f0[i] + (1.0 - f0[i]) * (1.0 - vh).powi(5));
+    let mut direct = [0.0f32; 3];
+    for l in &p.lights {
+        let (lb, w) = l.at(wp);
+        if w <= 0.0 {
+            continue;
+        }
+        let nl = n.dot(lb).max(0.0);
+        if nl <= 0.0 {
+            continue;
+        }
+        let h = v.add(lb).norm();
+        let nh = n.dot(h).max(0.0);
+        let vh = v.dot(h).max(0.0);
+        let den = nh * nh * (a2 - 1.0) + 1.0;
+        let d = a2 / (std::f32::consts::PI * den * den).max(1e-6);
+        let g = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k).max(1e-6));
+        let f = std::array::from_fn::<_, 3, _>(|i| f0[i] + (1.0 - f0[i]) * (1.0 - vh).powi(5));
+        for i in 0..3 {
+            let kd = (1.0 - f[i]) * (1.0 - metallic);
+            let spec = d * g * f[i] / (4.0 * nv * nl).max(1e-5);
+            direct[i] += (kd * base[i] / std::f32::consts::PI + spec) * nl * 3.0 * w * l.color[i];
+        }
+    }
     let mut c = [0.0f32; 3];
     for i in 0..3 {
-        let kd = (1.0 - f[i]) * (1.0 - metallic);
-        let spec = d * g * f[i] / (4.0 * nv * nl).max(1e-5);
-        let direct = (kd * base[i] / std::f32::consts::PI + spec) * nl * 3.0;
-        let ambient_diffuse = base[i] * (1.0 - metallic) * 0.22 * ao;
-        let ambient_spec = f0[i] * (0.08 + 0.12 * (1.0 - rough)) * ao;
-        c[i] = ((direct + ambient_diffuse + ambient_spec + emissive[i]).max(0.0)) * alpha;
+        let ambient_diffuse = base[i] * (1.0 - metallic) * 0.22 * ao * p.ambient[i];
+        let ambient_spec = f0[i] * (0.08 + 0.12 * (1.0 - rough)) * ao * p.ambient[i];
+        c[i] = ((direct[i] + ambient_diffuse + ambient_spec + emissive[i]).max(0.0)) * alpha;
     }
     [c[0], c[1], c[2], alpha]
 }
 
 /// Perspective-correct textured triangle. `blend` draws back-to-front transparent surfaces over
 /// the opaque z-buffer without writing depth, so glass does not hide surfaces behind it.
-fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model: &crate::model::Model, mat: &crate::model::Material, p: &Params, light: V3, blend: bool) {
+fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model: &crate::model::Model, mat: &crate::model::Material, p: &Params, blend: bool) {
     let [a, b, c] = pts;
     let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
     if area.abs() < 1e-7 { return; }
@@ -835,7 +956,7 @@ fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model:
                 crate::model::AlphaMode::Blend => {}
             }
             if alpha <= 0.0 { continue; }
-            let col = shade_pbr(n, view, light, base, metallic, rough, occ, emissive, alpha.clamp(0.0, 1.0), mat.unlit);
+            let col = shade_pbr(n, view, pos, p, base, metallic, rough, occ, emissive, alpha.clamp(0.0, 1.0), mat.unlit);
             if blend {
                 let dst = &mut buf.px[idx];
                 super::over(dst, col);
@@ -885,7 +1006,6 @@ fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam:
     }
     if !any { return; }
     let Some(mut buf) = Buf::new(img, (bx0, by0, bx1, by1)) else { return };
-    let light = V3::new(p.light.x, p.light.y, -p.light.z).norm();
     // Opaque/mask first. Transparent triangles are sorted far-to-near and depth-tested against
     // the opaque buffer, but do not write depth themselves.
     let mut transparent: Vec<(usize, usize, f32)> = Vec::new();
@@ -903,7 +1023,7 @@ fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam:
                 let Some(a) = project(clipped[0].p, cam.0, cam.1, cam.2) else { continue };
                 let Some(b) = project(clipped[1].p, cam.0, cam.1, cam.2) else { continue };
                 let Some(c) = project(clipped[2].p, cam.0, cam.1, cam.2) else { continue };
-                model_tri(&mut buf, [a, b, c], clipped, &model, mat, p, light, false);
+                model_tri(&mut buf, [a, b, c], clipped, &model, mat, p, false);
             }
         }
     }
@@ -916,7 +1036,7 @@ fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam:
             let Some(a) = project(clipped[0].p, cam.0, cam.1, cam.2) else { continue };
             let Some(b) = project(clipped[1].p, cam.0, cam.1, cam.2) else { continue };
             let Some(c) = project(clipped[2].p, cam.0, cam.1, cam.2) else { continue };
-            model_tri(&mut buf, [a, b, c], clipped, &model, mat, p, light, true);
+            model_tri(&mut buf, [a, b, c], clipped, &model, mat, p, true);
         }
     }
     buf.composite(img);

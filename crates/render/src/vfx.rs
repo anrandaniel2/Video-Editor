@@ -67,6 +67,11 @@ pub trait FxEnv: Sync {
     fn motion_track(&self, _id: u64, _t: Tick) -> Option<(filmcraft_project::TrackSample, filmcraft_project::TrackSample)> {
         None
     }
+    /// The sequence's scene lights. The default (no lights) keeps the renderers on their
+    /// classic single light.
+    fn scene_lighting(&self) -> filmcraft_project::SceneLighting {
+        Default::default()
+    }
 }
 
 /// The environment of a track item being rendered by [`crate::item_layer`].
@@ -172,6 +177,9 @@ impl FxEnv for ItemEnv<'_> {
         let start = self.seq.find_item(track.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
         let anchor = *track.samples.first()?;
         Some((track.sample_at(self.t - start)?, anchor))
+    }
+    fn scene_lighting(&self) -> filmcraft_project::SceneLighting {
+        self.seq.scene_lighting.clone()
     }
     fn clip_key(&self) -> u64 {
         let mut h = 0xcbf2_9ce4_8422_2325u64;

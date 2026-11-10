@@ -1,0 +1,8 @@
+asset:        sun.svg
+title:        Lucide icon "sun"
+author:       Lucide Contributors (portions Cole Bemis, Feather)
+source:       https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/sun.svg)
+license:      ISC
+license-file: assets/icons/LICENSE-lucide.txt
+added:        2026-11-08 by Claude (agent) for Daniel
+notes:        Unmodified. The scene-lights tool icon of the Android app (apps/filmcraft-android), turned into Compose path data at build time.

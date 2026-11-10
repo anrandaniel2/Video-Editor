@@ -235,8 +235,20 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         Text("Materials use the model's own PBR textures.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
     }
     AdvancedSlider("Opacity", st.opacity, 0.0, 100.0, 1.0, "object3d_opacity") { v, k -> change((ed.object3DState?.settings ?: st).copy(opacity = v), k) }
-    AdvancedSlider("Light angle", st.lightAngle, 0.0, 360.0, 1.0, "object3d_light_angle") { v, k -> change((ed.object3DState?.settings ?: st).copy(lightAngle = v), k) }
-    AdvancedSlider("Light elevation", st.lightElevation, -90.0, 90.0, 1.0, "object3d_light_elev") { v, k -> change((ed.object3DState?.settings ?: st).copy(lightElevation = v), k) }
+    // Lighting is the scene's light objects (coloured, multiple) — not a per-object angle.
+    LaunchedEffect(Unit) { ed.loadLights() }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        val n = ed.sceneLights.lights.size
+        Text(
+            if (n == 0) "Lighting: classic light" else if (n == 1) "Lighting: 1 light" else "Lighting: $n lights",
+            style = FcType.Caption, color = Fc.Secondary,
+        )
+        SelectChip("Lights", ed.panel == Panel.Lights, { ed.panel = Panel.Lights }, tag = "object3d_lights")
+    }
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
     Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), verticalAlignment = Alignment.CenterVertically) {
         Text("Follow motion track", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
@@ -604,5 +616,170 @@ fun AnimationFrameBar(ed: EditorController, modifier: Modifier = Modifier) {
             maxLines = 1,
             modifier = Modifier.padding(start = 2.dp).testTag("frame_bar_time"),
         )
+    }
+}
+
+// ------------------------------------------------------------------ scene lights
+
+/** The scene's light objects: coloured lights placed in 3D that light every 3D layer. */
+@Composable
+fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
+    val lighting = ed.sceneLights
+    var selected by remember { mutableStateOf(0L) }
+    LaunchedEffect(Unit) { ed.loadLights() }
+    val light = lighting.lights.firstOrNull { it.id == selected } ?: lighting.lights.firstOrNull()
+    ToolPanel(
+        "Lights", close, modifier, tag = "lights_panel",
+        actions = {
+            if (light != null) {
+                PanelAction(LucideIcons.Trash2.glyph(), "Delete light", { ed.removeLight(light.id); selected = 0L }, tag = "lights_delete")
+            }
+        },
+    ) {
+        Text(
+            "Coloured light objects that light every 3D object and text. Add as many as you like.",
+            style = FcType.Caption, color = Fc.Detail,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+        )
+        Spacer(Modifier.height(10.dp))
+        Text("Ambient fill", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+        val amb = lighting.ambientColor
+        SwatchRow(amb) { r, g, b -> ed.setAmbient(listOf(r, g, b), lighting.ambientLevel, "lights_ambient") }
+        for (i in 0..2) {
+            val name = listOf("Ambient red", "Ambient green", "Ambient blue")[i]
+            AdvancedSlider(name, amb[i].toDouble(), 0.0, 1.0, 0.01, "lights_ambient_rgb$i") { v, k ->
+                val next = amb.toMutableList().also { it[i] = v.toFloat() }
+                ed.setAmbient(next, lighting.ambientLevel, k)
+            }
+        }
+        AdvancedSlider("Ambient level", lighting.ambientLevel, 0.0, 3.0, 0.05, "lights_ambient_level") { v, k ->
+            ed.setAmbient(amb, v, k)
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SelectChip("+ Directional", false, { ed.addLight("directional") { selected = it } }, tag = "lights_add_directional")
+            SelectChip("+ Point", false, { ed.addLight("point") { selected = it } }, tag = "lights_add_point")
+            SelectChip("+ Spot", false, { ed.addLight("spot") { selected = it } }, tag = "lights_add_spot")
+        }
+        if (lighting.lights.isEmpty()) {
+            Text(
+                "No lights yet: 3D objects use their classic light. Add one to light the scene yourself.",
+                style = FcType.Body, color = Fc.Secondary,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding, vertical = 12.dp),
+            )
+        }
+        lighting.lights.forEach { l ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = FcSize.PanelPadding, vertical = 2.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (l.id == light?.id) Fc.Accent.copy(alpha = 0.18f) else Color.Transparent)
+                    .clickable { selected = l.id }
+                    .testTag("lights_row_${l.id}"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.padding(start = 6.dp).size(18.dp).clip(CircleShape).background(Color(l.color[0], l.color[1], l.color[2])))
+                Text(
+                    "${l.name} · ${l.kind}",
+                    style = FcType.Body, color = if (l.enabled) Fc.Title else Fc.Detail,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(start = 8.dp),
+                )
+                Switch(
+                    checked = l.enabled,
+                    onCheckedChange = { ed.setLight(l.copy(enabled = it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                    modifier = Modifier.testTag("lights_enabled_${l.id}"),
+                )
+            }
+        }
+        if (light != null) {
+            Spacer(Modifier.height(8.dp))
+            Text("Selected light", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (kind in listOf("directional", "point", "spot")) {
+                    SelectChip(kind.replaceFirstChar { it.uppercase() }, light.kind == kind, {
+                        ed.setLight(light.copy(kind = kind))
+                    }, tag = "lights_kind_$kind")
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            SwatchRow(light.color) { r, g, b -> ed.setLight(light.copy(color = listOf(r, g, b)), "lights_color") }
+            for (i in 0..2) {
+                val name = listOf("Red", "Green", "Blue")[i]
+                AdvancedSlider(name, light.color[i].toDouble(), 0.0, 1.0, 0.01, "lights_rgb$i") { v, k ->
+                    val next = light.color.toMutableList().also { it[i] = v.toFloat() }
+                    ed.setLight(light.copy(color = next), k)
+                }
+            }
+            AdvancedSlider("Brightness", light.intensity, 0.0, 8.0, 0.05, "lights_intensity") { v, k ->
+                ed.setLight(light.copy(intensity = v), k)
+            }
+            if (light.kind != "directional") {
+                AdvancedSlider("X", light.position[0], -2000.0, 4000.0, 1.0, "lights_x") { v, k ->
+                    ed.setLight(light.copy(position = listOf(v, light.position[1], light.position[2])), k)
+                }
+                AdvancedSlider("Y", light.position[1], -2000.0, 4000.0, 1.0, "lights_y") { v, k ->
+                    ed.setLight(light.copy(position = listOf(light.position[0], v, light.position[2])), k)
+                }
+                AdvancedSlider("Z", light.position[2], 0.0, 3000.0, 5.0, "lights_z") { v, k ->
+                    ed.setLight(light.copy(position = listOf(light.position[0], light.position[1], v)), k)
+                }
+                AdvancedSlider("Falloff", light.range, 0.0, 4000.0, 10.0, "lights_range") { v, k ->
+                    ed.setLight(light.copy(range = v), k)
+                }
+            }
+            if (light.kind != "point") {
+                AdvancedSlider("Angle", light.angle, 0.0, 360.0, 1.0, "lights_angle") { v, k ->
+                    ed.setLight(light.copy(angle = v), k)
+                }
+                AdvancedSlider("Elevation", light.elevation, -90.0, 90.0, 1.0, "lights_elevation") { v, k ->
+                    ed.setLight(light.copy(elevation = v), k)
+                }
+            }
+            if (light.kind == "spot") {
+                AdvancedSlider("Cone", light.cone, 1.0, 89.0, 1.0, "lights_cone") { v, k ->
+                    ed.setLight(light.copy(cone = v), k)
+                }
+                AdvancedSlider("Soft edge", light.softness, 0.0, 1.0, 0.05, "lights_softness") { v, k ->
+                    ed.setLight(light.copy(softness = v), k)
+                }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/** Quick colour choices; RGB sliders below give full control. */
+@Composable
+private fun SwatchRow(color: List<Float>, onPick: (Float, Float, Float) -> Unit) {
+    val presets = listOf(
+        listOf(1f, 1f, 1f), listOf(1f, 0.9f, 0.75f), listOf(1f, 0.35f, 0.25f), listOf(1f, 0.65f, 0.25f),
+        listOf(1f, 0.95f, 0.4f), listOf(0.45f, 1f, 0.5f), listOf(0.35f, 0.9f, 1f), listOf(0.4f, 0.55f, 1f),
+        listOf(0.8f, 0.45f, 1f), listOf(1f, 0.5f, 0.8f),
+    )
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        presets.forEach { p ->
+            val on = color[0] == p[0] && color[1] == p[1] && color[2] == p[2]
+            Box(
+                Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(Color(p[0], p[1], p[2]))
+                    .border(if (on) 2.dp else 1.dp, if (on) Fc.Accent else Fc.SliderOff, CircleShape)
+                    .clickable { onPick(p[0], p[1], p[2]) }
+                    .testTag("lights_swatch_${p[0]}_${p[1]}_${p[2]}"),
+            )
+        }
     }
 }

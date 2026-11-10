@@ -169,6 +169,10 @@ pub struct Sequence {
     /// Motion analyses shared by 3D layers (schema v16). Older files have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub motion_tracks: Vec<crate::tracking::MotionTrack>,
+    /// Scene lights shared by the 3D layers. Empty = the classic single light each object
+    /// carries from its `light_angle`/`light_elevation`.
+    #[serde(default, skip_serializing_if = "crate::lighting::SceneLighting::is_default")]
+    pub scene_lighting: crate::lighting::SceneLighting,
     /// Split In/Out points (Markers ▸ Mark Split): per-channel overrides of `mark_in`/`mark_out`.
     #[serde(default, skip_serializing_if = "SplitMarks::is_empty")]
     pub split: SplitMarks,
