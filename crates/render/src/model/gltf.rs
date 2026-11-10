@@ -710,15 +710,17 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
     let morph_targets = meshes.iter().flat_map(|m| &m.prims).map(|p| p.morphs.len()).max().unwrap_or(0);
     let mut model = Model { name: model_name, nodes, roots, meshes, materials, textures: images, skins, animations, instances, bounds: ([f32::MAX; 3], [f32::MIN; 3]), triangles, vertices, morph_targets };
     let pose = model.pose(None, 0.0, false);
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
     for inst in &model.instances {
         for prim in &model.meshes[inst.mesh].prims {
             for i in 0..prim.verts.len() {
                 let p = model.skin_vertex(&pose, inst, prim, i).pos;
                 if !p.iter().all(|x| x.is_finite()) { return err("model transform produced a non-finite position"); }
-                for k in 0..3 { model.bounds.0[k] = model.bounds.0[k].min(p[k]); model.bounds.1[k] = model.bounds.1[k].max(p[k]); }
+                for k in 0..3 { lo[k] = lo[k].min(p[k]); hi[k] = hi[k].max(p[k]); }
             }
         }
     }
+    model.bounds = (lo, hi);
     Ok(model)
 }
 

@@ -46,7 +46,6 @@ fn morph_animation_changes_vertices_and_loops() {
     let va = m.skin_vertex(&a, inst, prim, 0);
     let vb = m.skin_vertex(&b, inst, prim, 0);
     assert!(va.pos != vb.pos, "morph target did not change the vertex");
-    let end = m.pose(Some(0), m.animations[0].duration, false);
     let wrapped = m.pose(Some(0), m.animations[0].duration, true);
     let start = m.pose(Some(0), 0.0, false);
     assert_eq!(wrapped.world, start.world);

@@ -80,7 +80,7 @@ pub fn decode_raster_with_limit(name: &str, bytes: &[u8], max_pixels: usize) -> 
     limits.max_alloc = Some(max_pixels.saturating_mul(8).min(512 * 1024 * 1024) as u64);
     reader.limits(limits);
     let img = reader.decode().map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
-    let (width, height) = img.dimensions();
+    let (width, height) = (img.width(), img.height());
     check(width, height)?;
     let has_alpha = img.color().has_alpha();
     let rgba = img.to_rgba8();

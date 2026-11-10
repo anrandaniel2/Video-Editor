@@ -49,7 +49,7 @@ impl TextureRef {
         let (s, c) = self.rotation.sin_cos();
         let (x, y) = (p[0] * self.scale[0], p[1] * self.scale[1]);
         // The extension's column-major 2x2 rotation/scale matrix.
-        (c * x + s * y + self.offset[0], -s * x + c * y + self.offset[1])
+        (c * x - s * y + self.offset[0], s * x + c * y + self.offset[1])
     }
 }
 
