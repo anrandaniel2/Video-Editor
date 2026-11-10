@@ -43,19 +43,47 @@ pub struct Raster {
 /// Decode a still image file (`name` picks Targa, which has no magic number; the content picks
 /// every other format).
 pub fn decode_raster(name: &str, bytes: &[u8]) -> Result<Raster> {
+    decode_raster_with_limit(name, bytes, usize::MAX)
+}
+
+/// Decode a raster with a pixel-count ceiling, for embedded assets whose dimensions come from
+/// an untrusted file. The image reader's allocation limit is applied before decoding, not after.
+pub fn decode_raster_with_limit(name: &str, bytes: &[u8], max_pixels: usize) -> Result<Raster> {
+    let check = |w: u32, h: u32| {
+        if (w as usize).saturating_mul(h as usize) > max_pixels {
+            Err(MediaError::Decode(format!("{name}: image exceeds the {max_pixels} pixel limit")))
+        } else {
+            Ok(())
+        }
+    };
     if crate::dpx::sniff(bytes) {
-        return crate::dpx::decode(name, bytes);
+        let r = crate::dpx::decode(name, bytes)?;
+        check(r.width, r.height)?;
+        return Ok(r);
     }
     if crate::tga::sniff(name, bytes) {
-        return crate::tga::decode(name, bytes);
+        let r = crate::tga::decode(name, bytes)?;
+        check(r.width, r.height)?;
+        return Ok(r);
     }
     if ycbcr_tiff::sniff(bytes) {
-        return ycbcr_tiff::decode(name, bytes);
+        let r = ycbcr_tiff::decode(name, bytes)?;
+        check(r.width, r.height)?;
+        return Ok(r);
     }
-    let img = image::load_from_memory(bytes).map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits.max_alloc = Some(max_pixels.saturating_mul(8).min(512 * 1024 * 1024) as u64);
+    reader.limits(limits);
+    let img = reader.decode().map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
+    let (width, height) = img.dimensions();
+    check(width, height)?;
     let has_alpha = img.color().has_alpha();
     let rgba = img.to_rgba8();
-    let (width, height) = rgba.dimensions();
     Ok(Raster { width, height, rgba: rgba.into_raw(), has_alpha })
 }
 

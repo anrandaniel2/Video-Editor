@@ -175,6 +175,7 @@ pub fn trim_memory() {
     filmcraft_frame::pool::trim_f32();
     // the natural voices' model: loaded again (a few seconds) the next time a voice speaks
     filmcraft_tts::neural::unload();
+    filmcraft_render::model::clear_cache();
 }
 
 /// The frame size (width, height) of an aspect ratio, 1080 pixels on its short side.

@@ -1,0 +1,25 @@
+# Temporary Stage-2 validation; removed before the release APK is delivered.
+name: Model checks
+on:
+  push:
+    branches: ['arena/694df4ef-video-editor']
+permissions:
+  contents: read
+concurrency:
+  group: model-checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: model-checks
+      - name: Model loader and animation tests
+        run: |
+          cargo test -p filmcraft-render --lib model::
+          cargo test -p filmcraft-render --test model_import
+          cargo test -p filmcraft-media --lib still::
