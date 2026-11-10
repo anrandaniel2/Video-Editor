@@ -190,12 +190,12 @@ mod tests {
     #[test]
     fn nlerp_keeps_quaternions_unit_and_takes_the_short_way() {
         let a = [0.0, 0.0, 0.0, 1.0];
-        let b = [0.0, 1.0, 0.0, 0.0];
+        let b = [0.0, 0.8660254, 0.0, 0.5];
         let q = quat_nlerp(a, b, 0.5);
         let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
         assert!((len - 1.0).abs() < 1e-6);
-        let neg = quat_nlerp(a, [0.0, -1.0, 0.0, 0.0], 0.5);
-        // q and -q are the same rotation; a zero dot product may choose either sign.
+        let neg = quat_nlerp(a, [0.0, -0.8660254, 0.0, -0.5], 0.5);
+        // Negating the destination quaternion must not change the rotation.
         let pq = point(&trs([0.0; 3], q, [1.0; 3]), [1.0, 0.0, 0.0]);
         let pn = point(&trs([0.0; 3], neg, [1.0; 3]), [1.0, 0.0, 0.0]);
         assert!(pq.iter().zip(pn).all(|(a, b)| (a - b).abs() < 1e-6), "the short arc should match: {q:?} vs {neg:?}");
