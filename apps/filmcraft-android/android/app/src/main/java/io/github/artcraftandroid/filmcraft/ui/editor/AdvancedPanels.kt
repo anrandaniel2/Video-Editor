@@ -1,6 +1,7 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -8,11 +9,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
 import io.github.artcraftandroid.filmcraft.core.FontFamily
 import io.github.artcraftandroid.filmcraft.core.ModelInfo
@@ -271,13 +278,14 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
 
 /**
  * A labelled dropdown. Long lists (the phone can have hundreds of fonts) get a search field and
- * scroll; the current value stays visible on the closed row.
+ * scroll; the current value stays visible on the closed row. Shared by the 3D panel and the
+ * text strip where text is added.
  */
 @Composable
-private fun PickerRow(label: String, value: String, options: List<String>, tag: String, onPick: (String) -> Unit) {
+internal fun PickerRow(label: String, value: String, options: List<String>, tag: String, modifier: Modifier = Modifier, onPick: (String) -> Unit) {
     var showList by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp)) {
+    Column(modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp)) {
         Text(label, style = FcType.Caption, color = Fc.Detail)
         Spacer(Modifier.height(4.dp))
         Box {
@@ -501,6 +509,100 @@ private fun AdvancedSlider(
             },
             onDone = { token = java.util.UUID.randomUUID().toString() },
             description = label, tag = tag,
+        )
+    }
+}
+
+// ------------------------------------------------------------------ animation frame bar
+
+/** Whether the floating model-animation frame bar should be on screen. */
+fun frameBarVisible(ed: EditorController): Boolean {
+    val state = ed.object3DState ?: return false
+    val clip = ed.selectedClip ?: return false
+    val st = state.settings
+    return state.clip == clip.id && st.modelPath.isNotBlank() && st.modelAnim >= 0
+}
+
+/**
+ * The animation frame browser: a floating bar across the bottom with every frame of the selected
+ * model animation, keyframe diamonds and scrubbing. The editor lifts the preview above it (or
+ * shrinks it when there is no room) so the two never overlap — see EditorScreen.
+ */
+@Composable
+fun AnimationFrameBar(ed: EditorController, modifier: Modifier = Modifier) {
+    val st = ed.object3DState?.settings ?: return
+    if (st.modelPath.isBlank() || st.modelAnim < 0) return
+    val info by produceState<ModelInfo?>(null, st.modelPath) {
+        value = runCatching { ed.engine.command { modelInfo(st.modelPath) } }.getOrNull()
+    }
+    val anim = info?.animations?.getOrNull(st.modelAnim) ?: return
+    val fps = if (ed.rateDen != 0L) ed.rateNum.toDouble() / ed.rateDen else 30.0
+    val frames = (kotlin.math.ceil(anim.duration * fps).toInt() + 1).coerceIn(1, 480)
+    val current = (st.modelTime * fps).toInt().coerceIn(0, frames - 1)
+    val keyTimes = remember(anim) { anim.keys.sorted() }
+    val keyFrames = remember(keyTimes, fps) { keyTimes.map { (it * fps).toInt() }.toSet() }
+    fun setFrame(f: Int) {
+        val s = ed.object3DState?.settings ?: return
+        ed.setObject(s.copy(modelTime = f.coerceIn(0, frames - 1) / fps), null)
+    }
+    fun jumpKey(dir: Int) {
+        val t = ed.object3DState?.settings?.modelTime ?: return
+        val next = if (dir > 0) {
+            keyTimes.firstOrNull { it > t + 1e-3 } ?: keyTimes.lastOrNull()
+        } else {
+            keyTimes.lastOrNull { it < t - 1e-3 } ?: keyTimes.firstOrNull()
+        }
+        if (next != null) setFrame((next * fps).toInt())
+    }
+    val listState = rememberLazyListState()
+    // Keep the playing frame on screen; user scrolling is never fought (the list only moves
+    // when the current frame changes).
+    LaunchedEffect(current) { runCatching { listState.scrollToItem(maxOf(0, current - 3)) } }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Fc.Panel)
+            .border(1.dp, Fc.Divider, RoundedCornerShape(18.dp))
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+            .testTag("frame_bar"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        SelectChip("◀|", false, { jumpKey(-1) }, tag = "frame_bar_prev_key")
+        SelectChip("◀", false, { setFrame(current - 1) }, tag = "frame_bar_step_back")
+        SelectChip("▶", false, { setFrame(current + 1) }, tag = "frame_bar_step_fwd")
+        SelectChip("|▶", false, { jumpKey(1) }, tag = "frame_bar_next_key")
+        LazyRow(
+            state = listState,
+            modifier = Modifier.weight(1f).height(52.dp).testTag("frame_bar_strip"),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            items(frames) { f ->
+                val active = f == current
+                val key = f in keyFrames
+                Column(
+                    Modifier
+                        .width(28.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (active) Fc.Accent.copy(alpha = 0.28f) else Color.Transparent)
+                        .clickable { setFrame(f) }
+                        .testTag("frame_bar_cell_$f"),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(if (key) "◆" else "·", style = FcType.Caption, color = if (key) Fc.Accent else Fc.Detail, fontSize = 9.sp)
+                    Text(f.toString(), style = FcType.Caption, color = if (active) Fc.Title else Fc.Detail, fontSize = 9.sp, maxLines = 1)
+                }
+            }
+        }
+        Text(
+            "%.2fs".format(st.modelTime),
+            style = FcType.Caption,
+            color = Fc.Secondary,
+            maxLines = 1,
+            modifier = Modifier.padding(start = 2.dp).testTag("frame_bar_time"),
         )
     }
 }

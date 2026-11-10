@@ -562,8 +562,23 @@ class EditorController(
 
     // ---- text ----
 
-    fun addText(text: String) = edit { addText(text) }
+    /** Add text at the playhead with the font/style chosen in the text strip (null = engine default). */
+    fun addText(text: String, font: String? = null, fontStyle: String? = null) = edit {
+        val id = addText(text)
+        if (id != null && (font != null || fontStyle != null)) {
+            val st = runCatching { textStyle(id) }.getOrNull()
+            if (st != null) {
+                setTextStyle(id, st.copy(font = font ?: st.font, fontStyle = fontStyle ?: st.fontStyle), false, false)
+            }
+        }
+    }
     fun setText(clip: ULong, text: String) = edit { setText(clip, text) }
+
+    /** Change only the font/style of a text clip, keeping the rest of its style. */
+    fun setTextFont(clip: ULong, font: String?, fontStyle: String?) = quickEdit {
+        val st = runCatching { textStyle(clip) }.getOrNull() ?: return@quickEdit
+        setTextStyle(clip, st.copy(font = font ?: st.font, fontStyle = fontStyle ?: st.fontStyle), false, false)
+    }
 
     suspend fun textStyle(clip: ULong): TextStyle? = runCatching { engine.command { textStyle(clip) } }.getOrNull()
 

@@ -193,6 +193,9 @@ impl Default for Object3DSettings {
 pub struct ModelAnimationInfo {
     pub name: String,
     pub duration: f64,
+    /// Sorted key times in seconds (the union of every channel's keys): where the animation's
+    /// keyframes sit on the time axis.
+    pub keys: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -512,7 +515,16 @@ pub(crate) fn model_info(path: &str) -> Result<ModelInfo, MobileError> {
         textures: m.textures.len() as u32,
         skins: m.skins.len() as u32,
         morph_targets: m.morph_targets.min(u32::MAX as usize) as u32,
-        animations: m.animations.iter().map(|a| ModelAnimationInfo { name: a.name.clone(), duration: a.duration as f64 }).collect(),
+        animations: m
+            .animations
+            .iter()
+            .map(|a| {
+                let mut keys: Vec<f64> = a.channels.iter().flat_map(|c| c.times.iter().map(|&t| t as f64)).collect();
+                keys.sort_by(|x, y| x.total_cmp(y));
+                keys.dedup_by(|x, y| (*x - *y).abs() < 1e-4);
+                ModelAnimationInfo { name: a.name.clone(), duration: a.duration as f64, keys }
+            })
+            .collect(),
     })
 }
 

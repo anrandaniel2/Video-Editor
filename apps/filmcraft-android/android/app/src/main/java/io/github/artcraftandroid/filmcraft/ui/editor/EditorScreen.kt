@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -113,6 +114,19 @@ fun EditorScreen(ed: EditorController) {
             .testTag("screen_editor"),
     ) {
         if (maxWidth >= 600.dp && maxWidth > maxHeight) SideBySide(ed) else Stacked(ed)
+        // The animation frame browser floats across the bottom. The layouts above reserve its
+        // height (the preview window goes up; when there is no room it shrinks) so the two never
+        // sit on top of each other.
+        if (frameBarVisible(ed)) {
+            AnimationFrameBar(
+                ed,
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 12.dp)
+                    .navigationBarsPadding()
+                    .padding(bottom = 8.dp),
+            )
+        }
         ed.busy?.let { BusyOverlay(it) }
     }
 }
@@ -188,6 +202,10 @@ private fun SideBySide(ed: EditorController) {
         val minPlayer = 160.dp
         val minTimeline = 340.dp
         val playerW = (if (ed.sideFraction > 0f) available * ed.sideFraction else default).coerceIn(minPlayer, max(minPlayer.value, (available - minTimeline).value).dp)
+        // The floating frame bar owns the bottom of the screen: the full-height preview lifts
+        // above it, and shrinks to the minimum when there is no room to lift.
+        val barSpace = if (frameBarVisible(ed)) FcSize.FrameBar else 0.dp
+        val previewH = (room - barSpace).coerceAtLeast(minPlayer)
         Row(Modifier.fillMaxSize()) {
             // transport rail
             Column(Modifier.width(48.dp).fillMaxHeight(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -195,7 +213,7 @@ private fun SideBySide(ed: EditorController) {
                 FcIconButton(if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Pause" else "Play", { ed.togglePlay() }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_play_button"))
                 FcIconButton(Glyphs.StepForward, "Next frame", { ed.step(1) }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_next_frame_button"))
             }
-            Preview(ed, Modifier.width(playerW).fillMaxHeight())
+            Preview(ed, Modifier.width(playerW).height(previewH))
             // the divider between the monitor and the timeline
             Box(
                 Modifier

@@ -132,6 +132,7 @@ object FcSize {
     val TopBar = 48.dp
     val TopButton = 40.dp
     val Transport = 48.dp
+    val FrameBar = 96.dp
     val ToolTile = 80.dp
     val ToolChip = 40.dp
     val PanelCorner = 28.dp
