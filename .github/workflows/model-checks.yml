@@ -20,6 +20,23 @@ jobs:
           key: model-checks
       - name: Model loader and animation tests
         run: |
-          cargo test -p filmcraft-render --lib model::
-          cargo test -p filmcraft-render --test model_import
-          cargo test -p filmcraft-media --lib still::
+          set +e
+          {
+            cargo test -p filmcraft-render --lib model:: &&
+            cargo test -p filmcraft-render --test model_import &&
+            cargo test -p filmcraft-media --lib still::
+          } >"$RUNNER_TEMP/model-checks.log" 2>&1
+          code=$?
+          tail -n 250 "$RUNNER_TEMP/model-checks.log"
+          # The log endpoint is unavailable in this environment; annotations are readable.
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          text = Path(os.environ["RUNNER_TEMP"], "model-checks.log").read_text()
+          lines = text.splitlines()
+          for i, line in enumerate(lines):
+              if line.startswith("error") or "panicked at" in line or line.startswith("FAILED"):
+                  msg = "\n".join(lines[i:i + 14]).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::error title=Model check::{msg}")
+          PY
+          exit "$code"
