@@ -93,15 +93,33 @@ jobs:
           echo "FILMCRAFT_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
 
       # The APK is built unsigned, exactly as F-Droid builds it, and the next step signs it.
+      # TEMPORARY: log is annotated because the run-log endpoint is unreachable here.
       - name: Build
         working-directory: apps/filmcraft-android/android
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
-            -Pfilmcraft.unsigned=true --no-daemon
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
+          set +e
+          {
+            ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
+              -Pfilmcraft.unsigned=true --no-daemon &&
+            mkdir -p "$GITHUB_WORKSPACE/dist" &&
+            cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
+          } >"$RUNNER_TEMP/build.log" 2>&1
+          code=$?
+          tail -n 300 "$RUNNER_TEMP/build.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          text = Path(os.environ["RUNNER_TEMP"], "build.log").read_text(errors="replace")
+          lines = text.splitlines()
+          for i, line in enumerate(lines):
+              low = line.lower()
+              if "error" in low or "failed" in low or "exception" in low or "what went wrong" in low:
+                  msg = "\n".join(lines[i:i + 14]).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print(f"::error title=Build::{msg}")
+          PY
+          exit "$code"
 
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),
