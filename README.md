@@ -150,6 +150,7 @@ FilmCraft for Android is in beta.
 | Speed (0.1–10×, the sound keeps its pitch), freeze frame, volume, fades, extract audio, voiceover | ✅ |
 | 31 filters, 23 effects, opacity, mirror and flip; move, scale and turn on the preview | ✅ |
 | Clip masks: ellipse, rectangle, polygon and free-draw; feather, expansion, opacity, invert and combine; drag on the preview | ✅ |
+| 3D objects: primitives, extruded text and imported GLB/glTF models with PBR textures, rigs and animations; any size GLB imports | ✅ |
 | 50 transitions, intro and outro, apply to all | ✅ |
 | Text: presets, the phone's fonts, colours and layout | ✅ |
 | Captions made on the phone (Whisper, downloaded once when you ask), edited and burned in | ✅ |

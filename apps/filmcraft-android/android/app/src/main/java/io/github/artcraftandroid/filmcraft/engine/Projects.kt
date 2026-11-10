@@ -161,7 +161,7 @@ class Projects(private val context: Context) {
      * Copy a picked file into [p]'s media folder and return its path. Pictures are decoded (which
      * applies their orientation and reads HEIC), scaled down to at most [MAX_STILL] pixels on the
      * long side and stored as JPEG (PNG when transparent); videos, sounds and glTF/GLB models are
-     * copied as they are (models are capped at the native loader's 192 MB file limit).
+     * copied as they are — there is no size limit on imported models.
      */
     fun importUri(p: ProjectEntry, uri: Uri): File {
         val resolver = context.contentResolver
@@ -179,10 +179,6 @@ class Projects(private val context: Context) {
         val out = uniqueFile(dir, safeName(name))
         resolver.openInputStream(uri)?.use { input -> out.outputStream().use { input.copyTo(it) } }
             ?: throw java.io.FileNotFoundException("The file could not be read.")
-        if (out.length() > MAX_MODEL) {
-            out.delete()
-            throw java.io.IOException("That model is larger than 192 MB.")
-        }
         return out
     }
 
@@ -203,7 +199,6 @@ class Projects(private val context: Context) {
     companion object {
         /** The longest side a picture is kept at. */
         const val MAX_STILL = 4096
-        const val MAX_MODEL = 192L * 1024 * 1024
 
         fun displayName(resolver: ContentResolver, uri: Uri): String {
             val n = runCatching {

@@ -5,7 +5,9 @@
 //! PBR, PNG/JPEG/WebP textures, linear-blend skins, morph targets and STEP/LINEAR/CUBICSPLINE
 //! animation are supported. KHR_texture_transform, KHR_materials_unlit, emissive strength and
 //! quantized attributes are read too. Compressed geometry/textures (Draco, meshopt, KTX2) are
-//! rejected with an actionable message instead of silently importing an empty model.
+//! rejected with an actionable message instead of silently importing an empty model. There is no
+//! file-size or model-complexity ceiling: any GLB the phone can hold imports, with only structural
+//! validation (claims must match the real data) standing between a corrupt file and the parser.
 
 use std::collections::HashMap;
 use std::path::{Component, Path};
@@ -15,15 +17,11 @@ use serde_json::Value;
 use super::math::{self, Mat4};
 use super::{AlphaMode, Animation, Channel, Instance, Interp, Material, Mesh, Model, MorphTarget, Node, Path as AnimPath, Primitive, Skin, Texture, TextureRef, Vertex, Wrap};
 
-const MAX_FILE: usize = 192 * 1024 * 1024;
-const MAX_JSON: usize = 32 * 1024 * 1024;
-const MAX_BUFFERS: usize = 256 * 1024 * 1024;
+/// An accessor with no buffer view holds invented zeros (optionally sparsely patched), so its
+/// size is not backed by real file data; bound that phantom allocation so a tiny file cannot
+/// claim gigabytes of zeros. Data-backed accessors are bounded by their actual buffer ranges —
+/// the importer deliberately has no file-size, texture-size or mesh-size ceiling.
 const MAX_ACCESSOR_FLOATS: usize = 24 * 1024 * 1024;
-const MAX_VERTICES: usize = 1_500_000;
-const MAX_TRIANGLES: usize = 3_000_000;
-const MAX_TEXTURE_PIXELS: usize = 48 * 1024 * 1024;
-const MAX_IMAGE_PIXELS: usize = 16 * 1024 * 1024;
-const MAX_NODES: usize = 65_536;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -79,9 +77,7 @@ fn strings(v: &Value) -> Vec<String> {
 
 /// GLB's 12-byte header and JSON/BIN chunks. Chunk payloads start aligned to four bytes.
 fn container(bytes: &[u8]) -> Result<(Value, Option<&[u8]>)> {
-    if bytes.len() > MAX_FILE { return err("model file is larger than 192 MB"); }
     if !bytes.starts_with(b"glTF") {
-        if bytes.len() > MAX_JSON { return err("glTF JSON is larger than 32 MB"); }
         let json = serde_json::from_slice(bytes).map_err(|e| format!("invalid glTF JSON: {e}"))?;
         return Ok((json, None));
     }
@@ -105,7 +101,6 @@ fn container(bytes: &[u8]) -> Result<(Value, Option<&[u8]>)> {
         let data = &bytes[start..end];
         if kind == b"JSON" {
             if json.is_some() || at != 12 { return err("GLB must start with one JSON chunk"); }
-            if len > MAX_JSON { return err("GLB JSON is larger than 32 MB"); }
             // GLB permits trailing space padding in the JSON chunk.
             json = Some(serde_json::from_slice(data).map_err(|e| format!("invalid GLB JSON: {e}"))?);
         } else if kind == b"BIN\0" {
@@ -172,7 +167,6 @@ fn resource(base: &Path, uri: &str) -> Result<Vec<u8>> {
         let Some((meta, payload)) = data.split_once(',') else { return err("malformed glTF data URI") };
         if !meta.split(';').any(|x| x.eq_ignore_ascii_case("base64")) { return err("glTF data URIs must be base64 encoded"); }
         let bytes = base64(payload)?;
-        if bytes.len() > MAX_FILE { return err("embedded resource is too large"); }
         return Ok(bytes);
     }
     if uri.contains("://") || uri.starts_with('/') || uri.starts_with('\\') {
@@ -184,9 +178,7 @@ fn resource(base: &Path, uri: &str) -> Result<Vec<u8>> {
         return err("glTF resource paths must stay inside the model's folder");
     }
     let path = base.join(rel);
-    let meta = std::fs::metadata(&path).map_err(|e| format!("missing glTF resource {uri}: {e}"))?;
-    if meta.len() > MAX_FILE as u64 { return err(format!("glTF resource {uri} is too large")); }
-    std::fs::read(path).map_err(|e| format!("{uri}: {e}"))
+    std::fs::read(&path).map_err(|e| format!("missing glTF resource {uri}: {e}"))
 }
 
 struct Accessor {
@@ -243,7 +235,7 @@ fn view_range(view: &Value, buffers: &[Vec<u8>], extra: usize) -> Result<(usize,
     Ok((buffer, start))
 }
 
-fn read_accessor(a: &Value, views: &[Value], buffers: &[Vec<u8>], budget: &mut usize) -> Result<Accessor> {
+fn read_accessor(a: &Value, views: &[Value], buffers: &[Vec<u8>]) -> Result<Accessor> {
     let components = dimensions(a.get("type").and_then(Value::as_str).unwrap_or_default())?;
     let ty = a.get("componentType").and_then(Value::as_u64).ok_or("accessor has no componentType")?;
     let size = component_size(ty)?;
@@ -251,10 +243,11 @@ fn read_accessor(a: &Value, views: &[Value], buffers: &[Vec<u8>], budget: &mut u
     if normalized && (ty == 5125 || ty == 5126) { return err("float/uint32 accessors cannot be normalized"); }
     let count = uint(a, "count", 0);
     let n = count.checked_mul(components).ok_or("accessor size overflow")?;
-    if count == 0 || n > MAX_ACCESSOR_FLOATS || n > *budget { return err("accessor is empty or exceeds the model memory limit"); }
-    *budget -= n;
-    let mut values = vec![0.0f32; n];
+    if count == 0 { return err("accessor is empty"); }
     let element = size * components;
+    // Check any backing data before allocating, so a lying count fails cheaply. A data-backed
+    // accessor's size is bounded by its real buffer; only a data-less one needs the phantom cap.
+    let mut backing = None;
     if let Some(vi) = opt_index(a, "bufferView", views.len())? {
         let view = &views[vi];
         let offset = uint(a, "byteOffset", 0);
@@ -262,12 +255,20 @@ fn read_accessor(a: &Value, views: &[Value], buffers: &[Vec<u8>], budget: &mut u
         if stride < element || stride > 255 || offset % size != 0 { return err("invalid accessor stride/offset"); }
         let last = offset.checked_add((count - 1).checked_mul(stride).ok_or("accessor stride overflow")?).and_then(|x| x.checked_add(element)).ok_or("accessor range overflow")?;
         let (buffer, start) = view_range(view, buffers, offset)?;
-        let data = &buffers[buffer];
         let view_len = uint(view, "byteLength", 0);
         if last > view_len { return err("accessor runs past its buffer view"); }
+        backing = Some((buffer, start + offset, stride));
+    } else if n > MAX_ACCESSOR_FLOATS {
+        return err("data-less accessor exceeds the model memory limit");
+    }
+    let mut values = Vec::new();
+    values.try_reserve_exact(n).map_err(|_| "model accessor allocation failed")?;
+    values.resize(n, 0.0f32);
+    if let Some((buffer, start, stride)) = backing {
+        let data = &buffers[buffer];
         for i in 0..count {
             for c in 0..components {
-                values[i * components + c] = read_component(data, start + offset + i * stride + c * size, ty, normalized)?;
+                values[i * components + c] = read_component(data, start + i * stride + c * size, ty, normalized)?;
             }
         }
     }
@@ -345,7 +346,7 @@ fn flat_normals(verts: &mut Vec<Vertex>, indices: &mut Vec<u32>) {
     *verts = nv;
 }
 
-fn read_primitive(p: &Value, accessors: &[Accessor], materials: usize, vertex_budget: &mut usize, triangle_budget: &mut usize) -> Result<Option<Primitive>> {
+fn read_primitive(p: &Value, accessors: &[Accessor], materials: usize) -> Result<Option<Primitive>> {
     let mode = uint(p, "mode", 4) as u64;
     if mode < 4 { return Ok(None); } // point/line primitives are not solid surfaces
     for ext in ["KHR_draco_mesh_compression", "EXT_meshopt_compression"] {
@@ -355,8 +356,6 @@ fn read_primitive(p: &Value, accessors: &[Accessor], materials: usize, vertex_bu
     let Some(pos) = attribute(attrs, "POSITION", accessors)? else { return Ok(None) };
     if pos.components != 3 { return err("POSITION must be VEC3"); }
     let count = pos.count();
-    if count > *vertex_budget { return err("model has too many vertices for the phone renderer"); }
-    *vertex_budget -= count;
     let normal = attribute(attrs, "NORMAL", accessors)?;
     let tangent = attribute(attrs, "TANGENT", accessors)?;
     let uv0 = attribute(attrs, "TEXCOORD_0", accessors)?;
@@ -420,12 +419,8 @@ fn read_primitive(p: &Value, accessors: &[Accessor], materials: usize, vertex_bu
     if raw.contains(&u32::MAX) { return err("primitive index is out of range or uses primitive restart"); }
     let mut indices = topology(mode, &raw)?;
     let triangles = indices.len() / 3;
-    if triangles > *triangle_budget { return err("model has too many triangles for the phone renderer"); }
-    *triangle_budget -= triangles;
     let has_normals = normal.is_some();
     if !has_normals {
-        if indices.len() > *vertex_budget { return err("flat-shaded model exceeds the vertex limit"); }
-        *vertex_budget -= indices.len();
         flat_normals(&mut verts, &mut indices);
     }
     let mut morphs = Vec::new();
@@ -504,13 +499,10 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
     if obj(&doc, "extensions").get("EXT_meshopt_compression").is_some() { return err("meshopt compression is not supported; export an uncompressed GLB"); }
     let buffer_defs = arr(&doc, "buffers");
     let views = arr(&doc, "bufferViews");
-    if buffer_defs.len() > 4096 || views.len() > 65_536 || arr(&doc, "accessors").len() > 65_536 { return err("model has too many buffers/views/accessors"); }
     let mut buffers = Vec::new();
-    let mut buffer_bytes = 0usize;
     for (i, b) in buffer_defs.iter().enumerate() {
         let len = uint(b, "byteLength", 0);
-        buffer_bytes = buffer_bytes.checked_add(len).ok_or("buffer size overflow")?;
-        if len == 0 || buffer_bytes > MAX_BUFFERS { return err("model buffers exceed the 256 MB memory limit"); }
+        if len == 0 { return err("buffer byteLength must be positive"); }
         let data = match b.get("uri").and_then(Value::as_str) {
             Some(uri) => resource(base, uri)?,
             None if i == 0 => bin.ok_or("GLB buffer has no BIN chunk")?.to_vec(),
@@ -523,15 +515,12 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
         view_range(v, &buffers, 0)?;
         if obj(v, "extensions").get("EXT_meshopt_compression").is_some() { return err("meshopt compression is not supported; export an uncompressed GLB"); }
     }
-    let mut budget = MAX_ACCESSOR_FLOATS;
-    let accessors: Vec<Accessor> = arr(&doc, "accessors").iter().map(|a| read_accessor(a, views, &buffers, &mut budget)).collect::<Result<_>>()?;
+    let accessors: Vec<Accessor> = arr(&doc, "accessors").iter().map(|a| read_accessor(a, views, &buffers)).collect::<Result<_>>()?;
 
     let image_defs = arr(&doc, "images");
     let texture_defs = arr(&doc, "textures");
     let sampler_defs = arr(&doc, "samplers");
-    if image_defs.len() > 4096 || texture_defs.len() > 4096 { return err("model has too many textures"); }
     let mut images: HashMap<usize, Texture> = HashMap::new();
-    let mut texture_pixels = 0usize;
     let mut textures = Vec::new();
     for (i, t) in texture_defs.iter().enumerate() {
         let source = texture_source(t, image_defs.len())?;
@@ -548,9 +537,7 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
         let ext = match image.get("mimeType").and_then(Value::as_str).unwrap_or("") {
             "image/png" => "png", "image/jpeg" => "jpg", "image/webp" => "webp", _ => "img",
         };
-        let raster = filmcraft_media::still::decode_raster_with_limit(&format!("texture.{ext}"), &data, MAX_IMAGE_PIXELS).map_err(|e| e.to_string())?;
-        texture_pixels = texture_pixels.saturating_add(raster.width as usize * raster.height as usize);
-        if texture_pixels > MAX_TEXTURE_PIXELS { return err("model textures exceed the 48 megapixel memory limit"); }
+        let raster = filmcraft_media::still::decode_raster(&format!("texture.{ext}"), &data).map_err(|e| e.to_string())?;
         images.insert(source, Texture { name: texture_name, w: raster.width as usize, h: raster.height as usize, rgba: raster.rgba, srgb: false, wrap: (Wrap::Repeat, Wrap::Repeat) });
     }
     for t in texture_defs {
@@ -580,11 +567,10 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
 
     let mesh_defs = arr(&doc, "meshes");
     let mut meshes = Vec::new();
-    let (mut vertex_budget, mut triangle_budget) = (MAX_VERTICES, MAX_TRIANGLES);
     for (i, m) in mesh_defs.iter().enumerate() {
         let mut prims = Vec::new();
         for p in arr(m, "primitives") {
-            if let Some(p) = read_primitive(p, &accessors, materials.len(), &mut vertex_budget, &mut triangle_budget)? { prims.push(p); }
+            if let Some(p) = read_primitive(p, &accessors, materials.len())? { prims.push(p); }
         }
         let targets = prims.iter().map(|p| p.morphs.len()).max().unwrap_or(0);
         let mut weights = arr(m, "weights").iter().map(|x| x.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0) as f32).collect::<Vec<_>>();
@@ -597,7 +583,6 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
     }
 
     let node_defs = arr(&doc, "nodes");
-    if node_defs.len() > MAX_NODES { return err("model has too many nodes"); }
     let mut nodes = Vec::new();
     for (i, n) in node_defs.iter().enumerate() {
         let mut node = Node {

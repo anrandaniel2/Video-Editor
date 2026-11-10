@@ -8,5 +8,7 @@ used only by `tests/model_import.rs` (not bundled in the app).
   BoxTextured also contains the Cesium logo under the repository's
   `LICENSES/LicenseRef-LegalMark-Cesium.txt` (included here).
 - `AnimatedMorphCube.glb`: CC0-1.0.
+- `solid_4096x4097.png`: a 4096×4097 solid-colour PNG generated for these tests (CC0-1.0); it
+  exercises the "no texture size ceiling" regression test.
 
 No changes were made to the model files.

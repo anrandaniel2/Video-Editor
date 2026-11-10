@@ -81,3 +81,103 @@ fn normal_matrix_handles_rotation_with_nonuniform_scale() {
     let dot = transformed_n.iter().zip(transformed_t).map(|(a, b)| a * b).sum::<f32>();
     assert!(dot.abs() < 1e-4, "normal lost perpendicularity: {dot}");
 }
+
+/// A scratch directory per test (tests share the runner's process id).
+fn tmp_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("filmcraft-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+// The importer has no file-size, texture-size or mesh-complexity ceiling (a mid-size GLB with 4K
+// PBR textures used to hit pixel caps, high-poly meshes a vertex ceiling, heavy rigs a shared
+// accessor budget). These regression tests build models the old caps refused.
+
+#[test]
+fn large_textures_import_without_a_pixel_ceiling() {
+    // Three 4096×4097 textures: 16.8 MP each (over the old 16 MP per-image cap) and 50.3 MP in
+    // total (over the old 48 MP texture budget).
+    let dir = tmp_dir("gltf-textures");
+    std::fs::copy(fixture("solid_4096x4097.png"), dir.join("solid.png")).unwrap();
+    let json = r#"{
+      "asset": {"version": "2.0"},
+      "images": [{"uri": "solid.png"}, {"uri": "solid.png"}, {"uri": "solid.png"}],
+      "textures": [{"source": 0}, {"source": 1}, {"source": 2}],
+      "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "metallicRoughnessTexture": {"index": 1}}, "normalTexture": {"index": 2}}],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}}]}],
+      "accessors": [{"type": "VEC3", "componentType": 5126, "count": 3}, {"type": "VEC3", "componentType": 5126, "count": 3}],
+      "nodes": [{"mesh": 0}]
+    }"#;
+    std::fs::write(dir.join("model.gltf"), json).unwrap();
+    let m = Model::load(&dir.join("model.gltf")).unwrap();
+    assert_eq!(m.textures.len(), 3);
+    assert!(m.textures.iter().all(|t| t.w == 4096 && t.h == 4097));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn high_poly_meshes_import_without_a_vertex_ceiling() {
+    // 1,500,003 vertices — just over the old 1.5 M ceiling — as one non-indexed triangle soup.
+    let dir = tmp_dir("gltf-dense");
+    let count = 1_500_003usize;
+    let stride = 24usize; // interleaved POSITION + NORMAL: two f32 vec3s per vertex
+    let mut bin = vec![0u8; count * stride];
+    for i in 0..count {
+        let f = [(i % 4096) as f32 * 0.01, (i / 4096) as f32 * 0.01, 0.0, 0.0, 0.0, 1.0];
+        for (k, v) in f.iter().enumerate() {
+            bin[i * stride + k * 4..i * stride + k * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    std::fs::write(dir.join("mesh.bin"), &bin).unwrap();
+    let json = format!(
+        r#"{{"asset": {{"version": "2.0"}},
+        "buffers": [{{"uri": "mesh.bin", "byteLength": {}}}],
+        "bufferViews": [{{"buffer": 0, "byteOffset": 0, "byteLength": {}, "byteStride": 24}}],
+        "accessors": [
+          {{"bufferView": 0, "type": "VEC3", "componentType": 5126, "count": {count}}},
+          {{"bufferView": 0, "byteOffset": 12, "type": "VEC3", "componentType": 5126, "count": {count}}}],
+        "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "NORMAL": 1}}}}]}}],
+        "nodes": [{{"mesh": 0}}]}}"#,
+        count * stride, count * stride
+    );
+    std::fs::write(dir.join("model.gltf"), json).unwrap();
+    let m = Model::load(&dir.join("model.gltf")).unwrap();
+    assert_eq!(m.vertices, count);
+    assert_eq!(m.triangles, count / 3);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn many_accessors_import_without_a_shared_float_budget() {
+    // 26 × 1 M-float accessors = 26 M floats, over the old shared 24 M-float budget. The large
+    // accessors are data-less (zeros), which the loader bounds per accessor instead.
+    let dir = tmp_dir("gltf-accessors");
+    let fat = r#"{"type": "SCALAR", "componentType": 5126, "count": 1000000},"#.repeat(26);
+    let json = format!(
+        r#"{{"asset": {{"version": "2.0"}},
+        "accessors": [{fat}{{"type": "VEC3", "componentType": 5126, "count": 3}}, {{"type": "VEC3", "componentType": 5126, "count": 3}}],
+        "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 26, "NORMAL": 27}}}}]}}],
+        "nodes": [{{"mesh": 0}}]}}"#
+    );
+    std::fs::write(dir.join("model.gltf"), json).unwrap();
+    assert!(Model::load(&dir.join("model.gltf")).is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn many_nodes_import_without_a_node_ceiling() {
+    // 70,000 nodes — over the old 65,536-node ceiling.
+    let dir = tmp_dir("gltf-nodes");
+    let mut nodes = String::from(r#"{"mesh": 0},"#);
+    nodes.push_str(&vec!["{}"; 69_999].join(","));
+    let json = format!(
+        r#"{{"asset": {{"version": "2.0"}},
+        "nodes": [{nodes}],
+        "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "NORMAL": 1}}}}]}}],
+        "accessors": [{{"type": "VEC3", "componentType": 5126, "count": 3}}, {{"type": "VEC3", "componentType": 5126, "count": 3}}]}}"#
+    );
+    std::fs::write(dir.join("model.gltf"), json).unwrap();
+    let m = Model::load(&dir.join("model.gltf")).unwrap();
+    assert_eq!(m.nodes.len(), 70_000);
+    std::fs::remove_dir_all(&dir).ok();
+}
