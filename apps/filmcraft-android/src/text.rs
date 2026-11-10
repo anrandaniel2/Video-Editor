@@ -355,37 +355,17 @@ pub struct FontFamily {
     pub styles: Vec<String>,
 }
 
-/// The families with their styles. A picker that offers "Bold" for a family that only has
-/// Regular silently draws the wrong face, so the style list comes from the font itself.
-pub(crate) fn font_families(s: &mut Session) -> Vec<FontFamily> {
-    let Ok(v) = s.execute("fonts.list", json!({"system": true})) else {
-        return vec![FontFamily { name: "Inter".into(), styles: vec!["Regular".into(), "Medium".into(), "SemiBold".into(), "Bold".into()] }];
-    };
-    let mut out: Vec<FontFamily> = v
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|f| {
-                    let name = f["family"].as_str()?.to_string();
-                    let script = (name.starts_with("Noto Sans ") || name.starts_with("Noto Serif ")) && !name.ends_with(" Display");
-                    if name.is_empty() || script {
-                        return None;
-                    }
-                    let mut styles: Vec<String> = f["styles"].as_array().map(|s| s.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
-                    if styles.is_empty() {
-                        styles.push("Regular".into());
-                    }
-                    styles.sort();
-                    styles.dedup();
-                    Some(FontFamily { name, styles })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    out.sort_by_key(|f| f.name.to_lowercase());
-    out.dedup_by(|a, b| a.name == b.name);
+/// The families with their styles: the same curated selection text creation ships with (the
+/// app's own fonts — Inter, JetBrains Mono, Noto Serif), not the phone's every system font.
+/// A picker that offers "Bold" for a family that only has Regular silently draws the wrong face,
+/// so the style list comes from the font itself.
+pub(crate) fn font_families(_s: &mut Session) -> Vec<FontFamily> {
+    let mut out: Vec<FontFamily> = filmcraft_text::bundled_families()
+        .into_iter()
+        .map(|(name, styles)| FontFamily { name, styles })
+        .collect();
     if out.is_empty() {
-        out.push(FontFamily { name: "Inter".into(), styles: vec!["Regular".into()] });
+        out.push(FontFamily { name: "Inter".into(), styles: vec!["Regular".into(), "Medium".into(), "SemiBold".into(), "Bold".into()] });
     }
     out
 }

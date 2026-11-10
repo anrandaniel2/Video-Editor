@@ -416,8 +416,22 @@ pub fn all_faces() -> Vec<Arc<Face>> {
 
 /// Families with their style names, sorted by family; styles in weight order.
 pub fn families() -> Vec<(String, Vec<String>)> {
+    families_from(|_| true)
+}
+
+/// The app's own families (the bundled faces plus any craft-fonts): the curated font selection
+/// that text creation ships with — Inter, JetBrains Mono, Noto Serif — for places where listing
+/// the phone's every system font would be noise.
+pub fn bundled_families() -> Vec<(String, Vec<String>)> {
+    families_from(|i| i.origin == "bundled" || i.origin == CRAFT_ORIGIN)
+}
+
+fn families_from(keep: impl Fn(&FaceInfo) -> bool) -> Vec<(String, Vec<String>)> {
     let mut m: std::collections::BTreeMap<String, Vec<(bool, u16, String)>> = Default::default();
     for f in all_faces() {
+        if !keep(&f.info) {
+            continue;
+        }
         let v = m.entry(f.info.family.clone()).or_default();
         if !v.iter().any(|(_, _, s)| s == &f.info.style) {
             v.push((f.info.italic, f.info.weight, f.info.style.clone()));
@@ -546,6 +560,10 @@ mod tests {
     #[test]
     fn bundled_families_and_resolution() {
         let fams = families();
+        // the curated selection text creation ships with: a subset of the full family list
+        let bundled = bundled_families();
+        assert!(bundled.iter().any(|(f, _)| f == "Inter"));
+        assert!(bundled.iter().all(|(f, _)| fams.iter().any(|(g, _)| g == f)));
         let inter = fams.iter().find(|(f, _)| f == "Inter").expect("Inter");
         for s in ["Regular", "Medium", "SemiBold", "Bold", "Italic"] {
             assert!(inter.1.iter().any(|x| x == s), "{s} in {:?}", inter.1);

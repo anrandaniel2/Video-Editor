@@ -105,76 +105,28 @@ fun TextInputStrip(ed: EditorController, panel: Panel.TextInput, modifier: Modif
     LaunchedEffect(text, panel) { ed.typing = if (panel.clip == null && panel.caption == null) text else "" }
     androidx.compose.runtime.DisposableEffect(panel) { onDispose { ed.typing = "" } }
     val focus = remember { FocusRequester() }
-    // Fonts and styles belong where text is added: the strip carries the pickers, and they apply
-    // to the new text (or the clip being edited) right away. Captions style differently: hidden.
-    val isCaption = panel.caption != null
-    val families by produceState<List<io.github.artcraftandroid.filmcraft.core.FontFamily>>(emptyList()) {
-        value = runCatching { ed.engine.command { fontFamilies() } }.getOrDefault(emptyList())
-            .ifEmpty { listOf(io.github.artcraftandroid.filmcraft.core.FontFamily("Inter", listOf("Regular", "Bold"))) }
-    }
-    var font by remember(panel) { mutableStateOf("Inter") }
-    var fontStyle by remember(panel) { mutableStateOf("SemiBold") }
-    LaunchedEffect(panel) {
-        if (!isCaption && panel.clip != null) {
-            val st = ed.textStyle(panel.clip)
-            if (st != null) {
-                font = st.font
-                fontStyle = st.fontStyle
-            }
-        }
-    }
-    fun applyStyle(f: String, s: String) {
-        val c = panel.clip
-        if (!isCaption && c != null) ed.setTextFont(c, f, s)
-    }
     val done = {
         val c = panel.clip
         val cap = panel.caption
         when {
             cap != null -> if (text != initial) ed.setCaptionText(cap, text)
-            c == null -> ed.addText(text, font, fontStyle)
+            c == null -> ed.addText(text)
             text != initial -> ed.setText(c, text)
         }
         ed.panel = null
     }
-    Column(
+    Row(
         modifier
             .fillMaxWidth()
             .imePadding()
             .padding(horizontal = FcSize.PanelInset)
             .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             .background(Fc.Panel)
-            .padding(vertical = 10.dp)
+            .padding(12.dp)
             .testTag("text_input_field"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (!isCaption) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelInset - 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                val styles = families.firstOrNull { it.name == font }?.styles ?: listOf(fontStyle)
-                PickerRow("Font", font, families.map { it.name }.ifEmpty { listOf(font) }, "text_input_font", Modifier.weight(1f)) { picked ->
-                    font = picked
-                    val next = families.firstOrNull { it.name == picked }?.styles ?: emptyList()
-                    fontStyle = when {
-                        next.contains(fontStyle) -> fontStyle
-                        next.contains("Regular") -> "Regular"
-                        else -> next.firstOrNull() ?: "Regular"
-                    }
-                    applyStyle(picked, fontStyle)
-                }
-                PickerRow("Style", fontStyle, styles, "text_input_style", Modifier.weight(1f)) { picked ->
-                    fontStyle = picked
-                    applyStyle(font, picked)
-                }
-            }
-            Spacer(Modifier.height(2.dp))
-        }
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
         BasicTextField(
             value = text,
             onValueChange = { text = it },
@@ -201,7 +153,6 @@ fun TextInputStrip(ed: EditorController, panel: Panel.TextInput, modifier: Modif
             Box(Modifier.size(32.dp).clip(CircleShape).background(Fc.Accent), contentAlignment = Alignment.Center) {
                 GlyphIcon(LucideIcons.Check.glyph(), Color.White, size = 18.dp)
             }
-        }
         }
     }
     LaunchedEffect(panel) { runCatching { focus.requestFocus() } }
