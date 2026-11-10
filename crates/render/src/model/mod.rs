@@ -435,7 +435,7 @@ impl Model {
             }
         }
         if let Some(mats) = inst.skin.and_then(|s| pose.skins.get(s)) {
-            let (mut v0, v1, v2, v3) = ([0.0f32; 3], [0.0f32; 3], [0.0f32; 3], [0.0f32; 3]);
+            let (mut v0, mut v1, mut v2, mut v3) = ([0.0f32; 3], [0.0f32; 3], [0.0f32; 3], [0.0f32; 3]);
             let mut total = 0.0f32;
             let mut normal_mat = None;
             for k in 0..4 {
@@ -455,14 +455,16 @@ impl Model {
                 // Linear-blend normals are approximate under non-uniform joint scale. Use the
                 // dominant joint's inverse transpose rather than stretching normals with joints.
                 v.normal = math::norm(math::vector(&normal_mat.unwrap_or(math::IDENTITY), v1));
-                v.tangent[..3].copy_from_slice(&math::norm(v2));
+                let tangent = math::norm(v2);
+                v.tangent[..3].copy_from_slice(&tangent);
                 return v;
             }
         }
         let m = pose.world.get(inst.node).unwrap_or(&math::IDENTITY);
         v.pos = math::point(m, v.pos);
         v.normal = math::norm(math::vector(&math::normal_matrix(m), v.normal));
-        v.tangent[..3].copy_from_slice(&math::norm(math::vector(m, [v.tangent[0], v.tangent[1], v.tangent[2]])));
+        let tangent = math::norm(math::vector(m, [v.tangent[0], v.tangent[1], v.tangent[2]]));
+        v.tangent[..3].copy_from_slice(&tangent);
         v
     }
 

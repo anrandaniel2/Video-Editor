@@ -692,7 +692,7 @@ pub fn parse(bytes: &[u8], base: &Path, model_name: String) -> Result<Model> {
                 if skinned && skin.is_none() { return err("skinned mesh node has no skin"); }
                 if let Some(s) = skin {
                     let joints = skins[s].joints.len();
-                    if p.verts.iter().any(|v| v.weights.iter().any(|&w| w > 0.0) && v.joints.iter().zip(v.weights).any(|(&j, &w)| w > 0.0 && j as usize >= joints)) {
+                    if p.verts.iter().any(|v| v.weights.iter().any(|&w| w > 0.0) && v.joints.iter().zip(v.weights.iter()).any(|(&j, &w)| w > 0.0 && j as usize >= joints)) {
                         return err("vertex joint index is outside its skin");
                     }
                 }
