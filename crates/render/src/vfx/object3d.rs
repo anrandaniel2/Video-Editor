@@ -801,9 +801,9 @@ fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model:
             let idx = y * buf.w + x;
             if iz <= buf.z[idx] { continue; }
             let q = [w0 * a.2 / iz, w1 * b.2 / iz, w2 * c.2 / iz];
-            let mix3 = |get: fn(&ModelVert) -> V3| get(&v[0]).mul(q[0]).add(get(&v[1]).mul(q[1])).add(get(&v[2]).mul(q[2]));
-            let pos = mix3(|v| v.p);
-            let mut n = mix3(|v| v.n).norm();
+            let mix3 = |get: &dyn Fn(&ModelVert) -> V3| get(&v[0]).mul(q[0]).add(get(&v[1]).mul(q[1])).add(get(&v[2]).mul(q[2]));
+            let pos = mix3(&|v| v.p);
+            let mut n = mix3(&|v| v.n).norm();
             let uv = [
                 std::array::from_fn::<_, 2, _>(|k| v[0].uv[0][k] * q[0] + v[1].uv[0][k] * q[1] + v[2].uv[0][k] * q[2]),
                 std::array::from_fn::<_, 2, _>(|k| v[0].uv[1][k] * q[0] + v[1].uv[1][k] * q[1] + v[2].uv[1][k] * q[2]),
@@ -812,7 +812,7 @@ fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model:
             let view = pos.mul(-1.0).norm();
             if n.dot(view) < 0.0 { n = n.mul(-1.0); }
             if let Some(nt) = sample_map(model, mat.normal_texture, uv) {
-                let mut t = mix3(|v| if v.tangent.len() > 1e-6 { v.tangent } else { fallback });
+                let mut t = mix3(&|v| if v.tangent.len() > 1e-6 { v.tangent } else { fallback });
                 t = t.sub(n.mul(t.dot(n))).norm();
                 let tw = v[0].tangent_w * q[0] + v[1].tangent_w * q[1] + v[2].tangent_w * q[2];
                 let bit = n.cross(t).mul(if tw < 0.0 { -1.0 } else { 1.0 });
