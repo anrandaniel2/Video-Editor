@@ -778,19 +778,19 @@ mod tests {
     fn strips_and_fans_keep_winding() {
         assert_eq!(topology(5, &[0, 1, 2, 3]).unwrap(), vec![0, 1, 2, 2, 1, 3]);
         assert_eq!(topology(6, &[0, 1, 2, 3]).unwrap(), vec![0, 1, 2, 0, 2, 3]);
-        assert_eq!(topology(5, &[0, 1, 2, 2, 3, 4]).unwrap(), vec![0, 1, 2, 2, 3, 4]);
+        assert_eq!(topology(5, &[0, 1, 2, 2, 3, 4]).unwrap(), vec![0, 1, 2, 3, 2, 4]);
     }
 
     #[test]
     fn glb_header_is_validated() {
         assert!(container(b"glTF").is_err());
         let mut b = Vec::new();
-        b.extend_from_slice(b"glTF"); b.extend_from_slice(&2u32.to_le_bytes()); b.extend_from_slice(&20u32.to_le_bytes());
+        b.extend_from_slice(b"glTF"); b.extend_from_slice(&2u32.to_le_bytes()); b.extend_from_slice(&24u32.to_le_bytes());
         b.extend_from_slice(&4u32.to_le_bytes()); b.extend_from_slice(b"JSON"); b.extend_from_slice(b"{}  ");
         let (j, bin) = container(&b).unwrap();
         assert_eq!(j, serde_json::json!({}));
         assert!(bin.is_none());
-        b[8] = 21;
+        b[8] = 25;
         assert!(container(&b).is_err());
     }
 

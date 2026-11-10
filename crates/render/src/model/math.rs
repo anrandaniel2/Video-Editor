@@ -195,6 +195,9 @@ mod tests {
         let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
         assert!((len - 1.0).abs() < 1e-6);
         let neg = quat_nlerp(a, [0.0, -1.0, 0.0, 0.0], 0.5);
-        assert!((q[1] - neg[1]).abs() < 1e-6, "the short arc should match: {q:?} vs {neg:?}");
+        // q and -q are the same rotation; a zero dot product may choose either sign.
+        let pq = point(&trs([0.0; 3], q, [1.0; 3]), [1.0, 0.0, 0.0]);
+        let pn = point(&trs([0.0; 3], neg, [1.0; 3]), [1.0, 0.0, 0.0]);
+        assert!(pq.iter().zip(pn).all(|(a, b)| (a - b).abs() < 1e-6), "the short arc should match: {q:?} vs {neg:?}");
     }
 }
