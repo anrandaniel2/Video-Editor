@@ -13,6 +13,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: ['arena/694df4ef-video-editor']
   workflow_dispatch:
 
 permissions:
