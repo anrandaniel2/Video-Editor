@@ -32,6 +32,7 @@ pub enum Object3DMesh {
     Torus,
     Plane,
     Text,
+    Model,
 }
 
 impl Object3DMesh {
@@ -44,6 +45,7 @@ impl Object3DMesh {
             Self::Torus => 4,
             Self::Plane => 5,
             Self::Text => 6,
+            Self::Model => 7,
         }
     }
     fn from_index(i: u32) -> Self {
@@ -54,6 +56,7 @@ impl Object3DMesh {
             4 => Self::Torus,
             5 => Self::Plane,
             6 => Self::Text,
+            7 => Self::Model,
             _ => Self::Cube,
         }
     }
@@ -128,6 +131,13 @@ pub struct Object3DSettings {
     pub follow_track: bool,
     pub track_id: u64,
     pub track_depth: f64,
+    pub model_path: String,
+    /// -1 = rest pose; otherwise an index into the file's animation list.
+    pub model_anim: i32,
+    pub model_time: f64,
+    pub model_play: bool,
+    pub model_loop: bool,
+    pub model_speed: f64,
 }
 
 impl Default for Object3DSettings {
@@ -169,8 +179,31 @@ impl Default for Object3DSettings {
             follow_track: false,
             track_id: 0,
             track_depth: 240.0,
+            model_path: String::new(),
+            model_anim: -1,
+            model_time: 0.0,
+            model_play: true,
+            model_loop: true,
+            model_speed: 100.0,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ModelAnimationInfo {
+    pub name: String,
+    pub duration: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ModelInfo {
+    pub name: String,
+    pub meshes: u32,
+    pub triangles: u32,
+    pub textures: u32,
+    pub skins: u32,
+    pub morph_targets: u32,
+    pub animations: Vec<ModelAnimationInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -400,6 +433,12 @@ fn object_settings(e: &EffectInstance, t: Tick, center: (f64, f64)) -> Object3DS
         follow_track: e.param("follow_track").and_then(|p| p.value.as_bool()).unwrap_or(false),
         track_id: f_at(e, "track_id", t, 0.0).max(0.0) as u64,
         track_depth: f_at(e, "track_depth", t, d.track_depth),
+        model_path: text_at(e, "model_path", t),
+        model_anim: f_at(e, "model_anim", t, -1.0).round().clamp(-1.0, 4096.0) as i32,
+        model_time: f_at(e, "model_time", t, 0.0).max(0.0),
+        model_play: bool_at(e, "model_play", true),
+        model_loop: bool_at(e, "model_loop", true),
+        model_speed: f_at(e, "model_speed", t, 100.0),
     }
 }
 
@@ -443,10 +482,16 @@ fn write_object(e: &mut EffectInstance, st: &Object3DSettings, t: Tick) {
     set_bool(e, "follow_track", st.follow_track);
     set_f(e, "track_id", st.track_id as f64, t);
     set_f(e, "track_depth", st.track_depth.clamp(-5000.0, 5000.0), t);
+    set_text(e, "model_path", &st.model_path);
+    set_f(e, "model_anim", st.model_anim.clamp(-1, 4096) as f64, t);
+    set_f(e, "model_time", finite(st.model_time, 0.0).clamp(0.0, 86_400.0), t);
+    set_bool(e, "model_play", st.model_play);
+    set_bool(e, "model_loop", st.model_loop);
+    set_f(e, "model_speed", finite(st.model_speed, 100.0).clamp(-400.0, 400.0), t);
 }
 
 const ANIMATED_PARAMS: &[&str] = &[
-    "position", "z", "rotation_x", "rotation_y", "rotation_z", "scale", "depth", "bevel", "color", "side_color", "metalness", "roughness", "light_angle", "light_elevation", "opacity", "track_depth",
+    "position", "z", "rotation_x", "rotation_y", "rotation_z", "scale", "depth", "bevel", "color", "side_color", "metalness", "roughness", "light_angle", "light_elevation", "opacity", "track_depth", "model_time", "model_speed",
 ];
 
 fn object_animated(e: &EffectInstance) -> bool {
@@ -454,6 +499,30 @@ fn object_animated(e: &EffectInstance) -> bool {
 }
 
 pub(crate) fn add_object(s: &mut Session, mesh: Object3DMesh) -> Result<u64, MobileError> {
+    add_object_with_path(s, mesh, None)
+}
+
+/// Validate and report a model's animation list before/after import.
+pub(crate) fn model_info(path: &str) -> Result<ModelInfo, MobileError> {
+    let m = filmcraft_render::model::Model::load(std::path::Path::new(path)).map_err(|e| MobileError::Command(format!("That model could not be opened: {e}")))?;
+    Ok(ModelInfo {
+        name: m.name.clone(),
+        meshes: m.meshes.len() as u32,
+        triangles: m.triangles.min(u32::MAX as usize) as u32,
+        textures: m.textures.len() as u32,
+        skins: m.skins.len() as u32,
+        morph_targets: m.morph_targets.min(u32::MAX as usize) as u32,
+        animations: m.animations.iter().map(|a| ModelAnimationInfo { name: a.name.clone(), duration: a.duration as f64 }).collect(),
+    })
+}
+
+pub(crate) fn add_model(s: &mut Session, path: &str) -> Result<u64, MobileError> {
+    let info = model_info(path)?;
+    if info.triangles == 0 { return Err(MobileError::Command("That model has no triangles.".into())); }
+    add_object_with_path(s, Object3DMesh::Model, Some(path))
+}
+
+fn add_object_with_path(s: &mut Session, mesh: Object3DMesh, model_path: Option<&str>) -> Result<u64, MobileError> {
     let (_, seq) = model::sequence(s)?;
     let w = seq.settings.width;
     let rate = s.sequence_rate();
@@ -477,6 +546,9 @@ pub(crate) fn add_object(s: &mut Session, mesh: Object3DMesh) -> Result<u64, Mob
         }
         if mesh == Object3DMesh::Text {
             set_text(&mut e, "text", "Text");
+        } else if mesh == Object3DMesh::Model {
+            if let Some(path) = model_path { set_text(&mut e, "model_path", path); }
+            set_f(&mut e, "model_anim", 0.0, Tick::ZERO);
         } else {
             // Primitives start as deep as they are wide; the Extrusion slider then changes thickness.
             set_f(&mut e, "depth", 220.0, Tick::ZERO);
@@ -490,6 +562,7 @@ pub(crate) fn add_object(s: &mut Session, mesh: Object3DMesh) -> Result<u64, Mob
             Object3DMesh::Torus => "Torus",
             Object3DMesh::Plane => "Plane",
             Object3DMesh::Text => "Text",
+            Object3DMesh::Model => "Model",
         });
         edits::settle(s);
         Ok(id)

@@ -95,7 +95,7 @@ interface EditorHost {
     fun requestMicrophone(onGranted: () -> Unit)
 }
 
-enum class PickKind { PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo }
+enum class PickKind { PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo, Model }
 
 /**
  * The open project in the editor: the timeline as the engine last reported it, the playhead,
@@ -873,6 +873,28 @@ class EditorController(
                 panel = Panel.Object3D
                 loadObject3D(id)
             } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    /** Pick a glTF/GLB file, copy it into the project, validate it and add it as a 3D overlay. */
+    fun addModel() {
+        stop()
+        host.pick(PickKind.Model) { uris ->
+            val uri = uris.firstOrNull() ?: return@pick
+            scope.launch {
+                busy = "Importing model…"
+                try {
+                    val path = withContext(Dispatchers.IO) { projects.importUri(project, uri).absolutePath }
+                    val id = engine.command { addModel(path) }
+                    refresh()
+                    panel = Panel.Object3D
+                    loadObject3D(id)
+                } catch (e: Exception) {
+                    host.tell(e.userMessage)
+                } finally {
+                    busy = null
+                }
+            }
         }
     }
 

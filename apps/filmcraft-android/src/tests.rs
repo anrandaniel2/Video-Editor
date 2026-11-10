@@ -1222,6 +1222,26 @@ fn a_transition_on_a_cut_without_spare_footage_shortens_the_video_by_its_length(
 }
 
 #[test]
+fn advanced_model_import_lists_animations_and_renders() {
+    let m = MobileSession::new();
+    m.new_project("Model".into(), 320, 240, 30).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/render/tests/fixtures/AnimatedMorphCube.glb").to_string_lossy().into_owned();
+    let info = m.model_info(path.clone()).unwrap();
+    assert!(info.morph_targets > 0 && !info.animations.is_empty());
+    let id = m.add_model(path).unwrap();
+    let st = m.object3d_state(id).unwrap();
+    assert_eq!(st.settings.mesh, advanced::Object3DMesh::Model);
+    assert_eq!(st.settings.model_anim, 0);
+    assert!(!st.settings.model_path.is_empty());
+    let a = m.renderer().unwrap().frame(0, 320, false, None).unwrap();
+    let b = m.renderer().unwrap().frame(SEC / 2, 320, false, None).unwrap();
+    let lit = a.rgba.chunks_exact(4).filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 60).count();
+    assert!(lit > 100, "model preview had only {lit} lit pixels");
+    assert!(a.rgba.iter().zip(&b.rgba).any(|(x, y)| x != y), "model animation did not change the preview");
+    assert!(m.add_model("/does/not/exist.glb".into()).is_err());
+}
+
+#[test]
 fn advanced_object3d_rotation_keyframes_interpolate_and_toggle_off() {
     let m = MobileSession::new();
     m.new_project("3D".into(), 320, 240, 30).unwrap();

@@ -36,7 +36,7 @@ pub mod samples;
 pub mod speech;
 pub mod text;
 
-use advanced::{BackgroundSettings, BackgroundState, MotionTrackInfo, NormPoint, Object3DMesh, Object3DSettings, Object3DState, TrackOptions};
+use advanced::{BackgroundSettings, BackgroundState, ModelAnimationInfo, ModelInfo, MotionTrackInfo, NormPoint, Object3DMesh, Object3DSettings, Object3DState, TrackOptions};
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use masks::{MaskPoint, MaskSettings, MaskShape, MaskState};
 use model::TimelineInfo;
@@ -646,6 +646,16 @@ impl MobileSession {
     /// Add a keyframable 3D primitive (or extruded-text placeholder) on an overlay at the playhead.
     pub fn add_object3d(&self, mesh: Object3DMesh) -> Result<u64, MobileError> {
         self.main_edit(|s| advanced::add_object(s, mesh))
+    }
+
+    /// Import a glTF/GLB model as a keyframable 3D overlay at the playhead.
+    pub fn add_model(&self, path: String) -> Result<u64, MobileError> {
+        self.main_edit(|s| advanced::add_model(s, &path))
+    }
+
+    /// Validate a model file and list its animations (used by the import/animation UI).
+    pub fn model_info(&self, path: String) -> Result<ModelInfo, MobileError> {
+        advanced::model_info(&path)
     }
 
     /// The selected clip's 3D object settings at the playhead.

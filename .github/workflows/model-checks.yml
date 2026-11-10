@@ -24,7 +24,9 @@ jobs:
           {
             cargo test -p filmcraft-render --lib model:: &&
             cargo test -p filmcraft-render --test model_import &&
-            cargo test -p filmcraft-media --lib still::
+            cargo test -p filmcraft-media --lib still:: &&
+            cargo test -p filmcraft-render --test model_render &&
+            cargo test -p filmcraft-android --lib advanced_model
           } >"$RUNNER_TEMP/model-checks.log" 2>&1
           code=$?
           tail -n 250 "$RUNNER_TEMP/model-checks.log"

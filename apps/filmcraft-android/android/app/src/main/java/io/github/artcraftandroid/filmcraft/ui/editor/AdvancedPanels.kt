@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
 import io.github.artcraftandroid.filmcraft.core.FontFamily
+import io.github.artcraftandroid.filmcraft.core.ModelInfo
 import io.github.artcraftandroid.filmcraft.core.Object3DMesh
 import io.github.artcraftandroid.filmcraft.core.Object3DSettings
 import io.github.artcraftandroid.filmcraft.core.StereoLayout
@@ -88,7 +89,9 @@ fun Object3DPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
             Object3DMesh.entries.forEach { mesh ->
                 val label = mesh.name.lowercase().replaceFirstChar { it.uppercase() }
                 SelectChip(label, settings?.mesh == mesh, {
-                    if (hasObject && settings != null) ed.setObject(settings.copy(mesh = mesh)) else ed.addObject(mesh)
+                    if (mesh == Object3DMesh.MODEL) ed.addModel()
+                    else if (hasObject && settings != null) ed.setObject(settings.copy(mesh = mesh))
+                    else ed.addObject(mesh)
                 }, tag = "object3d_mesh_${mesh.name.lowercase()}")
             }
         }
@@ -114,7 +117,63 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         style = FcType.Caption, color = Fc.Detail,
         modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
     )
-    if (st.mesh == Object3DMesh.TEXT) {
+    if (st.mesh == Object3DMesh.MODEL) {
+        val info by produceState<ModelInfo?>(null, st.modelPath) {
+            value = if (st.modelPath.isBlank()) null else runCatching { ed.engine.command { modelInfo(st.modelPath) } }.getOrNull()
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                st.modelPath.substringAfterLast('/').ifBlank { "No model imported" },
+                style = FcType.Label, color = Fc.Secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            SelectChip("Import GLB", false, { ed.addModel() }, tag = "object3d_import_model")
+        }
+        info?.let { m ->
+            Text(
+                "${m.triangles} triangles · ${m.textures} textures · ${m.skins} rigs · ${m.morphTargets} morph targets",
+                style = FcType.Caption, color = Fc.Detail,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding, vertical = 2.dp),
+            )
+            val labels = listOf("Rest pose") + m.animations.map { it.name }
+            val current = if (st.modelAnim < 0) "Rest pose" else m.animations.getOrNull(st.modelAnim)?.name ?: "Animation ${st.modelAnim + 1}"
+            PickerRow("Animation", current, labels, "object3d_model_anim") { picked ->
+                val idx = labels.indexOf(picked) - 1
+                change((ed.object3DState?.settings ?: st).copy(modelAnim = idx, modelTime = 0.0))
+            }
+            val duration = m.animations.getOrNull(st.modelAnim)?.duration ?: 0.0
+            AdvancedSlider("Animation time", st.modelTime, 0.0, duration.coerceAtLeast(0.01), 0.01, "object3d_model_time") { v, k ->
+                change((ed.object3DState?.settings ?: st).copy(modelTime = v), k)
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), verticalAlignment = Alignment.CenterVertically) {
+                Text("Play with clip", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = st.modelPlay,
+                    onCheckedChange = { change((ed.object3DState?.settings ?: st).copy(modelPlay = it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                    modifier = Modifier.testTag("object3d_model_play"),
+                )
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), verticalAlignment = Alignment.CenterVertically) {
+                Text("Loop", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = st.modelLoop,
+                    onCheckedChange = { change((ed.object3DState?.settings ?: st).copy(modelLoop = it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                    modifier = Modifier.testTag("object3d_model_loop"),
+                )
+            }
+            AdvancedSlider("Animation speed", st.modelSpeed, 0.0, 400.0, 1.0, "object3d_model_speed") { v, k ->
+                change((ed.object3DState?.settings ?: st).copy(modelSpeed = v), k)
+            }
+        }
+        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+        AdvancedSlider("Size", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
+    } else if (st.mesh == Object3DMesh.TEXT) {
         OutlinedTextField(
             value = st.text,
             onValueChange = { change((ed.object3DState?.settings ?: st).copy(text = it)) },
@@ -152,8 +211,10 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     } else {
         AdvancedSlider("Size", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
     }
-    AdvancedSlider("Extrusion", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }
-    AdvancedSlider("Bevel", st.bevel, 0.0, 100.0, 0.5, "object3d_bevel") { v, k -> change((ed.object3DState?.settings ?: st).copy(bevel = v), k) }
+    if (st.mesh != Object3DMesh.MODEL) {
+        AdvancedSlider("Extrusion", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }
+        AdvancedSlider("Bevel", st.bevel, 0.0, 100.0, 0.5, "object3d_bevel") { v, k -> change((ed.object3DState?.settings ?: st).copy(bevel = v), k) }
+    }
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
     AdvancedSlider("Rotate X", st.rotationX, -180.0, 180.0, 1.0, "object3d_rx") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationX = v), k) }
     AdvancedSlider("Rotate Y", st.rotationY, -180.0, 180.0, 1.0, "object3d_ry") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationY = v), k) }
@@ -163,10 +224,14 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     AdvancedSlider("X", st.x, -2000.0, 4000.0, 1.0, "object3d_x") { v, k -> change((ed.object3DState?.settings ?: st).copy(x = v), k) }
     AdvancedSlider("Y", st.y, -2000.0, 4000.0, 1.0, "object3d_y") { v, k -> change((ed.object3DState?.settings ?: st).copy(y = v), k) }
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
-    ColorRow("Front", st.color.toLong().toULong()) { c -> change((ed.object3DState?.settings ?: st).copy(color = c.toUInt())) }
-    ColorRow("Sides", st.sideColor.toLong().toULong()) { c -> change((ed.object3DState?.settings ?: st).copy(sideColor = c.toUInt())) }
-    AdvancedSlider("Metalness", st.metalness, 0.0, 100.0, 1.0, "object3d_metal") { v, k -> change((ed.object3DState?.settings ?: st).copy(metalness = v), k) }
-    AdvancedSlider("Roughness", st.roughness, 0.0, 100.0, 1.0, "object3d_rough") { v, k -> change((ed.object3DState?.settings ?: st).copy(roughness = v), k) }
+    if (st.mesh != Object3DMesh.MODEL) {
+        ColorRow("Front", st.color.toLong().toULong()) { c -> change((ed.object3DState?.settings ?: st).copy(color = c.toUInt())) }
+        ColorRow("Sides", st.sideColor.toLong().toULong()) { c -> change((ed.object3DState?.settings ?: st).copy(sideColor = c.toUInt())) }
+        AdvancedSlider("Metalness", st.metalness, 0.0, 100.0, 1.0, "object3d_metal") { v, k -> change((ed.object3DState?.settings ?: st).copy(metalness = v), k) }
+        AdvancedSlider("Roughness", st.roughness, 0.0, 100.0, 1.0, "object3d_rough") { v, k -> change((ed.object3DState?.settings ?: st).copy(roughness = v), k) }
+    } else {
+        Text("Materials use the model's own PBR textures.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+    }
     AdvancedSlider("Opacity", st.opacity, 0.0, 100.0, 1.0, "object3d_opacity") { v, k -> change((ed.object3DState?.settings ?: st).copy(opacity = v), k) }
     AdvancedSlider("Light angle", st.lightAngle, 0.0, 360.0, 1.0, "object3d_light_angle") { v, k -> change((ed.object3DState?.settings ?: st).copy(lightAngle = v), k) }
     AdvancedSlider("Light elevation", st.lightElevation, -90.0, 90.0, 1.0, "object3d_light_elev") { v, k -> change((ed.object3DState?.settings ?: st).copy(lightElevation = v), k) }

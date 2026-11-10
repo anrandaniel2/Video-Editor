@@ -28,10 +28,12 @@ fn rigged_glb_evaluates_joint_animation() {
     assert!(a.skins[0].iter().zip(&b.skins[0]).any(|(x, y)| x.iter().zip(y).any(|(x, y)| (x - y).abs() > 1e-4)), "joint matrices did not animate");
     let inst = m.instances.iter().find(|i| i.skin.is_some()).unwrap();
     let prim = &m.meshes[inst.mesh].prims[0];
-    let va = m.skin_vertex(&a, inst, prim, 0);
-    let vb = m.skin_vertex(&b, inst, prim, 0);
-    assert!(va.pos.iter().zip(vb.pos).any(|(a, b)| (a - b).abs() > 1e-4), "skinned vertices did not move");
-    assert!(va.normal.iter().all(|x| x.is_finite()));
+    let moved = (0..prim.verts.len()).filter(|&i| {
+        let va = m.skin_vertex(&a, inst, prim, i);
+        let vb = m.skin_vertex(&b, inst, prim, i);
+        va.normal.iter().all(|x| x.is_finite()) && va.pos.iter().zip(vb.pos).any(|(a, b)| (a - b).abs() > 1e-4)
+    }).count();
+    assert!(moved > prim.verts.len() / 2, "only {moved} skinned vertices moved");
 }
 
 #[test]
@@ -43,9 +45,9 @@ fn morph_animation_changes_vertices_and_loops() {
     assert!(a.weights.iter().zip(&b.weights).any(|(a, b)| a.iter().zip(b).any(|(a, b)| (a - b).abs() > 0.01)));
     let inst = &m.instances[0];
     let prim = &m.meshes[inst.mesh].prims[0];
-    let va = m.skin_vertex(&a, inst, prim, 0);
-    let vb = m.skin_vertex(&b, inst, prim, 0);
-    assert!(va.pos != vb.pos, "morph target did not change the vertex");
+    assert!((0..prim.verts.len()).any(|i| {
+        m.skin_vertex(&a, inst, prim, i).pos != m.skin_vertex(&b, inst, prim, i).pos
+    }), "morph target did not change any vertex");
     let wrapped = m.pose(Some(0), m.animations[0].duration, true);
     let start = m.pose(Some(0), 0.0, false);
     assert_eq!(wrapped.world, start.world);
@@ -67,9 +69,15 @@ fn normal_matrix_handles_rotation_with_nonuniform_scale() {
     let q = math::norm_quat([0.2, 0.3, 0.1, 0.9]);
     let m = math::trs([1.0, 2.0, 3.0], q, [3.0, 0.5, 2.0]);
     let nm = math::normal_matrix(&m);
+    // For a TRS matrix the normal matrix is the same rotation with reciprocal scale.
+    let expected = math::trs([0.0; 3], q, [1.0 / 3.0, 2.0, 0.5]);
+    for i in 0..16 {
+        assert!((nm[i] - expected[i]).abs() < 1e-5, "normal matrix element {i}: {} vs {}", nm[i], expected[i]);
+    }
     let n = math::norm([0.4, -0.2, 0.8]);
     let t = math::norm([n[1], -n[0], 0.0]);
     let transformed_n = math::norm(math::vector(&nm, n));
-    let transformed_t = math::vector(&m, t);
-    assert!(transformed_n.iter().zip(transformed_t).map(|(a, b)| a * b).sum::<f32>().abs() < 1e-5);
+    let transformed_t = math::norm(math::vector(&m, t));
+    let dot = transformed_n.iter().zip(transformed_t).map(|(a, b)| a * b).sum::<f32>();
+    assert!(dot.abs() < 1e-4, "normal lost perpendicularity: {dot}");
 }

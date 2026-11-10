@@ -806,7 +806,7 @@ fn build_effects() -> Vec<EffectDef> {
             "3D Object",
             THREE_D,
             vec![
-                ch("mesh", "Mesh", &["Cube", "Sphere", "Cylinder", "Cone", "Torus", "Plane", "Text"], 0),
+                ch("mesh", "Mesh", &["Cube", "Sphere", "Cylinder", "Cone", "Torus", "Plane", "Text", "Model"], 0),
                 txt("text", "Text"),
                 ParamDef { default: ParamValue::Text("Inter".into()), ..txt("font", "Font") },
                 ParamDef { default: ParamValue::Text("Regular".into()), ..txt("font_style", "Font Style") },
@@ -841,6 +841,12 @@ fn build_effects() -> Vec<EffectDef> {
                 ParamDef { animatable: false, ..b("follow_track", "Follow Motion Track", false) },
                 ParamDef { animatable: false, ..f("track_id", "Motion Track", 0.0, 0.0, 9_000_000_000_000_000.0, "") },
                 fs("track_depth", "Track Depth", 240.0, (-5000.0, 5000.0), (-1000.0, 1000.0), "", 1),
+                ParamDef { animatable: false, ..txt("model_path", "Model File") },
+                ParamDef { animatable: false, ..fs("model_anim", "Animation", -1.0, (-1.0, 4096.0), (-1.0, 64.0), "", 0) },
+                fs("model_time", "Animation Time", 0.0, (0.0, 86_400.0), (0.0, 60.0), "s", 3),
+                ParamDef { animatable: false, ..b("model_play", "Play With Clip", true) },
+                ParamDef { animatable: false, ..b("model_loop", "Loop Animation", true) },
+                fs("model_speed", "Animation Speed", 100.0, (-400.0, 400.0), (0.0, 400.0), "%", 1),
             ],
         ),
         video(

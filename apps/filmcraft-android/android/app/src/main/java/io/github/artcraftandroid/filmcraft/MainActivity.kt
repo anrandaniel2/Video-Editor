@@ -87,6 +87,7 @@ class MainActivity : ComponentActivity() {
                 PickKind.ExtractAudioVideo -> pickOneVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
                 PickKind.FilesVisual -> openDocuments.launch(arrayOf("image/*", "video/*"))
                 PickKind.FilesAudio -> openDocuments.launch(arrayOf("audio/*"))
+                PickKind.Model -> openDocuments.launch(arrayOf("model/gltf-binary", "model/gltf+json", "application/octet-stream", "application/json"))
             }
         }
     }

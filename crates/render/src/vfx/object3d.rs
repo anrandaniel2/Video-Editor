@@ -80,6 +80,12 @@ struct Params {
     rough: f32,
     light: V3,
     opacity: f32,
+    model_path: String,
+    model_anim: i32,
+    model_time: f32,
+    model_loop: bool,
+    model_speed: f32,
+    model_play: bool,
 }
 
 fn rotate(v: V3, r: V3) -> V3 {
@@ -143,6 +149,12 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
         rough: (fv(e, "roughness", cx) / 100.0).clamp(0.0, 1.0),
         light: V3::new(la.cos() * le.cos(), la.sin() * le.cos(), le.sin()).norm(),
         opacity: (fv(e, "opacity", cx) / 100.0).clamp(0.0, 1.0),
+        model_path: tv(e, "model_path"),
+        model_anim: fv(e, "model_anim", cx).round() as i32,
+        model_time: fv(e, "model_time", cx),
+        model_loop: bv(e, "model_loop"),
+        model_speed: fv(e, "model_speed", cx) / 100.0,
+        model_play: bv(e, "model_play"),
     }
 }
 
@@ -676,6 +688,240 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f3
     }
 }
 
+/// A model vertex after fitting, node/skin animation and the object's own transform.
+#[derive(Clone, Copy)]
+struct ModelVert {
+    p: V3,
+    n: V3,
+    tangent: V3,
+    tangent_w: f32,
+    uv: [[f32; 2]; 2],
+    color: [f32; 4],
+}
+
+impl ModelVert {
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        let mix = |x: f32, y: f32| x + (y - x) * t;
+        let mix3 = |x: V3, y: V3| V3::new(mix(x.x, y.x), mix(x.y, y.y), mix(x.z, y.z));
+        Self {
+            p: mix3(a.p, b.p), n: mix3(a.n, b.n), tangent: mix3(a.tangent, b.tangent),
+            tangent_w: mix(a.tangent_w, b.tangent_w),
+            uv: [std::array::from_fn(|k| mix(a.uv[0][k], b.uv[0][k])), std::array::from_fn(|k| mix(a.uv[1][k], b.uv[1][k]))],
+            color: std::array::from_fn(|k| mix(a.color[k], b.color[k])),
+        }
+    }
+}
+
+/// Clip against z = 1 before projection, so moving a model through the camera does not make
+/// triangles vanish or explode. Returns a triangle fan (at most two triangles from one input).
+fn clip_near(v: [ModelVert; 3]) -> Vec<[ModelVert; 3]> {
+    const NEAR: f32 = 1.01;
+    let mut poly: Vec<ModelVert> = Vec::with_capacity(4);
+    for i in 0..3 {
+        let a = v[i];
+        let b = v[(i + 1) % 3];
+        let ain = a.p.z >= NEAR;
+        let bin = b.p.z >= NEAR;
+        if ain { poly.push(a); }
+        if ain != bin {
+            let t = (NEAR - a.p.z) / (b.p.z - a.p.z);
+            poly.push(ModelVert::lerp(a, b, t));
+        }
+    }
+    if poly.len() < 3 { return Vec::new(); }
+    (1..poly.len() - 1).map(|i| [poly[0], poly[i], poly[i + 1]]).collect()
+}
+
+fn sample_map(model: &crate::model::Model, r: Option<crate::model::TextureRef>, uv: [[f32; 2]; 2]) -> Option<[f32; 4]> {
+    let r = r?;
+    let (u, v) = r.uv(uv);
+    model.textures.get(r.index).map(|t| t.sample(u, v))
+}
+
+/// Metallic-roughness shading with a GGX specular lobe. The editor's current directional light
+/// is used until the scene-light objects arrive; ambient is a cheap diffuse/specular environment.
+fn shade_pbr(n: V3, view: V3, light: V3, base: [f32; 3], metallic: f32, roughness: f32, ao: f32, emissive: [f32; 3], alpha: f32, unlit: bool) -> [f32; 4] {
+    if unlit {
+        return [(base[0] + emissive[0]) * alpha, (base[1] + emissive[1]) * alpha, (base[2] + emissive[2]) * alpha, alpha];
+    }
+    let n = n.norm();
+    let v = view.norm();
+    let l = light.norm();
+    let h = v.add(l).norm();
+    let nl = n.dot(l).max(0.0);
+    let nv = n.dot(v).max(1e-4);
+    let nh = n.dot(h).max(0.0);
+    let vh = v.dot(h).max(0.0);
+    let rough = roughness.clamp(0.045, 1.0);
+    let a = rough * rough;
+    let a2 = a * a;
+    let den = nh * nh * (a2 - 1.0) + 1.0;
+    let d = a2 / (std::f32::consts::PI * den * den).max(1e-6);
+    let k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    let g = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k).max(1e-6));
+    let f0 = std::array::from_fn::<_, 3, _>(|i| 0.04 + (base[i] - 0.04) * metallic);
+    let f = std::array::from_fn::<_, 3, _>(|i| f0[i] + (1.0 - f0[i]) * (1.0 - vh).powi(5));
+    let mut c = [0.0f32; 3];
+    for i in 0..3 {
+        let kd = (1.0 - f[i]) * (1.0 - metallic);
+        let spec = d * g * f[i] / (4.0 * nv * nl).max(1e-5);
+        let direct = (kd * base[i] / std::f32::consts::PI + spec) * nl * 3.0;
+        let ambient_diffuse = base[i] * (1.0 - metallic) * 0.22 * ao;
+        let ambient_spec = f0[i] * (0.08 + 0.12 * (1.0 - rough)) * ao;
+        c[i] = ((direct + ambient_diffuse + ambient_spec + emissive[i]).max(0.0)) * alpha;
+    }
+    [c[0], c[1], c[2], alpha]
+}
+
+/// Perspective-correct textured triangle. `blend` draws back-to-front transparent surfaces over
+/// the opaque z-buffer without writing depth, so glass does not hide surfaces behind it.
+fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model: &crate::model::Model, mat: &crate::model::Material, p: &Params, light: V3, blend: bool) {
+    let [a, b, c] = pts;
+    let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+    if area.abs() < 1e-7 { return; }
+    let Some((x0, x1, y0, y1)) = buf.range(a.0.min(b.0).min(c.0), a.0.max(b.0).max(c.0), a.1.min(b.1).min(c.1), a.1.max(b.1).max(c.1)) else { return };
+    let inv = 1.0 / area;
+    // A tangent frame from UV deltas when the file has no TANGENT attribute.
+    let e1 = v[1].p.sub(v[0].p);
+    let e2 = v[2].p.sub(v[0].p);
+    let set = mat.normal_texture.map(|r| r.uv_set).unwrap_or(0);
+    let d1 = [v[1].uv[set][0] - v[0].uv[set][0], v[1].uv[set][1] - v[0].uv[set][1]];
+    let d2 = [v[2].uv[set][0] - v[0].uv[set][0], v[2].uv[set][1] - v[0].uv[set][1]];
+    let det = d1[0] * d2[1] - d1[1] * d2[0];
+    let fallback = if det.abs() > 1e-10 { e1.mul(d2[1]).sub(e2.mul(d1[1])).mul(1.0 / det).norm() } else { V3::new(1.0, 0.0, 0.0) };
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let (px, py) = buf.centre(x, y);
+            let w0 = ((c.0 - b.0) * (py - b.1) - (c.1 - b.1) * (px - b.0)) * inv;
+            let w1 = ((a.0 - c.0) * (py - c.1) - (a.1 - c.1) * (px - c.0)) * inv;
+            let w2 = 1.0 - w0 - w1;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 { continue; }
+            let iz = w0 * a.2 + w1 * b.2 + w2 * c.2;
+            if iz <= 0.0 { continue; }
+            let idx = y * buf.w + x;
+            if iz <= buf.z[idx] { continue; }
+            let q = [w0 * a.2 / iz, w1 * b.2 / iz, w2 * c.2 / iz];
+            let mix3 = |get: fn(&ModelVert) -> V3| get(&v[0]).mul(q[0]).add(get(&v[1]).mul(q[1])).add(get(&v[2]).mul(q[2]));
+            let pos = mix3(|v| v.p);
+            let mut n = mix3(|v| v.n).norm();
+            let uv = [
+                std::array::from_fn::<_, 2, _>(|k| v[0].uv[0][k] * q[0] + v[1].uv[0][k] * q[1] + v[2].uv[0][k] * q[2]),
+                std::array::from_fn::<_, 2, _>(|k| v[0].uv[1][k] * q[0] + v[1].uv[1][k] * q[1] + v[2].uv[1][k] * q[2]),
+            ];
+            let vc = std::array::from_fn::<_, 4, _>(|k| v[0].color[k] * q[0] + v[1].color[k] * q[1] + v[2].color[k] * q[2]);
+            let view = pos.mul(-1.0).norm();
+            if n.dot(view) < 0.0 { n = n.mul(-1.0); }
+            if let Some(nt) = sample_map(model, mat.normal_texture, uv) {
+                let mut t = mix3(|v| if v.tangent.len() > 1e-6 { v.tangent } else { fallback });
+                t = t.sub(n.mul(t.dot(n))).norm();
+                let tw = v[0].tangent_w * q[0] + v[1].tangent_w * q[1] + v[2].tangent_w * q[2];
+                let bit = n.cross(t).mul(if tw < 0.0 { -1.0 } else { 1.0 });
+                let tn = V3::new((nt[0] * 2.0 - 1.0) * mat.normal_scale, (nt[1] * 2.0 - 1.0) * mat.normal_scale, (nt[2] * 2.0 - 1.0).max(1e-4));
+                n = t.mul(tn.x).add(bit.mul(tn.y)).add(n.mul(tn.z)).norm();
+            }
+            let tex = sample_map(model, mat.base_texture, uv).unwrap_or([1.0; 4]);
+            let base = std::array::from_fn::<_, 3, _>(|i| (mat.base_color[i] * tex[i] * vc[i]).max(0.0));
+            let mr = sample_map(model, mat.mr_texture, uv).unwrap_or([1.0; 4]);
+            let metallic = (mat.metallic * mr[2]).clamp(0.0, 1.0);
+            let rough = (mat.roughness * mr[1]).clamp(0.0, 1.0);
+            let occ = sample_map(model, mat.occlusion_texture, uv).map(|x| 1.0 + mat.occlusion_strength * (x[0] - 1.0)).unwrap_or(1.0);
+            let et = sample_map(model, mat.emissive_texture, uv).unwrap_or([1.0; 4]);
+            let emissive = std::array::from_fn::<_, 3, _>(|i| mat.emissive[i] * et[i]);
+            let mut alpha = mat.base_color[3] * tex[3] * vc[3] * p.opacity;
+            match mat.alpha_mode {
+                crate::model::AlphaMode::Opaque => alpha = p.opacity,
+                crate::model::AlphaMode::Mask => { if alpha < mat.alpha_cutoff { continue; } alpha = p.opacity; }
+                crate::model::AlphaMode::Blend => {}
+            }
+            if alpha <= 0.0 { continue; }
+            let col = shade_pbr(n, view, light, base, metallic, rough, occ, emissive, alpha.clamp(0.0, 1.0), mat.unlit);
+            if blend {
+                let dst = &mut buf.px[idx];
+                super::over(dst, col);
+            } else {
+                buf.z[idx] = iz;
+                buf.px[idx] = col;
+            }
+        }
+    }
+}
+
+fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam: (f32, f32, f32)) {
+    if p.model_path.is_empty() { return; }
+    let Ok(model) = crate::model::load_cached(std::path::Path::new(&p.model_path)) else { return };
+    let anim = if p.model_anim >= 0 { Some(p.model_anim as usize) } else { None };
+    let time = p.model_time + if p.model_play { cx.seconds as f32 * p.model_speed } else { 0.0 };
+    let pose = model.pose(anim, time, p.model_loop);
+    let center = std::array::from_fn::<_, 3, _>(|i| (model.bounds.0[i] + model.bounds.1[i]) * 0.5);
+    let extent = (0..3).map(|i| model.bounds.1[i] - model.bounds.0[i]).fold(0.0f32, f32::max).max(1e-6);
+    let fit = p.size * p.scale / extent;
+    let off = V3::new(0.0, 0.0, p.z);
+    // glTF is right-handed Y-up, +Z toward the viewer. The object renderer looks down +Z with
+    // Y down, so rotate 180° about X: (x, y, z) -> (x, -y, -z), preserving winding.
+    let place = |v: crate::model::Vertex| {
+        let local = V3::new((v.pos[0] - center[0]) * fit, -(v.pos[1] - center[1]) * fit, -(v.pos[2] - center[2]) * fit);
+        let n = V3::new(v.normal[0], -v.normal[1], -v.normal[2]);
+        let t = V3::new(v.tangent[0], -v.tangent[1], -v.tangent[2]);
+        ModelVert { p: rotate(local, p.rot).add(off), n: rotate(n, p.rot), tangent: rotate(t, p.rot), tangent_w: v.tangent[3], uv: v.uv, color: v.color }
+    };
+    let mut prepared: Vec<(&crate::model::Primitive, Vec<ModelVert>)> = Vec::new();
+    let (mut bx0, mut by0, mut bx1, mut by1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let mut any = false;
+    for inst in &model.instances {
+        for prim in &model.meshes[inst.mesh].prims {
+            let verts: Vec<ModelVert> = (0..prim.verts.len()).map(|i| place(model.skin_vertex(&pose, inst, prim, i))).collect();
+            for t in prim.indices.chunks_exact(3) {
+                let tri = [verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]];
+                for clipped in clip_near(tri) {
+                    for v in clipped {
+                        if let Some((x, y, _)) = project(v.p, cam.0, cam.1, cam.2) {
+                            any = true; bx0 = bx0.min(x); by0 = by0.min(y); bx1 = bx1.max(x); by1 = by1.max(y);
+                        }
+                    }
+                }
+            }
+            prepared.push((prim, verts));
+        }
+    }
+    if !any { return; }
+    let Some(mut buf) = Buf::new(img, (bx0, by0, bx1, by1)) else { return };
+    let light = V3::new(p.light.x, p.light.y, -p.light.z).norm();
+    // Opaque/mask first. Transparent triangles are sorted far-to-near and depth-tested against
+    // the opaque buffer, but do not write depth themselves.
+    let mut transparent: Vec<(usize, usize, f32)> = Vec::new();
+    let draw_list: Vec<(&crate::model::Primitive, &[ModelVert])> = prepared.iter().map(|(prim, verts)| (*prim, verts.as_slice())).collect();
+    for (ti, (prim, verts)) in draw_list.iter().enumerate() {
+        let mat = model.material(prim.material);
+        for (ii, t) in prim.indices.chunks_exact(3).enumerate() {
+            let tri = [verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]];
+            let depth = (tri[0].p.z + tri[1].p.z + tri[2].p.z) / 3.0;
+            if mat.alpha_mode == crate::model::AlphaMode::Blend {
+                transparent.push((ti, ii, depth));
+                continue;
+            }
+            for clipped in clip_near(tri) {
+                let Some(a) = project(clipped[0].p, cam.0, cam.1, cam.2) else { continue };
+                let Some(b) = project(clipped[1].p, cam.0, cam.1, cam.2) else { continue };
+                let Some(c) = project(clipped[2].p, cam.0, cam.1, cam.2) else { continue };
+                model_tri(&mut buf, [a, b, c], clipped, &model, mat, p, light, false);
+            }
+        }
+    }
+    transparent.sort_by(|a, b| b.2.total_cmp(&a.2));
+    for (ti, ii, _) in transparent {
+        let (prim, verts) = draw_list[ti];
+        let mat = model.material(prim.material);
+        let t = &prim.indices[ii * 3..ii * 3 + 3];
+        for clipped in clip_near([verts[t[0] as usize], verts[t[1] as usize], verts[t[2] as usize]]) {
+            let Some(a) = project(clipped[0].p, cam.0, cam.1, cam.2) else { continue };
+            let Some(b) = project(clipped[1].p, cam.0, cam.1, cam.2) else { continue };
+            let Some(c) = project(clipped[2].p, cam.0, cam.1, cam.2) else { continue };
+            model_tri(&mut buf, [a, b, c], clipped, &model, mat, p, light, true);
+        }
+    }
+    buf.composite(img);
+}
+
 pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     if img.w == 0 || img.h == 0 {
         return;
@@ -690,6 +936,10 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     // but well over a thousand at 1080p, which put every object outside the frame.
     let cam = (p.pos.0, p.pos.1, (img.h as f32).max(1.0));
     let off = V3::new(0.0, 0.0, p.z);
+    if p.mesh == 7 {
+        draw_model(img, e, &p, cx, cam);
+        return;
+    }
     let place = |v: Vert| Vert { p: rotate(v.p, p.rot).add(off), n: rotate(v.n, p.rot) };
     if p.mesh == 6 {
         let cs = text_contours(&p);

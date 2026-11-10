@@ -398,13 +398,21 @@ impl Model {
         let mut world = vec![math::IDENTITY; self.nodes.len()];
         let mut done = vec![false; self.nodes.len()];
         for i in 0..self.nodes.len() { self.resolve(i, &tr, &rot, &scale, &mut world, &mut done, 0); }
-        let skins = self.skins.iter().map(|s| {
-            s.joints.iter().enumerate().map(|(j, &node)| {
+        let mut skins = Vec::with_capacity(self.skins.len());
+        let mut skin_normals = Vec::with_capacity(self.skins.len());
+        for s in &self.skins {
+            let mut joints = Vec::with_capacity(s.joints.len());
+            let mut normals = Vec::with_capacity(s.joints.len());
+            for (j, &node) in s.joints.iter().enumerate() {
                 let ibm = s.inverse_bind.get(j).copied().unwrap_or(math::IDENTITY);
-                math::mul(world.get(node).unwrap_or(&math::IDENTITY), &ibm)
-            }).collect()
-        }).collect();
-        Pose { world, skins, weights }
+                let m = math::mul(world.get(node).unwrap_or(&math::IDENTITY), &ibm);
+                normals.push(math::normal_matrix(&m));
+                joints.push(m);
+            }
+            skins.push(joints);
+            skin_normals.push(normals);
+        }
+        Pose { world, skins, skin_normals, weights }
     }
 
     fn resolve(&self, i: usize, tr: &[[f32; 3]], rot: &[[f32; 4]], scale: &[[f32; 3]], world: &mut [Mat4], done: &mut [bool], depth: usize) {
@@ -435,26 +443,23 @@ impl Model {
             }
         }
         if let Some(mats) = inst.skin.and_then(|s| pose.skins.get(s)) {
-            let (mut v0, mut v1, mut v2, mut v3) = ([0.0f32; 3], [0.0f32; 3], [0.0f32; 3], [0.0f32; 3]);
+            let (mut v0, mut v1, mut v2) = ([0.0f32; 3], [0.0f32; 3], [0.0f32; 3]);
             let mut total = 0.0f32;
-            let mut normal_mat = None;
             for k in 0..4 {
                 let weight = v.weights[k];
                 if weight <= 0.0 || !weight.is_finite() { continue; }
                 let Some(m) = mats.get(v.joints[k] as usize) else { continue };
                 let p = math::point(m, v.pos);
-                let n = math::vector(m, v.normal);
+                let nm = pose.skin_normals.get(inst.skin.unwrap_or(0)).and_then(|x| x.get(v.joints[k] as usize)).unwrap_or(&math::IDENTITY);
+                let n = math::vector(nm, v.normal);
                 let t = math::vector(m, [v.tangent[0], v.tangent[1], v.tangent[2]]);
                 for c in 0..3 { v0[c] += weight * p[c]; v1[c] += weight * n[c]; v2[c] += weight * t[c]; }
-                v3[0] += weight;
                 total += weight;
-                if normal_mat.is_none() { normal_mat = Some(math::normal_matrix(m)); }
             }
             if total > 1e-6 {
                 v.pos = v0;
-                // Linear-blend normals are approximate under non-uniform joint scale. Use the
-                // dominant joint's inverse transpose rather than stretching normals with joints.
-                v.normal = math::norm(math::vector(&normal_mat.unwrap_or(math::IDENTITY), v1));
+                // Each joint transforms normals by its own inverse transpose before blending.
+                v.normal = math::norm(v1);
                 let tangent = math::norm(v2);
                 v.tangent[..3].copy_from_slice(&tangent);
                 return v;
@@ -477,6 +482,8 @@ impl Model {
 pub struct Pose {
     pub world: Vec<Mat4>,
     pub skins: Vec<Vec<Mat4>>,
+    /// Inverse-transpose joint matrices for normals under non-uniform scale.
+    pub skin_normals: Vec<Vec<Mat4>>,
     /// One weight list per node (not per mesh).
     pub weights: Vec<Vec<f32>>,
 }
