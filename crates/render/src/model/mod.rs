@@ -11,7 +11,7 @@ pub mod gltf;
 pub mod math;
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Path as FilePath, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -358,7 +358,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn load(path: &Path) -> Result<Arc<Model>, String> {
+    pub fn load(path: &FilePath) -> Result<Arc<Model>, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Model".into());
         Ok(Arc::new(gltf::parse(&bytes, path.parent().unwrap_or(Path::new(".")), name)?))
@@ -490,7 +490,7 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, Cached>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn load_cached(path: &Path) -> Result<Arc<Model>, String> {
+pub fn load_cached(path: &FilePath) -> Result<Arc<Model>, String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (modified, len) = (meta.modified().ok(), meta.len());
     if let Ok(map) = cache().lock() {
@@ -507,7 +507,7 @@ pub fn load_cached(path: &Path) -> Result<Arc<Model>, String> {
     Ok(model)
 }
 
-pub fn invalidate(path: &Path) {
+pub fn invalidate(path: &FilePath) {
     if let Ok(mut map) = cache().lock() { map.remove(path); }
 }
 

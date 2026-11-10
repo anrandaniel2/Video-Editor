@@ -346,7 +346,7 @@ fn flat_normals(verts: &mut Vec<Vertex>, indices: &mut Vec<u32>) {
 }
 
 fn read_primitive(p: &Value, accessors: &[Accessor], materials: usize, vertex_budget: &mut usize, triangle_budget: &mut usize) -> Result<Option<Primitive>> {
-    let mode = uint(p, "mode", 4);
+    let mode = uint(p, "mode", 4) as u64;
     if mode < 4 { return Ok(None); } // point/line primitives are not solid surfaces
     for ext in ["KHR_draco_mesh_compression", "EXT_meshopt_compression"] {
         if obj(p, "extensions").get(ext).is_some() { return err(format!("{ext} is not supported; export an uncompressed GLB")); }
