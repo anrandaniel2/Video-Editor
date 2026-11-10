@@ -361,7 +361,7 @@ impl Model {
     pub fn load(path: &FilePath) -> Result<Arc<Model>, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Model".into());
-        Ok(Arc::new(gltf::parse(&bytes, path.parent().unwrap_or(Path::new(".")), name)?))
+        Ok(Arc::new(gltf::parse(&bytes, path.parent().unwrap_or(FilePath::new(".")), name)?))
     }
 
     pub fn animation(&self, index: Option<usize>) -> Option<&Animation> {
