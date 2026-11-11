@@ -79,7 +79,7 @@ fun Object3DPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
         "3D Object", close, modifier, tag = "object3d_panel",
         actions = {
             if (state?.hasObject == true) {
-                PanelAction(LucideIcons.Timer.glyph(), "Toggle keyframes", { ed.toggleObjectAnimation() }, tag = "object3d_keyframe")
+                PanelAction(LucideIcons.ChartSpline.glyph(), "Keyframes", { ed.panel = Panel.Keyframes }, tag = "object3d_keyframe")
             }
         },
     ) {

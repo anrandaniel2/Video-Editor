@@ -1218,3 +1218,36 @@ fn negative_place_and_marker_times_are_refused() {
     s.execute("markers.add", json!({"frame": 0, "name": "start"})).unwrap();
     assert!(s.active_sequence().unwrap().markers.iter().any(|m| m.start == Tick::ZERO && m.name == "start"));
 }
+
+
+#[test]
+fn animation_lanes_expose_values_keys_masks_and_curve_presets() {
+    let mut s=demo();
+    let it=s.active_sequence().unwrap().video_tracks[0].items[1].clone();
+    let c=it.id.0;
+    let start=it.start.0;
+    let end=(it.end()-s.sequence_rate().frame_duration()).0;
+    for (t,v) in [(start,0.0),(end,100.0)] {
+        s.execute("effects.setParam",json!({"clip":c,"effect":"motion","param":"scale","time":t,"value":v,"keyframe":true})).unwrap();
+    }
+    let out=s.execute("animation.list",json!({"clip":c})).unwrap();
+    let lane=out["lanes"].as_array().unwrap().iter().find(|l|l["param"]=="scale").unwrap();
+    assert!(lane["animated"].as_bool().unwrap());
+    let keys=lane["keys"].as_array().unwrap();
+    assert_eq!(keys.len(),2);
+    assert_eq!(keys[0]["timeline"],start);
+    let address=json!({"clip":c,"effect":lane["effect"],"param":"scale","mediaTime":keys[0]["time"],"preset":"strong"});
+    s.execute("animation.curve",address).unwrap();
+    let out=s.execute("animation.list",json!({"clip":c})).unwrap();
+    let lane=out["lanes"].as_array().unwrap().iter().find(|l|l["param"]=="scale").unwrap();
+    assert_eq!(lane["keys"][0]["interpolation"],"Bezier");
+    assert_eq!(lane["keys"][0]["outInfluence"],0.75);
+    // Masks share the same lanes and keyframe commands, including the complete path value.
+    let effect=lane["effect"].as_u64().unwrap() as usize;
+    s.edit_sequence("Add test mask",|q,_,_| {
+        q.find_item_mut(it.id).unwrap().1.effects[effect].masks.push(filmcraft_project::mask::Mask::new("Test mask",filmcraft_project::mask::MaskPath::rect(0.0,0.0,100.0,100.0)));
+        Ok(())
+    }).unwrap();
+    let out=s.execute("animation.list",json!({"clip":c})).unwrap();
+    assert!(out["lanes"].as_array().unwrap().iter().any(|l|l["mask"]==0 && l["param"]=="path" && l["value"]["vertices"].is_array()));
+}

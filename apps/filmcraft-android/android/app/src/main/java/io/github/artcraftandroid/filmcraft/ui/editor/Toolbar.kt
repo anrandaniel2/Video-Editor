@@ -150,7 +150,8 @@ private fun clipTools(ed: EditorController, c: ClipInfo): List<Tool> {
         Tool("editor_tool_flip_h", "Mirror", LucideIcons.FlipVertical2.glyph()) { ed.toggleMirror() },
         Tool("editor_tool_flip_v", "Flip", LucideIcons.FlipHorizontal2.glyph()) { ed.toggleFlip() },
     )
-    return when (c.kind) {
+    val animation = Tool("editor_tool_keyframes", "Keyframes", LucideIcons.ChartSpline.glyph(), active = ed.panel == Panel.Keyframes) { ed.panel = Panel.Keyframes }
+    return (if (c.kind != ClipKind.MISSING) listOf(animation) else emptyList()) + when (c.kind) {
         ClipKind.MISSING -> listOf(delete, replace)
         ClipKind.TEXT -> if (c.has3d) listOf(
             Tool("editor_tool_3d", "3D", LucideIcons.Layers.glyph(), active = ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D },

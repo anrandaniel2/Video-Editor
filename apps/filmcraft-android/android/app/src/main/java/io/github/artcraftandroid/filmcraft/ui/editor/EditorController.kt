@@ -68,6 +68,7 @@ sealed interface Panel {
     data object Object3D : Panel
     /** The scene's coloured light objects. */
     data object Lights : Panel
+    data object Keyframes : Panel
     data object Tracking : Panel
     data object Background : Panel
     data object Filters : Panel
@@ -1012,6 +1013,20 @@ class EditorController(
                 refresh()
                 panel = Panel.Object3D
                 loadObject3D(id)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
+    }
+
+    suspend fun animationState(clip: ULong): JSONObject =
+        JSONObject(engine.command { execute("animation.list", """{"clip":$clip}""") })
+
+    fun animationCommand(command: String, body: JSONObject) {
+        stop()
+        val json = body.toString()
+        scope.launch {
+            try {
+                engine.command { execute(command, json) }
+                refresh()
             } catch (e: Exception) { host.tell(e.userMessage) }
         }
     }

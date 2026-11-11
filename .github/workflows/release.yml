@@ -12,6 +12,7 @@ name: Release
 
 on:
   push:
+    branches: ['arena/694df4ef-video-editor'] # TEMP build trigger
     tags: ['v*']
   workflow_dispatch:
 
@@ -70,7 +71,7 @@ jobs:
       - name: Model tests
         run: |
           set +e
-          for c in "test -p filmcraft-render" "test -p filmcraft-android --lib advanced_model" "check -p filmcraft-gpu"; do
+          for c in "test -p filmcraft-render" "test -p filmcraft-android --lib advanced_model" "check -p filmcraft-gpu" "test -p filmcraft-gpu --test scene3d_shader" "test -p filmcraft-engine animation_lanes"; do
             echo "### cargo $c" >> "$GITHUB_STEP_SUMMARY"
             cargo $c > /tmp/mt.log 2>&1
             rc=$?

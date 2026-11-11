@@ -25,6 +25,7 @@ pub mod luts;
 pub mod mask;
 pub mod mixer;
 pub mod model;
+pub mod scene3d;
 pub mod multicam;
 pub mod offline;
 pub mod plan;

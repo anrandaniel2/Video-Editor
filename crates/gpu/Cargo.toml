@@ -28,6 +28,7 @@ rayon = { workspace = true }
 wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "gles"] }
 
 [dev-dependencies]
+naga = { version = "30", features = ["wgsl-in"] }
 pollster = "1"
 filmcraft-export = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }

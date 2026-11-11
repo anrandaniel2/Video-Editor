@@ -84,7 +84,7 @@ fn mark_device_failed(why: &str) {
     }
 }
 
-fn device_failed() -> bool {
+pub(crate) fn device_failed() -> bool {
     DEVICE_FAILED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
@@ -141,6 +141,10 @@ impl ExportRenderer {
         }
         let compositor = GpuCompositor::new(&device, &queue);
         Some(Self { _instance: instance, device, queue, compositor })
+    }
+
+    pub(crate) fn graphics_device(&self) -> (wgpu::Device, wgpu::Queue) {
+        (self.device.clone(), self.queue.clone())
     }
 
     /// What this renderer's device runs: frames are planned with it, here and by the export

@@ -25,6 +25,7 @@ pub(crate) fn register() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
+        filmcraft_gpu::scene3d::register();
         filmcraft_export::register_frame_renderer(|| {
             let r = filmcraft_gpu::ExportRenderer::new()?;
             Some(Box::new(GpuFrames(r)) as Box<dyn FrameRenderer>)

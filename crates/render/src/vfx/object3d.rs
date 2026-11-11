@@ -17,6 +17,9 @@ use rayon::prelude::*;
 
 use super::{bv, chv, cv, fv, lin, smoothstep, tv};
 
+mod gpu;
+use gpu::gpu_scene;
+
 #[derive(Clone, Copy, Debug)]
 struct V3 {
     x: f32,
@@ -1096,6 +1099,12 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         return;
     }
     let p = read_params(e, cx, img);
+    if crate::scene3d::available() {
+        if let Some(layer) = gpu_scene(img, &p, cx).and_then(|scene| crate::scene3d::render(&scene)) {
+            crate::blend::composite(img, &layer, 1.0, crate::Blend::Normal);
+            return;
+        }
+    }
     if p.opacity <= 0.0 || p.scale <= 0.0 {
         return;
     }

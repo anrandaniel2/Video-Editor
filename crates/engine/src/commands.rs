@@ -3647,6 +3647,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::media_browser::commands());
     v.extend(crate::paste_media::commands());
     v.extend(crate::lighting::commands());
+    v.extend(crate::animation::commands());
     // Edit ▸ Label ▸ <colour>, Paste Attributes, subclips, Video / Audio Options, Replace With Clip…
     // and their menu order
     crate::clip_ops::apply_layout(&mut v);
@@ -3864,7 +3865,7 @@ pub(crate) fn json_to_param(template: &ParamValue, v: &Value) -> Option<ParamVal
 }
 
 /// Encode the accepted parameter value in the JSON shape returned to command callers.
-fn param_value_to_json(value: &ParamValue) -> Value {
+pub(crate) fn param_value_to_json(value: &ParamValue) -> Value {
     match value {
         ParamValue::Float(value) => json!(value),
         ParamValue::Vec2(value) => json!([value.x, value.y]),
