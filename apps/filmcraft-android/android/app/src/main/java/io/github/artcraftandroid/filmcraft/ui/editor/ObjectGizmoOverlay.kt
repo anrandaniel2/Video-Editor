@@ -19,9 +19,9 @@ import io.github.artcraftandroid.filmcraft.ui.SelectChip
 import java.util.UUID
 import kotlin.math.*
 
-private val axisColors=listOf(Color(0xFFFF6575),Color(0xFF6FE295),Color(0xFF669FFF),Color.White)
+private val axisColors=listOf(Color(0xFFFF6575),Color(0xFF6FE295),Color(0xFF669FFF))
 
-/** Depth-sorted 3D cone/cylinder, torus and cube meshes, projected through the object's actual
+/** Depth-sorted 3D cone/cylinder and torus meshes, projected through the object's actual
  * camera and layer placement. Picking uses these same meshes. A free one-finger drag and a
  * two-finger twist never move/rotate a 3D object; a pinch still uniformly scales it.
  */
@@ -74,12 +74,6 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                     current=when(mode) {
                         GizmoMode.Move -> initial.move(current,active,drag)
                         GizmoMode.Rotate -> rotateGizmoLocal(current,active,geometry(current).rotationDelta(active,point-drag,drag))
-                        GizmoMode.Scale -> {
-                            val tangent=if(active<3)initial.endpoint(active)-initial.centre else androidx.compose.ui.geometry.Offset(1f,-1f)
-                            val length=tangent.getDistance()
-                            val amount=if(length>1f)(drag.x*tangent.x+drag.y*tangent.y)/length/62.dp.toPx() else (drag.x-drag.y)/120.dp.toPx()
-                            current.copy(scale=(current.scale*exp(amount.toDouble())).coerceIn(0.1,400.0))
-                        }
                     }
                     previous=point
                     ed.setObject(current,token);changed=true

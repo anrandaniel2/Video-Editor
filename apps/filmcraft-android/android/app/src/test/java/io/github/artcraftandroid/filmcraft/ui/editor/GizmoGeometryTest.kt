@@ -55,9 +55,9 @@ class GizmoGeometryTest {
     }
     @Test fun handlesHaveRealFacesAndPickingUsesTheirProjection() {
         val g=geometry(settings().copy(rotationX=20.0,rotationY=35.0))
-        val faces=g.faces(GizmoMode.Scale)
-        assertEquals(setOf(0,1,2,3),faces.map {it.axis}.toSet())
+        val faces=g.faces(GizmoMode.Move)
+        assertEquals(setOf(0,1,2),faces.map {it.axis}.toSet())
         assertTrue(faces.zipWithNext().all {(a,b)->a.depth>=b.depth})
-        assertEquals(0,g.hit(g.endpoint(0),GizmoMode.Scale,12f))
+        assertEquals(0,g.hit(g.endpoint(0),GizmoMode.Move,12f))
     }
 }

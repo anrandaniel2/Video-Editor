@@ -24,7 +24,7 @@ internal data class GizmoPoint(val screen:Offset,val depth:Double)
 internal data class GizmoFace(val axis:Int,val points:List<GizmoPoint>,val brightness:Float,val behind:Boolean) {
     val depth get()=points.sumOf {it.depth}/points.size
 }
-internal enum class GizmoMode { Move,Rotate,Scale }
+internal enum class GizmoMode { Move,Rotate }
 
 /** Uses precisely the object's camera (+Z, principal point at x/y, focal length = layer height),
  * Rx/Ry/Rz convention, and its layer's 2D placement. Gizmos are meshes in this 3D coordinate
@@ -64,10 +64,6 @@ internal class GizmoGeometry(val settings:Object3DSettings,private val layer:Pla
             faces+=GizmoFace(axis,projected,brightness,world.sumOf {it.z}/3>origin.z)
         }
         fun quad(axis:Int,a:GizmoVec,b:GizmoVec,c:GizmoVec,d:GizmoVec) {triangle(axis,a,b,c);triangle(axis,a,c,d)}
-        fun cube(axis:Int,center:GizmoVec,size:Double) {
-            val v=(0..7).map {i->center+GizmoVec(if((i and 1)==0)-size else size,if((i and 2)==0)-size else size,if((i and 4)==0)-size else size)}
-            for(q in listOf(listOf(0,1,3,2),listOf(4,6,7,5),listOf(0,4,5,1),listOf(2,3,7,6),listOf(0,2,6,4),listOf(1,5,7,3)))quad(axis,v[q[0]],v[q[1]],v[q[2]],v[q[3]])
-        }
         for(axis in 0..2) {
             val direction=gizmoBasis[axis];val u=gizmoBasis[(axis+1)%3];val v=gizmoBasis[(axis+2)%3]
             when(mode) {
@@ -79,15 +75,6 @@ internal class GizmoGeometry(val settings:Object3DSettings,private val layer:Pla
                         quad(axis,direction*(radius*0.14)+ra*(radius*0.024),direction*(radius*0.78)+ra*(radius*0.024),direction*(radius*0.78)+rb*(radius*0.024),direction*(radius*0.14)+rb*(radius*0.024))
                         triangle(axis,direction*radius,direction*(radius*0.74)+ra*(radius*0.085),direction*(radius*0.74)+rb*(radius*0.085))
                         triangle(axis,direction*(radius*0.74),direction*(radius*0.74)+rb*(radius*0.085),direction*(radius*0.74)+ra*(radius*0.085))
-                    }
-                }
-                GizmoMode.Scale -> {
-                    // Three real cube handles; the object supports uniform scaling only.
-                    cube(axis,direction*radius,radius*0.075)
-                    for(i in 0..3) {
-                        val a=i*PI/2;val b=(i+1)*PI/2
-                        val ra=(u*cos(a)+v*sin(a))*(radius*0.018);val rb=(u*cos(b)+v*sin(b))*(radius*0.018)
-                        quad(axis,ra,direction*radius+ra,direction*radius+rb,rb)
                     }
                 }
                 GizmoMode.Rotate -> {
@@ -107,7 +94,6 @@ internal class GizmoGeometry(val settings:Object3DSettings,private val layer:Pla
                 }
             }
         }
-        if(mode==GizmoMode.Scale)cube(3,GizmoVec(0.0,0.0,0.0),radius*0.09)
         return faces.sortedByDescending {it.depth}
     }
     fun hit(point:Offset,mode:GizmoMode,tolerance:Float):Int {
