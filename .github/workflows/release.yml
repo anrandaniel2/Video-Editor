@@ -77,9 +77,9 @@ jobs:
             rc=$?
             if [ $rc -ne 0 ]; then
               echo "exit $rc" >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
               tail -150 /tmp/mt.log >> "$GITHUB_STEP_SUMMARY"
-              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              msg=$(tail -c 3500 /tmp/mt.log | sed -z 's/%/%25/g; s/\n/%0A/g')
+              echo "::error title=cargo $c failed::$msg"
               cat /tmp/mt.log
               exit $rc
             fi
