@@ -1447,3 +1447,18 @@ fn advanced_model_gesture_placement_keeps_animation_at_the_playhead() {
     let out:serde_json::Value=serde_json::from_str(&m.execute("animation.list".into(),serde_json::json!({"clip":id}).to_string()).unwrap()).unwrap();
     assert!(out["lanes"].as_array().unwrap().iter().all(|l|l["animated"]==true));
 }
+
+
+#[test]
+fn advanced_model_transform_gestures_have_separate_undo_steps() {
+    let m=MobileSession::new();
+    m.new_project("Gesture undo".into(),1080,1920,30).unwrap();
+    let id=m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    let initial=m.placement(id).unwrap();
+    m.set_placement(id,300.0,700.0,1.0,0.0,false).unwrap();
+    m.set_placement(id,320.0,720.0,1.0,0.0,true).unwrap();
+    m.set_placement(id,500.0,900.0,1.0,0.0,false).unwrap();
+    m.set_placement(id,520.0,920.0,1.0,0.0,true).unwrap();
+    m.undo();assert_eq!(m.placement(id).unwrap().x,320.0);
+    m.undo();assert_eq!(m.placement(id).unwrap().x,initial.x);
+}

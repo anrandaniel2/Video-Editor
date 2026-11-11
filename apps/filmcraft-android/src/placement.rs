@@ -78,6 +78,7 @@ pub(crate) fn set_placement(s: &mut Session, id: u64, x: f64, y: f64, scale: f64
     let base = now.width.max(1.0);
     let scale = scale.clamp(MIN_WIDTH * fw / base, max * fw / base);
     let key = format!("place:{id}");
+    if !merge { s.history.merge_key = None; }
     if text {
         // a text layer is placed by its anchor: move that by however far the centre moves
         let v = edits::ex(s, "graphics.list", json!({"clip": id}))?;
@@ -86,14 +87,12 @@ pub(crate) fn set_placement(s: &mut Session, id: u64, x: f64, y: f64, scale: f64
         let py = l["position"][1].as_f64().unwrap_or(now.y);
         let props = json!({"position": [px + x - now.x, py + y - now.y], "scale": scale * 100.0, "rotation": rotation});
         let mut q = json!({"clip": id, "layer": 0, "props": props});
-        if merge {
-            q["merge"] = json!(key);
-        }
+        q["merge"] = json!(key);
         edits::ex(s, "graphics.set", q)?;
         return Ok(());
     }
     let playhead = s.playhead();
-    s.edit_sequence_as("Transform", merge.then_some(key.as_str()), |q, _, _| {
+    s.edit_sequence_as("Transform", Some(key.as_str()), |q, _, _| {
         let c = q.find_item_mut(ClipId(id)).map(|x| x.1).ok_or_else(|| EngineError::Other("clip gone".into()))?;
         let mt = c.effect_time_at(playhead.clamp(c.start, (c.end() - filmcraft_time::Tick(1)).max(c.start)));
         let m = c.effects.iter_mut().find(|e| e.effect == "motion").ok_or_else(|| EngineError::Other("no motion".into()))?;

@@ -744,21 +744,39 @@ class EditorController(
 
     /** Move/scale/turn a clip while a finger does it: one undo step per gesture. */
     fun setPlacement(clip: ULong, p: io.github.artcraftandroid.filmcraft.core.Placement, merge: Boolean) {
+        pendingPlacement = clip to p
+        if (!merge) placementBegin = true
+        if (placementJob?.isActive == true) return
         placementJob = scope.launch {
-            runCatching { engine.command { setPlacement(clip, p.x, p.y, p.scale, p.rotation, merge) } }
-            refreshSoon()
+            while (true) {
+                val next = pendingPlacement ?: break
+                pendingPlacement = null
+                val begin = placementBegin
+                placementBegin = false
+                runCatching { engine.command { setPlacement(next.first, next.second.x, next.second.y, next.second.scale, next.second.rotation, !begin) } }
+                refreshSoon()
+                delay(16)
+            }
         }
     }
 
+    private var pendingPlacement: Pair<ULong, io.github.artcraftandroid.filmcraft.core.Placement>? = null
+    private var placementBegin = false
     private var placementJob: Job? = null
     private var refreshJob: Job? = null
+    private var refreshPending = false
 
-    /** Re-read the timeline once things calm down (a gesture sends many edits). */
+    /** Throttle, rather than debounce: the image must keep updating while fingers are down.
+     * An edit received during refresh requests one more pass, including the final position. */
     private fun refreshSoon() {
-        refreshJob?.cancel()
+        refreshPending = true
+        if (refreshJob?.isActive == true) return
         refreshJob = scope.launch {
-            delay(60)
-            refresh()
+            while (refreshPending) {
+                refreshPending = false
+                delay(40)
+                refresh()
+            }
         }
     }
 
