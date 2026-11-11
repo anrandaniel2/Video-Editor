@@ -66,12 +66,25 @@ jobs:
           key: release-android
 
       # The rig/animation maths and the GLB parser run against an independent reference
-      # implementation in tests/rigging.rs; a red step here is a broken build.
+      # implementation in tests/rigging.rs; a red step here is a broken build. Failures
+      # are echoed into the job summary so the output is readable from the run view.
       - name: Model tests
         run: |
-          cargo test -p filmcraft-render
-          cargo test -p filmcraft-android --lib advanced_model
-          cargo check -p filmcraft-gpu
+          set +e
+          for c in "test -p filmcraft-render" "test -p filmcraft-android --lib advanced_model" "check -p filmcraft-gpu"; do
+            echo "### cargo $c" >> "$GITHUB_STEP_SUMMARY"
+            cargo $c > /tmp/mt.log 2>&1
+            rc=$?
+            if [ $rc -ne 0 ]; then
+              echo "exit $rc" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              tail -150 /tmp/mt.log >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              cat /tmp/mt.log
+              exit $rc
+            fi
+            echo ok >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Install cargo-ndk and the Android NDK
         run: |
