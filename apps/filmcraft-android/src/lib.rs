@@ -423,6 +423,11 @@ impl MobileSession {
         self.main_edit(|s| edits::add_media(s, &paths))
     }
 
+    /// Place a transparent drawing above the preview, without inserting into the main track.
+    pub fn add_drawing(&self, path: String) -> Result<Vec<u64>, MobileError> {
+        edits::add_drawing(&mut self.lock(), &path)
+    }
+
     /// Add sound files at the playhead on free audio lanes.
     pub fn add_audio(&self, paths: Vec<String>) -> Result<Vec<u64>, MobileError> {
         edits::add_audio(&mut self.lock(), &paths)

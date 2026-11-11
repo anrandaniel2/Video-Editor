@@ -198,6 +198,23 @@ pub(crate) fn add_media(s: &mut Session, paths: &[String]) -> Result<Vec<u64>, M
     Ok(r)
 }
 
+pub(crate) fn add_drawing(s: &mut Session, path: &str) -> Result<Vec<u64>, MobileError> {
+    let items = import(s, &[path.to_string()])?;
+    let out = s.edit_group("Add Drawing", |s| {
+        let ph = s.playhead();
+        let mut out = Vec::new();
+        for item in items {
+            let len = item_duration(s, item);
+            let lane = free_lane(s, TrackKind::Video, 1, None, ph, ph + len, None).map_err(|e| other(e.to_string()))?;
+            let r = s.execute("timeline.place", json!({"item": item, "time": ph.0, "track": lane}))?;
+            out.extend(clips_of(&r, "clips"));
+        }
+        Ok(out)
+    })?;
+    select_one(s, out.first().copied())?;
+    Ok(out)
+}
+
 fn item_duration(s: &Session, item: u64) -> Tick {
     match s.project.item(ItemId(item)).map(|p| &p.kind) {
         Some(filmcraft_project::ItemKind::Media(m)) if m.info.duration > Tick::ZERO => m.info.duration,

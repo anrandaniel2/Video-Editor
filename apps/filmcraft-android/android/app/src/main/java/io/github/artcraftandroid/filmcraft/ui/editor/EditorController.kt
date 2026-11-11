@@ -601,7 +601,7 @@ class EditorController(
                     file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
                     file.absolutePath
                 }
-                engine.command { addMedia(listOf(path)) }
+                engine.command { addDrawing(path) }
                 panel = null
             } catch (e: Exception) { host.tell(e.userMessage) }
             finally { bitmap.recycle(); busy = null; refresh() }
