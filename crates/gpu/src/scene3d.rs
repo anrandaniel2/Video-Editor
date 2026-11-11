@@ -49,9 +49,9 @@ impl Renderer {
         const ATTRS: [wgpu::VertexAttribute;12]=wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x4,3=>Float32x4,4=>Float32x2,5=>Float32x2,6=>Float32x2,7=>Float32x2,8=>Float32x2,9=>Float32x4,10=>Float32x4,11=>Float32];
         let make_pipeline=|blend:bool| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label:Some(if blend {"3D transparent"} else {"3D opaque"}), layout:Some(&pipeline_layout),
-            vertex:wgpu::VertexState { module:&shader,entry_point:Some("vs"),compilation_options:Default::default(),buffers:&[wgpu::VertexBufferLayout { array_stride:132,step_mode:wgpu::VertexStepMode::Vertex,attributes:&ATTRS }] },
+            vertex:wgpu::VertexState { module:&shader,entry_point:Some("vs"),compilation_options:Default::default(),buffers:&[Some(wgpu::VertexBufferLayout { array_stride:132,step_mode:wgpu::VertexStepMode::Vertex,attributes:&ATTRS })] },
             primitive:wgpu::PrimitiveState { cull_mode:None,..Default::default() },
-            depth_stencil:Some(wgpu::DepthStencilState { format:wgpu::TextureFormat::Depth32Float,depth_write_enabled:!blend,depth_compare:wgpu::CompareFunction::LessEqual,stencil:Default::default(),bias:Default::default() }),
+            depth_stencil:Some(wgpu::DepthStencilState { format:wgpu::TextureFormat::Depth32Float,depth_write_enabled:Some(!blend),depth_compare:Some(wgpu::CompareFunction::LessEqual),stencil:Default::default(),bias:Default::default() }),
             multisample:wgpu::MultisampleState {count:4,..Default::default()},
             fragment:Some(wgpu::FragmentState { module:&shader,entry_point:Some("fs"),compilation_options:Default::default(),targets:&[Some(wgpu::ColorTargetState { format:wgpu::TextureFormat::Rgba16Float,blend:if blend {Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)} else {None},write_mask:wgpu::ColorWrites::ALL })] }),
             multiview_mask:None,cache:None,
@@ -173,7 +173,7 @@ impl Renderer {
         let (tx,rx)=std::sync::mpsc::channel();
         readback.slice(..).map_async(wgpu::MapMode::Read,move |r| {let _=tx.send(r);});
         crate::wait_mapped(&self.device,&rx)?;
-        let mapped=readback.slice(..).get_mapped_range();
+        let mapped=readback.slice(..).get_mapped_range().ok()?;
         let mut px=Vec::with_capacity(w as usize*h as usize*4);
         for line in mapped.chunks_exact(row as usize) {
             let line=line[..w as usize*8].to_vec();
