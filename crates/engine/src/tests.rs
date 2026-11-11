@@ -1251,3 +1251,18 @@ fn animation_lanes_expose_values_keys_masks_and_curve_presets() {
     let out=s.execute("animation.list",json!({"clip":c})).unwrap();
     assert!(out["lanes"].as_array().unwrap().iter().any(|l|l["mask"]==0 && l["param"]=="path" && l["value"]["vertices"].is_array()));
 }
+
+
+#[test]
+fn animation_lanes_all_enables_snapshots_and_freezes_every_parameter() {
+    let mut s=demo();
+    let c=s.active_sequence().unwrap().video_tracks[0].items[1].clone();
+    s.execute("animation.all",json!({"clip":c.id.0,"action":"enable"})).unwrap();
+    let first=s.execute("animation.list",json!({"clip":c.id.0})).unwrap();
+    assert!(first["lanes"].as_array().unwrap().iter().all(|l|l["animated"]==true));
+    s.execute("animation.all",json!({"clip":c.id.0,"action":"key"})).unwrap();
+    s.execute("animation.all",json!({"clip":c.id.0,"action":"disable"})).unwrap();
+    let frozen=s.execute("animation.list",json!({"clip":c.id.0})).unwrap();
+    assert!(frozen["lanes"].as_array().unwrap().iter().all(|l|l["keys"].as_array().unwrap().is_empty()));
+    assert!(s.execute("animation.all",json!({"clip":c.id.0,"action":"bad"})).is_err());
+}

@@ -46,6 +46,10 @@ pub fn commands()->Vec<CommandSpec> {
             }
         },
         CommandSpec {
+            id:"animation.all",label:"Animate All Properties",menu:&[],shortcut:None,
+            params:r#"{"clip":id,"action":"enable|disable|key"}"#,enabled:has_seq,journal:true,run:all,
+        },
+        CommandSpec {
             id:"animation.curve",label:"Animation Curve Preset",menu:&[],shortcut:None,params:r#"{"clip":id,"effect":index,"mask":index?,"param":str,"mediaTime":ticks,"preset":"linear|hold|easeIn|easeOut|easeInOut|strong"}"#,enabled:has_seq,journal:true,
             run:curve,
         }
@@ -75,6 +79,36 @@ fn curve(s:&mut Session,p:&Value)->Result<Value> {
         let i=pm.keyframes.iter().position(|k| k.time==time).ok_or_else(||bad(cmd,"keyframe does not exist"))?;
         pm.keyframes[i].interp=a; pm.keyframes[i].out_influence=influence;
         if let Some(next)=pm.keyframes.get_mut(i+1) {next.interp=b;next.in_influence=influence;}
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+
+fn all(s:&mut Session,p:&Value)->Result<Value> {
+    let cmd="animation.all";
+    let id=ClipId(p.get("clip").and_then(Value::as_u64).ok_or_else(||bad(cmd,"need clip"))?);
+    let action=p.get("action").and_then(Value::as_str).unwrap_or("enable");
+    if !matches!(action,"enable"|"disable"|"key") {return Err(bad(cmd,"unknown action"));}
+    let ph=s.playhead();
+    s.edit_sequence("Animate All Properties",|q,_,_| {
+        let (_,it)=q.find_item_mut(id).ok_or_else(||bad(cmd,"clip does not exist"))?;
+        let now=it.effect_time_at(ph.clamp(it.start,(it.end()-Tick(1)).max(it.start)));
+        let update=|param:&mut Param| {
+            match action {
+                "disable"=> {param.value=param.value_at(now);param.keyframes.clear();},
+                "key"=>param.add_keyframe(now),
+                _=>if !param.is_animated() {param.add_keyframe(now);},
+            }
+        };
+        for e in &mut it.effects {
+            if let Some(def)=e.def() {
+                for d in def.params.iter().filter(|d|d.animatable) {
+                    update(e.params.entry(d.id.to_string()).or_insert_with(||Param::new(d.default.clone())));
+                }
+            }
+            for m in &mut e.masks {for param in m.params_mut() {update(param);}}
+        }
         Ok(())
     })?;
     Ok(Value::Null)

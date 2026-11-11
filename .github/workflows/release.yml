@@ -12,6 +12,7 @@ name: Release
 
 on:
   push:
+    branches: ['arena/694df4ef-video-editor'] # TEMP gestures build
     tags: ['v*']
   workflow_dispatch:
 

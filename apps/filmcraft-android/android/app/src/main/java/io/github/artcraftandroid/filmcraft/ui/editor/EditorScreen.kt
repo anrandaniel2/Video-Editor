@@ -312,12 +312,14 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     val sel = ed.selectedClip
     val masking = ed.panel == Panel.Mask && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
     val advanced = (ed.panel == Panel.Background || ed.panel == Panel.Tracking) && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
-    val movable = sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D
+    val object3d = sel?.has3d == true
+    val movable = !object3d && sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D
     var placement by remember { mutableStateOf<Placement?>(null) }
-    LaunchedEffect(sel?.id, t?.revision) {
-        placement = if (movable && sel != null) ed.placementOf(sel.id) else null
+    LaunchedEffect(sel?.id, t?.revision, ed.playhead, movable) {
+        placement = if ((movable || object3d) && sel != null) ed.placementOf(sel.id) else null
     }
     LaunchedEffect(sel?.id, t?.revision, ed.playhead, ed.panel) {
+        if (object3d && sel != null) ed.loadObject3D(sel.id)
         if (masking && sel != null) ed.loadMasks(sel.id)
     }
     BoxWithConstraints(modifier.background(Fc.Black).testTag("editor_player_area"), contentAlignment = Alignment.Center) {
@@ -332,50 +334,53 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
             Modifier
                 .size(boxW, boxH)
                 .border(1.dp, Fc.Raised)
-                .pointerInput(sel?.id, movable, ed.panel, t?.width, t?.height) {
-                    if (ed.panel == Panel.Mask || advanced || ed.panel == Panel.Object3D) return@pointerInput
+                .pointerInput(sel?.id, movable, object3d, ed.panel, t?.width, t?.height) {
+                    if (masking || advanced || object3d || ed.panel is Panel.TextInput) return@pointerInput
                     val frameW = t?.width?.toFloat() ?: return@pointerInput
-                    val k = size.width / frameW // screen px per frame px
+                    val k = size.width / frameW
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        var moved = false
+                        awaitFirstDown(requireUnconsumed = false)
                         var p = placement
-                        var snapState = 0
+                        var moved = false
+                        var edited = false
+                        var multi = false
+                        var count = 1
+                        var pendingPan = Offset.Zero
+                        var pendingZoom = 1f
+                        val rotation = RotationGate()
                         while (true) {
                             val ev = awaitPointerEvent()
-                            val pressed = ev.changes.any { it.pressed }
-                            if (!pressed) break
-                            val pan = ev.calculatePan()
-                            val zoom = ev.calculateZoom()
-                            val rot = ev.calculateRotation()
-                            if (!moved && (pan.getDistance() > viewConfiguration.touchSlop / 4 || zoom != 1f || rot != 0f) && ev.changes.any { it.positionChanged() }) moved = true
-                            if (moved && movable && p != null && sel != null) {
-                                var nx = p.x + pan.x / k
-                                var ny = p.y + pan.y / k
-                                var nr = p.rotation + rot
-                                val ns = p.scale * zoom
-                                // snapping: centre to 0/50/100 % of the frame, rotation to 45°
-                                val fw = frameW.toDouble()
-                                val fh = (t?.height?.toFloat() ?: 1f).toDouble()
-                                var snapped = 0
-                                for (gx in doubleArrayOf(0.0, fw / 2, fw)) if (abs(nx - gx) < fw * 0.02) { nx = gx; snapped = snapped or 1 }
-                                for (gy in doubleArrayOf(0.0, fh / 2, fh)) if (abs(ny - gy) < fh * 0.02) { ny = gy; snapped = snapped or 2 }
-                                val r45 = Math.round(nr / 45.0) * 45.0
-                                if (abs(nr - r45) < 5.0) { nr = r45; snapped = snapped or 4 }
-                                if (snapped != snapState) {
-                                    if (snapped != 0) haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                    snapState = snapped
-                                }
-                                val q = Placement(x = nx, y = ny, width = p.width, height = p.height, scale = ns, rotation = nr)
-                                placement = q
-                                p = Placement(x = p.x + pan.x / k, y = p.y + pan.y / k, width = p.width, height = p.height, scale = ns, rotation = p.rotation + rot)
-                                ed.setPlacement(sel.id, q, merge = true)
-                                ev.changes.forEach { it.consume() }
-                            } else if (moved) {
-                                ev.changes.forEach { it.consume() }
+                            val fingers = ev.changes.count { it.pressed }
+                            if (fingers == 0) break
+                            if (ev.changes.any { it.isConsumed }) continue
+                            if (fingers != count) {
+                                count = fingers
+                                multi = multi || fingers >= 2
+                                pendingPan = Offset.Zero; pendingZoom = 1f; rotation.reset()
+                                continue // Rebase on every pointer change: no centroid jumps.
                             }
+                            val pan = if (fingers == 1 && !multi) ev.calculatePan() else Offset.Zero
+                            val zoom = if (fingers >= 2) ev.calculateZoom() else 1f
+                            val rot = if (fingers >= 2) rotation.update(ev.calculateRotation()) else 0f
+                            pendingPan += pan
+                            pendingZoom *= zoom
+                            if (!moved) moved = pendingPan.getDistance() > viewConfiguration.touchSlop || abs(pendingZoom - 1f) > 0.015f || rot != 0f
+                            if (moved && movable && p != null && sel != null) {
+                                ed.stop()
+                                val delta = if (!edited) pendingPan else pan
+                                val scale = if (!edited) pendingZoom else zoom
+                                val next = Placement(
+                                    x = p.x + delta.x / k, y = p.y + delta.y / k,
+                                    width = p.width, height = p.height,
+                                    scale = (p.scale * scale).coerceIn(0.001, 100.0), rotation = p.rotation + rot,
+                                )
+                                placement = next; p = next
+                                ed.setPlacement(sel.id, next, merge = edited)
+                                edited = true
+                                ev.changes.forEach { it.consume() }
+                            } else if (moved) ev.changes.forEach { it.consume() }
                         }
-                        if (!moved) ed.togglePlay()
+                        if (!moved && !multi) ed.togglePlay()
                     }
                 }
                 .semantics { contentDescription = "Preview" },
@@ -416,6 +421,9 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                     }
                     drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
                 }
+            }
+            if (object3d && !masking && !advanced && ed.panel !is Panel.TextInput && t != null) {
+                ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
             }
             val maskState = ed.maskState
             if (masking && maskState != null && t != null) {

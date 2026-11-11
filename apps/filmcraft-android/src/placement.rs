@@ -14,11 +14,8 @@ const MAX_WIDTH: f64 = 5.0;
 const MAX_TEXT_WIDTH: f64 = 2.0;
 
 fn is_text(s: &Session, id: u64) -> bool {
-    model::sequence(s)
-        .ok()
-        .and_then(|(_, q)| model::find(q, ClipId(id)))
-        .and_then(|f| s.project.item(f.clip.item))
-        .is_some_and(|p| matches!(p.kind, ItemKind::Graphic { .. }))
+    model::sequence(s).ok().and_then(|(_,q)|model::find(q,ClipId(id)))
+        .is_some_and(|f| f.clip.effects.iter().any(|e| filmcraft_project::graphic::is_layer_id(&e.effect)))
 }
 
 /// Where clip `id` sits on the frame.
@@ -31,7 +28,7 @@ pub(crate) fn placement(s: &mut Session, id: u64) -> Result<Placement, MobileErr
     let f = model::find(seq, ClipId(id)).filter(|f| f.kind == TrackKind::Video).ok_or_else(|| MobileError::Command("That clip has no picture.".into()))?;
     let c = f.clip;
     let (sw, sh) = s.project.source_size(c.item).map(|(w, h)| (f64::from(w.max(1)), f64::from(h.max(1)))).unwrap_or((fw, fh));
-    let mt = c.source_in;
+    let mt = c.effect_time_at(s.playhead().clamp(c.start, (c.end() - filmcraft_time::Tick(1)).max(c.start)));
     let (mut x, mut y, mut scale, mut rotation) = (fw / 2.0, fh / 2.0, 1.0, 0.0);
     if let Some(m) = c.effects.iter().find(|e| e.effect == "motion" && e.enabled) {
         let p = m.vec2_at("position", mt);
@@ -95,13 +92,14 @@ pub(crate) fn set_placement(s: &mut Session, id: u64, x: f64, y: f64, scale: f64
         edits::ex(s, "graphics.set", q)?;
         return Ok(());
     }
+    let playhead = s.playhead();
     s.edit_sequence_as("Transform", merge.then_some(key.as_str()), |q, _, _| {
         let c = q.find_item_mut(ClipId(id)).map(|x| x.1).ok_or_else(|| EngineError::Other("clip gone".into()))?;
+        let mt = c.effect_time_at(playhead.clamp(c.start, (c.end() - filmcraft_time::Tick(1)).max(c.start)));
         let m = c.effects.iter_mut().find(|e| e.effect == "motion").ok_or_else(|| EngineError::Other("no motion".into()))?;
         let mut put = |p: &str, v: ParamValue| {
             if let Some(param) = m.param_mut(p) {
-                param.value = v;
-                param.keyframes.clear();
+                param.set_at(mt, v);
             }
         };
         put("position", ParamValue::Vec2(filmcraft_geom::Vec2::new(x, y)));

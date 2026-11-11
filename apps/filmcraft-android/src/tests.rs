@@ -1426,3 +1426,24 @@ fn advanced_motion_tracking_stores_a_track_a_3d_object_can_follow() {
     m.delete_motion_track(info.id).unwrap();
     assert!(m.motion_tracks().unwrap().is_empty());
 }
+
+
+#[test]
+fn advanced_model_gesture_placement_keeps_animation_at_the_playhead() {
+    let m=MobileSession::new();
+    m.new_project("Gestures".into(),1080,1920,30).unwrap();
+    let id=m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    let initial=m.placement(id).unwrap();
+    m.execute("animation.all".into(),serde_json::json!({"clip":id,"action":"enable"}).to_string()).unwrap();
+    let now=m.set_playhead(TICKS_PER_SECOND);
+    assert!(now>0);
+    m.set_placement(id,300.0,700.0,initial.scale*0.5,25.0,false).unwrap();
+    let at_key=m.placement(id).unwrap();
+    assert_eq!((at_key.x,at_key.y,at_key.rotation),(300.0,700.0,25.0));
+    m.set_playhead(0);
+    let at_start=m.placement(id).unwrap();
+    assert_eq!((at_start.x,at_start.y,at_start.rotation),(initial.x,initial.y,initial.rotation));
+    assert_eq!(at_start.scale,initial.scale);
+    let out:serde_json::Value=serde_json::from_str(&m.execute("animation.list".into(),serde_json::json!({"clip":id}).to_string()).unwrap()).unwrap();
+    assert!(out["lanes"].as_array().unwrap().iter().all(|l|l["animated"]==true));
+}

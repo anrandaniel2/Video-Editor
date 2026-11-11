@@ -55,27 +55,23 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
     val lane = lanes.firstOrNull { it.id == laneId } ?: lanes.firstOrNull()
     val key = lane?.keys?.firstOrNull { it.time == selected }
     ToolPanel("Keyframes", close, modifier, tag = "keyframes_panel") {
-        Text("Animate a property, move the playhead, then change its value. Drag diamonds to move keys. Curve presets affect the segment after the selected key.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+        Text("Enable Animate all, move the playhead, and use any slider or the preview controls. Every property is ready to animate. Tap a property title only when you want to edit its curve.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
         if (error != null) Text(error.orEmpty(), color = Fc.Detail, modifier = Modifier.padding(12.dp))
         if (clip == null || lane == null) {
             Text("Select a clip with animatable properties.", color = Fc.Detail, modifier = Modifier.padding(12.dp))
             return@ToolPanel
         }
-        val groups = lanes.map { it.group }.distinct()
+        val animated = lanes.any { it.animated }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            groups.forEach { group -> SelectChip(group, lane.group == group, { laneId = lanes.first { it.group == group }.id; selected = null }, tag = "keyframes_group_${groups.indexOf(group)}") }
+            SelectChip("Animate all", animated, { ed.animationCommand("animation.all", JSONObject().put("clip",clip.id.toLong()).put("action","enable")) }, tag="keyframes_animate_all")
+            SelectChip("◆ Key everything",false,{ed.animationCommand("animation.all",JSONObject().put("clip",clip.id.toLong()).put("action","key"))},tag="keyframes_key_all")
+            if (animated) SelectChip("Stop animation",false,{ed.animationCommand("animation.all",JSONObject().put("clip",clip.id.toLong()).put("action","disable"))},tag="keyframes_stop_all")
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            lanes.filter { it.group == lane.group }.forEach { item ->
-                SelectChip((if (item.animated) "◆ " else "") + item.label, item.id == lane.id, { laneId = item.id; selected = null }, tag = "keyframes_param_${item.id}")
-            }
-        }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SelectChip(if (lane.animated) "Animation on" else "Animate", lane.animated, { ed.animationCommand("effects.toggleAnimation", lane.address(clip.id)) }, tag = "keyframes_animate")
-            SelectChip("◆ Add / remove", false, { ed.animationCommand("effects.addKeyframe", lane.address(clip.id)) }, tag = "keyframes_add")
-            val sorted = lane.keys.sortedBy { it.timeline }
-            SelectChip("‹ Previous", false, { sorted.lastOrNull { it.timeline < ed.playhead }?.let { selected = it.time; ed.seek(it.timeline, draft = false) } }, tag = "keyframes_prev")
-            SelectChip("Next ›", false, { sorted.firstOrNull { it.timeline > ed.playhead }?.let { selected = it.time; ed.seek(it.timeline, draft = false) } }, tag = "keyframes_next")
+        Text("Curve: ${lane.group} · ${lane.label}",style=FcType.Caption,color=Fc.Detail,modifier=Modifier.padding(horizontal=12.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+            val sorted=lane.keys.sortedBy { it.timeline }
+            SelectChip("‹ Previous",false,{sorted.lastOrNull {it.timeline<ed.playhead}?.let {selected=it.time;ed.seek(it.timeline,draft=false)}},tag="keyframes_prev")
+            SelectChip("Next ›",false,{sorted.firstOrNull {it.timeline>ed.playhead}?.let {selected=it.time;ed.seek(it.timeline,draft=false)}},tag="keyframes_next")
         }
         KeyframeGraph(lane, selected, clip.start, clip.duration, ed.playhead,
             select = { selected = it.time; ed.seek(it.timeline, draft = false) },
@@ -85,14 +81,6 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             },
         )
         Text(if (key != null) "Selected key · ${formatSeconds((key.timeline - clip.start).toDouble() / TICKS)} · ${key.interpolation}" else "Value at playhead", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = 12.dp))
-        ValueEditor(key?.value ?: lane.value, lane.kind, lane.param == "path" && lane.mask != null,
-            editPath = { if (key != null) ed.seek(key.timeline, draft = false); ed.panel = Panel.Mask },
-            save = { value ->
-                val body = lane.address(clip.id).put("value", value)
-                if (key != null) ed.animationCommand("effects.setKeyframe", body.put("mediaTime", key.time))
-                else ed.animationCommand("effects.setParam", body)
-            },
-        )
         if (key != null) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("linear" to "Linear", "hold" to "Hold", "easeIn" to "Ease in", "easeOut" to "Ease out", "easeInOut" to "Ease in/out", "strong" to "Strong ease").forEach { (id, label) ->
@@ -105,6 +93,23 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 SelectChip("Delete key", false, { ed.animationCommand("effects.deleteKeyframe", lane.address(clip.id).put("mediaTime", key.time)); selected = null }, tag = "keyframes_delete")
             }
         }
+        lanes.groupBy { it.group }.forEach { (group,items) ->
+            Text(group,style=FcType.Body,color=Fc.Title,modifier=Modifier.padding(horizontal=12.dp,vertical=10.dp))
+            items.forEach { item -> androidx.compose.runtime.key(item.id) {
+                SelectChip(item.label + if (item.animated) " ◆" else "",item.id==lane.id,{laneId=item.id;selected=null},tag="keyframes_property_${item.id}")
+                val selectedKey=if (item.id==lane.id) key else null
+                ValueEditor(selectedKey?.value ?: item.value,item.kind,item.param=="path" && item.mask!=null,item.label,item.id,
+                    (ed.timeline?.width?.toDouble() ?: 1920.0) to (ed.timeline?.height?.toDouble() ?: 1080.0),
+                    editPath={if(selectedKey!=null) ed.seek(selectedKey.timeline,draft=false);ed.panel=Panel.Mask},
+                    save={value,merge ->
+                        val body=item.address(clip.id).put("value",value)
+                        if(merge!=null) body.put("merge",merge)
+                        if(selectedKey!=null) ed.animationCommand("effects.setKeyframe",body.put("mediaTime",selectedKey.time))
+                        else ed.animationCommand("effects.setParam",body)
+                    },
+                )
+            } }
+        }
     }
 }
 
@@ -112,46 +117,56 @@ private const val TICKS = 254016000000.0
 private fun formatSeconds(seconds: Double) = "%.2f s".format(seconds)
 
 @Composable
-private fun ValueEditor(value: Any, kind: Any?, path: Boolean, editPath: () -> Unit, save: (Any) -> Unit) {
-    if (path) {
-        SelectChip("Edit mask path in preview", false, editPath, tag = "keyframes_edit_path")
-        return
+private fun AnimationSlider(label:String,value:Double,min:Double,max:Double,tag:String,save:(Double,String)->Unit) {
+    var v by remember(tag) { mutableDoubleStateOf(value) }
+    var dragging by remember(tag) { mutableStateOf(false) }
+    var token by remember(tag) { mutableStateOf(java.util.UUID.randomUUID().toString()) }
+    LaunchedEffect(value) { if(!dragging) v=value }
+    val lo=minOf(min,value);val hi=maxOf(max,value,lo+0.01)
+    SliderRow(label,"${kotlin.math.round(v*100)/100}") {
+        FcSlider(fraction=((v-lo)/(hi-lo)).toFloat().coerceIn(0f,1f),onChange={f ->
+            dragging=true;v=lo+f*(hi-lo);save(v,token)
+        },onDone={dragging=false;token=java.util.UUID.randomUUID().toString()},description=label,tag="keyframes_slider_$tag")
     }
-    val options = (kind as? JSONObject)?.optJSONArray("Choice")
-    if (options != null) {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            (0 until options.length()).forEach { i -> SelectChip(options.getString(i), (value as? Number)?.toInt() == i, { save(i) }, tag = "keyframes_choice_$i") }
+}
+
+@Composable
+private fun ValueEditor(value: Any, kind: Any?, path: Boolean, label:String, id:String, frame:Pair<Double,Double>, editPath: () -> Unit, save: (Any,String?) -> Unit) {
+    if(path) {SelectChip("Edit mask path in preview",false,editPath,tag="keyframes_edit_path_$id");return}
+    val options=(kind as? JSONObject)?.optJSONArray("Choice")
+    if(options!=null) {
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+            (0 until options.length()).forEach {i -> SelectChip(options.getString(i),(value as? Number)?.toInt()==i,{save(i,null)},tag="keyframes_choice_${id}_$i")}
         }
-        return
-    }
-    if (value is Boolean) {
-        Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SelectChip("Off", !value, { save(false) }, tag = "keyframes_false")
-            SelectChip("On", value, { save(true) }, tag = "keyframes_true")
+    } else if(value is Boolean) {
+        Row(Modifier.padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+            SelectChip("Off",!value,{save(false,null)},tag="keyframes_false_$id")
+            SelectChip("On",value,{save(true,null)},tag="keyframes_true_$id")
         }
-        return
-    }
-    var text by remember(value.toString()) { mutableStateOf(value.toString()) }
-    var invalid by remember(value.toString()) { mutableStateOf(false) }
-    val label = when {
-        value is Number -> "Value"
-        value is JSONArray && value.length() == 2 -> "Position [x, y]"
-        value is JSONArray && value.length() == 4 -> "Color [r, g, b, alpha] · 0–1"
-        value is String -> "Text"
-        else -> "Value (JSON)"
-    }
-    OutlinedTextField(value = text, onValueChange = { text = it; invalid = false }, label = { Text(label) }, isError = invalid, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("keyframes_value"), singleLine = value !is String)
-    SelectChip("Apply value", false, {
-        val parsed: Any? = try {
-            when (value) {
-                is Number -> text.toDoubleOrNull()?.takeIf { it.isFinite() }
-                is JSONArray -> JSONArray(text)
-                is JSONObject -> JSONObject(text)
-                else -> text
+    } else if(value is Number) {
+        val range=(kind as? JSONObject)?.optJSONObject("Float")
+        val min=range?.optDouble("soft_min",0.0) ?: if(kind=="Angle") -360.0 else -1000.0
+        val max=range?.optDouble("soft_max",100.0) ?: if(kind=="Angle") 360.0 else 1000.0
+        AnimationSlider(label,value.toDouble(),min,max,id) {v,token->save(v,token)}
+    } else if(value is JSONArray && value.length() in listOf(2,4) && value.opt(0) is Number) {
+        val color=value.length()==4
+        val wheel=kind=="Wheel"
+        (0 until value.length()).forEach {i ->
+            val component=if(color) listOf("Red","Green","Blue","Alpha")[i] else listOf("X","Y")[i]
+            val dimension=if(i==0) frame.first else frame.second
+            AnimationSlider("$label · $component",value.optDouble(i),if(color) 0.0 else if(wheel) -1.0 else -dimension,
+                if(color||wheel) 1.0 else dimension*2,"${id}_$i") {v,token ->
+                val next=JSONArray(value.toString()).put(i,v);save(next,token)
             }
-        } catch (_: Exception) { null }
-        if (parsed != null) save(parsed) else invalid = true
-    }, tag = "keyframes_apply_value")
+        }
+    } else if(value is String) {
+        // Text content isn't a numeric value; numeric and color controls never use input boxes.
+        var text by remember(id,value) {mutableStateOf(value)}
+        OutlinedTextField(value=text,onValueChange={text=it},label={Text(label)},modifier=Modifier.fillMaxWidth().padding(horizontal=12.dp))
+        SelectChip("Apply text",false,{save(text,null)},tag="keyframes_apply_text_$id")
+    } else {
+        Text("Edit this shape in its preview tool.",style=FcType.Caption,color=Fc.Detail,modifier=Modifier.padding(12.dp))
+    }
 }
 
 @Composable

@@ -3698,7 +3698,10 @@ fn keyframe_op(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
         _ => "Keyframe Interpolation",
     };
     // a keyframe dragged on the timeline is one undo step, like a dragged value
-    let merge = bool_p(p, "merge").unwrap_or(false).then(|| format!("keyframe:{op}:{}:{eff}:{pid}:{}", c.0, p.get("mask").unwrap_or(&Value::Null)));
+    let merge = match p.get("merge") {
+        Some(Value::String(token)) => Some(format!("keyframe:{op}:{}:{eff}:{pid}:{token}",c.0)),
+        _ => bool_p(p, "merge").unwrap_or(false).then(|| format!("keyframe:{op}:{}:{eff}:{pid}:{}", c.0, p.get("mask").unwrap_or(&Value::Null))),
+    };
     if bool_p(p, "begin").unwrap_or(false) {
         s.history.merge_key = None;
     }

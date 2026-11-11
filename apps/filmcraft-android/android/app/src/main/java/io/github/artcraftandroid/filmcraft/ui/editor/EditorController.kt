@@ -1026,7 +1026,7 @@ class EditorController(
         scope.launch {
             try {
                 engine.command { execute(command, json) }
-                refresh()
+                if (body.has("merge")) refreshSoon() else refresh()
             } catch (e: Exception) { host.tell(e.userMessage) }
         }
     }
