@@ -3,6 +3,7 @@ package io.github.artcraftandroid.filmcraft.ui.editor
 import android.content.ClipData
 import android.content.Context
 import androidx.compose.foundation.Canvas
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -121,7 +122,7 @@ fun TextInputStrip(ed: EditorController, panel: Panel.TextInput, modifier: Modif
             .imePadding()
             .padding(horizontal = FcSize.PanelInset)
             .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-            .background(Fc.Panel)
+            .editorGlass()
             .padding(12.dp)
             .testTag("text_input_field"),
         verticalAlignment = Alignment.CenterVertically,

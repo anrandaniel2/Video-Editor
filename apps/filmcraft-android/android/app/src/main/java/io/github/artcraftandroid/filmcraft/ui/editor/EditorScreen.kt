@@ -1,5 +1,9 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import androidx.compose.runtime.CompositionLocalProvider
+import io.github.artcraftandroid.filmcraft.ui.LocalEditorGlass
+import io.github.artcraftandroid.filmcraft.ui.rememberEditorGlass
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -106,28 +110,30 @@ fun EditorScreen(ed: EditorController) {
             else -> ed.closeEditor()
         }
     }
-    BoxWithConstraints(
-        Modifier
-            .fillMaxSize()
-            .background(Fc.Black)
-            .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal))
-            .testTag("screen_editor"),
-    ) {
-        if (maxWidth >= 600.dp && maxWidth > maxHeight) SideBySide(ed) else Stacked(ed)
-        // The animation frame browser floats across the bottom. The layouts above reserve its
-        // height (the preview window goes up; when there is no room it shrinks) so the two never
-        // sit on top of each other.
-        if (frameBarVisible(ed)) {
-            AnimationFrameBar(
-                ed,
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 12.dp)
-                    .navigationBarsPadding()
-                    .padding(bottom = 8.dp),
-            )
+    CompositionLocalProvider(LocalEditorGlass provides rememberEditorGlass(ed.picture)) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxSize()
+                .background(Fc.Black)
+                .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal))
+                .testTag("screen_editor"),
+        ) {
+            if (maxWidth >= 600.dp && maxWidth > maxHeight) SideBySide(ed) else Stacked(ed)
+            // The animation frame browser floats across the bottom. The layouts above reserve its
+            // height (the preview window goes up; when there is no room it shrinks) so the two never
+            // sit on top of each other.
+            if (frameBarVisible(ed)) {
+                AnimationFrameBar(
+                    ed,
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 12.dp)
+                        .navigationBarsPadding()
+                        .padding(bottom = 8.dp),
+                )
+            }
+            ed.busy?.let { BusyOverlay(it) }
         }
-        ed.busy?.let { BusyOverlay(it) }
     }
 }
 
@@ -208,7 +214,7 @@ private fun SideBySide(ed: EditorController) {
         val previewH = (room - barSpace).coerceAtLeast(minPlayer)
         Row(Modifier.fillMaxSize()) {
             // transport rail
-            Column(Modifier.width(48.dp).fillMaxHeight(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.width(48.dp).fillMaxHeight().editorGlass(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 FcIconButton(Glyphs.StepBack, "Previous frame", { ed.step(-1) }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_previous_frame_button"))
                 FcIconButton(if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Pause" else "Play", { ed.togglePlay() }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_play_button"))
                 FcIconButton(Glyphs.StepForward, "Next frame", { ed.step(1) }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_next_frame_button"))
@@ -253,7 +259,7 @@ private fun SideBySide(ed: EditorController) {
 
 @Composable
 private fun TopBar(ed: EditorController, sideBySide: Boolean) {
-    Row(Modifier.fillMaxWidth().height(FcSize.TopBar).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(FcSize.TopBar).editorGlass(0.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         FcIconButton(LucideIcons.House.glyph(), "Home", { ed.closeEditor() }, modifier = Modifier.testTag("editor_home_button"))
         Spacer(Modifier.weight(1f))
         if (sideBySide) {
@@ -279,7 +285,7 @@ private fun TopBar(ed: EditorController, sideBySide: Boolean) {
 @Composable
 private fun TransportRow(ed: EditorController, onResize: (Float) -> Unit) {
     val st = ed.status
-    Row(Modifier.fillMaxWidth().height(FcSize.Transport).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(FcSize.Transport).editorGlass(0.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
                 .size(48.dp)

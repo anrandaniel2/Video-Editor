@@ -176,7 +176,7 @@ fun ToolPanel(
             .fillMaxWidth()
             .padding(horizontal = FcSize.PanelInset)
             .clip(RoundedCornerShape(topStart = FcSize.PanelCorner, topEnd = FcSize.PanelCorner))
-            .background(Fc.Panel)
+            .editorGlass(FcSize.PanelCorner)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier),
     ) {
         // the handle and the title row drag the panel down to close it
@@ -220,7 +220,7 @@ fun ToolPanel(
         }
         // the content scrolls when the room is short (a phone held sideways)
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) { content() }
-        Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars).background(Fc.PanelBand))
+        Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars).background(Color.Black.copy(alpha = .12f)))
     }
 }
 

@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -64,7 +65,7 @@ fun EditorToolbar(ed: EditorController, modifier: Modifier = Modifier) {
 
 @Composable
 private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modifier: Modifier) {
-    BoxWithConstraints(modifier.fillMaxWidth().height(FcSize.ToolTile)) {
+    BoxWithConstraints(modifier.fillMaxWidth().height(FcSize.ToolTile).editorGlass()) {
         // with a back button the tools start clear of it and centre in what is left
         val start = if (back != null) 43.5.dp else 0.dp
         val end = if (back != null) 15.dp else 0.dp
@@ -84,7 +85,7 @@ private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modif
                     .align(Alignment.CenterStart)
                     .width(48.dp)
                     .height(FcSize.ToolTile)
-                    .background(Brush.horizontalGradient(0.7f to Fc.Black, 1f to Color.Transparent)),
+                    .background(Brush.horizontalGradient(0.7f to Fc.Black.copy(alpha = .35f), 1f to Color.Transparent)),
             )
             Box(
                 Modifier

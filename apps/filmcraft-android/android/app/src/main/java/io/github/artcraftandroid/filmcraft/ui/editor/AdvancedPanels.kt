@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -571,7 +572,7 @@ fun AnimationFrameBar(ed: EditorController, modifier: Modifier = Modifier) {
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(Fc.Panel)
+            .editorGlass(18.dp)
             .border(1.dp, Fc.Divider, RoundedCornerShape(18.dp))
             .padding(horizontal = 8.dp, vertical = 8.dp)
             .testTag("frame_bar"),
