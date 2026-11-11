@@ -199,15 +199,21 @@ pub(crate) fn add_media(s: &mut Session, paths: &[String]) -> Result<Vec<u64>, M
 }
 
 pub(crate) fn add_drawing(s: &mut Session, path: &str) -> Result<Vec<u64>, MobileError> {
-    let items = import(s, &[path.to_string()])?;
-    let out = s.edit_group("Add Drawing", |s| {
+    add_overlays(s, &[path.to_string()])
+}
+
+pub(crate) fn add_overlays(s: &mut Session, paths: &[String]) -> Result<Vec<u64>, MobileError> {
+    let items = import(s, paths)?;
+    let out = s.edit_group("Add Overlays", |s| {
         let ph = s.playhead();
         let mut out = Vec::new();
         for item in items {
             let len = item_duration(s, item);
             let lane = free_lane(s, TrackKind::Video, 1, None, ph, ph + len, None).map_err(|e| other(e.to_string()))?;
-            let r = s.execute("timeline.place", json!({"item": item, "time": ph.0, "track": lane}))?;
-            out.extend(clips_of(&r, "clips"));
+            let audio = free_lane(s, TrackKind::Audio, 1, None, ph, ph + len, None).map_err(|e| other(e.to_string()))?;
+            let r = s.execute("timeline.place", json!({"item": item, "time": ph.0, "track": lane, "audioTrack": audio, "insert": false}))?;
+            let (_, seq) = model::sequence(s).map_err(|e| other(e.to_string()))?;
+            out.extend(clips_of(&r, "clips").into_iter().filter(|&id| model::find(seq, ClipId(id)).is_some_and(|f| f.kind == TrackKind::Video)));
         }
         Ok(out)
     })?;

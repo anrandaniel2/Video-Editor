@@ -97,21 +97,21 @@ internal fun downloadSound(address: String, dir: File): File {
 
 @Composable
 internal fun ColorPicker(label: String, color: Int, change: (Int) -> Unit) {
-    val hsv = remember(color) { FloatArray(3).also { android.graphics.Color.colorToHSV(color, it) } }
-    var hex by remember(color) { mutableStateOf("%06X".format(color and 0xffffff)) }
-    Column(Modifier.fillMaxWidth().padding(12.dp)) {
-        Text(label)
-        listOf("Hue", "Saturation", "Brightness").forEachIndexed { index, name ->
-            Text(name)
-            Slider(value = hsv[index], onValueChange = { v ->
-                val next = hsv.copyOf(); next[index] = v
-                change(android.graphics.Color.HSVToColor(next))
-            }, valueRange = if (index == 0) 0f..360f else 0f..1f)
+    var expanded by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, modifier = Modifier.weight(1f))
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(Color(color))
+            .border(1.dp, Color.White.copy(alpha = .7f), RoundedCornerShape(8.dp))
+            .semantics { contentDescription = label }
+            .clickable { expanded = true })
+    }
+    if (expanded) Dialog(onDismissRequest = { expanded = false }) {
+        Column(Modifier.widthIn(max = 340.dp).editorGlass(24.dp).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(label, color = Color.White)
+            Spacer(Modifier.height(12.dp))
+            WheelPicker(color, change)
+            TextButton(onClick = { expanded = false }) { Text("Done") }
         }
-        OutlinedTextField(hex, { text ->
-            hex = text.removePrefix("#").take(6)
-            if (hex.length == 6) hex.toLongOrNull(16)?.let { change((0xff000000L or it).toInt()) }
-        }, label = { Text("Hex RGB") }, singleLine = true)
     }
 }
 

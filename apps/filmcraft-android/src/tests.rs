@@ -1462,3 +1462,31 @@ fn advanced_model_transform_gestures_have_separate_undo_steps() {
     m.undo();assert_eq!(m.placement(id).unwrap().x,320.0);
     m.undo();assert_eq!(m.placement(id).unwrap().x,initial.x);
 }
+
+#[test]
+fn photo_and_video_overlays_stack_at_playhead_without_rippling_main() {
+    let (m, d, ids) = two_clips();
+    let before = m.timeline().unwrap();
+    let original: Vec<_> = lane(&before, LaneKind::Main).clips.iter().map(|c| (c.id, c.start, c.duration)).collect();
+    m.set_playhead(SEC);
+    let video = movie(&d, "overlay.mp4", DemoScene::Plasma, 24);
+    let overlays = m.add_overlays(vec![picture(&d), video]).unwrap();
+    assert_eq!(overlays.len(), 2);
+    let t = m.timeline().unwrap();
+    let main: Vec<_> = lane(&t, LaneKind::Main).clips.iter().map(|c| (c.id, c.start, c.duration)).collect();
+    assert_eq!(main, original);
+    assert_eq!(main.iter().map(|c| c.0).collect::<Vec<_>>(), ids);
+    for &id in &overlays {
+        let c = clip(&m, id);
+        assert_eq!(c.start, SEC);
+        assert!(t.lanes.iter().any(|l| l.kind == LaneKind::Overlay && l.clips.iter().any(|c| c.id == id)));
+    }
+    assert_eq!(clip(&m, overlays[0]).kind, ClipKind::Image);
+    let video = clip(&m, overlays[1]);
+    assert_eq!(video.kind, ClipKind::Video);
+    assert!(video.has_audio && video.audio_clip.is_some());
+    assert_eq!(t.selected, Some(overlays[0]));
+    m.undo().unwrap();
+    let undone = m.timeline().unwrap();
+    assert!(!undone.lanes.iter().any(|l| l.clips.iter().any(|c| overlays.contains(&c.id))));
+}

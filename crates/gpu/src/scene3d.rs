@@ -26,6 +26,15 @@ struct CachedMap {
     sampler:wgpu::Sampler,
     bytes:usize,
 }
+/// Single-size target cache: bounded to the most recent scene; reused after synchronous readback.
+struct Targets {
+    width: u32,
+    height: u32,
+    color: wgpu::Texture,
+    depth: wgpu::Texture,
+    multisample: wgpu::Texture,
+    readback: wgpu::Buffer,
+}
 struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -33,6 +42,7 @@ struct Renderer {
     transparent: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     textures:std::collections::HashMap<(usize,usize),CachedMap>,
+    targets: Option<Targets>,
 }
 
 impl Renderer {
@@ -65,7 +75,7 @@ impl Renderer {
             multiview_mask:None,cache:None,
         });
         let opaque=make_pipeline(false); let transparent=make_pipeline(true);
-        Some(Self {device,queue,opaque,transparent,layout,textures:Default::default()})
+        Some(Self {device,queue,opaque,transparent,layout,textures:Default::default(),targets:None})
     }
 
     fn buffer(&self, label:&str, data:&[u8], usage:wgpu::BufferUsages) -> wgpu::Buffer {
@@ -82,7 +92,7 @@ impl Renderer {
     fn prepare(&mut self, scene:&Scene, draw:&Draw, lights:&wgpu::Buffer) -> Option<(wgpu::Buffer,wgpu::BindGroup,u32)> {
         let m=&draw.material;
         let refs=[m.base_texture,m.mr_texture,m.normal_texture,m.occlusion_texture,m.emissive_texture];
-        let mut packed=Vec::with_capacity(draw.vertices.len()*24);
+        let mut packed=Vec::with_capacity(draw.vertices.len()*33);
         for v in &draw.vertices {
             packed.extend(v.position); packed.extend(v.normal); packed.extend(v.tangent); packed.extend(v.color);
             for r in refs {
@@ -149,9 +159,15 @@ impl Renderer {
     fn render(&mut self, scene:&Scene) -> Option<Image> {
         let (w,h)=(scene.width as u32,scene.height as u32);
         if w==0 || h==0 || w>self.device.limits().max_texture_dimension_2d || h>self.device.limits().max_texture_dimension_2d {return None;}
-        let color=self.texture(w,h,wgpu::TextureFormat::Rgba16Float,wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::COPY_SRC);
-        let depth=self.texture_samples(w,h,wgpu::TextureFormat::Depth32Float,wgpu::TextureUsages::RENDER_ATTACHMENT,4);
-        let multisample=self.texture_samples(w,h,wgpu::TextureFormat::Rgba16Float,wgpu::TextureUsages::RENDER_ATTACHMENT,4);
+        let row=(w*8).div_ceil(256)*256;
+        let targets = self.targets.take().filter(|t| t.width == w && t.height == h).unwrap_or_else(|| Targets {
+            width:w, height:h,
+            color:self.texture(w,h,wgpu::TextureFormat::Rgba16Float,wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::COPY_SRC),
+            depth:self.texture_samples(w,h,wgpu::TextureFormat::Depth32Float,wgpu::TextureUsages::RENDER_ATTACHMENT,4),
+            multisample:self.texture_samples(w,h,wgpu::TextureFormat::Rgba16Float,wgpu::TextureUsages::RENDER_ATTACHMENT,4),
+            readback:self.device.create_buffer(&wgpu::BufferDescriptor {label:Some("3D readback"),size:row as u64*h as u64,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false}),
+        });
+        let color=&targets.color; let depth=&targets.depth; let multisample=&targets.multisample;
         let multisample_view=multisample.create_view(&Default::default());
         let view=color.create_view(&Default::default()); let depth_view=depth.create_view(&Default::default());
         let mut data=Vec::new();
@@ -191,9 +207,8 @@ impl Renderer {
                 pass.set_bind_group(0,group,&[]);pass.set_vertex_buffer(0,vertex.slice(..));pass.draw(start..start+3,0..1);
             }
         }
-        let row=(w*8).div_ceil(256)*256;
-        let readback=self.device.create_buffer(&wgpu::BufferDescriptor {label:Some("3D readback"),size:row as u64*h as u64,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
-        encoder.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo {texture:&color,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},wgpu::TexelCopyBufferInfo {buffer:&readback,layout:wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(row),rows_per_image:Some(h)}},wgpu::Extent3d {width:w,height:h,depth_or_array_layers:1});
+        let readback=&targets.readback;
+        encoder.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo {texture:color,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},wgpu::TexelCopyBufferInfo {buffer:readback,layout:wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(row),rows_per_image:Some(h)}},wgpu::Extent3d {width:w,height:h,depth_or_array_layers:1});
         self.queue.submit([encoder.finish()]);
         let (tx,rx)=std::sync::mpsc::channel();
         readback.slice(..).map_async(wgpu::MapMode::Read,move |r| {let _=tx.send(r);});
@@ -205,6 +220,7 @@ impl Renderer {
             px.extend(line.chunks_exact(2).map(|b| crate::f16_to_f32(u16::from_le_bytes([b[0],b[1]]))));
         }
         drop(mapped); readback.unmap();
+        self.targets=Some(targets);
         Some(Image {w:w as usize,h:h as usize,px})
     }
 }

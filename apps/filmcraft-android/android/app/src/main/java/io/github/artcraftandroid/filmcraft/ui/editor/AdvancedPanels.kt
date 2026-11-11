@@ -642,13 +642,8 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
         Spacer(Modifier.height(10.dp))
         Text("Ambient fill", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
         val amb = lighting.ambientColor
-        SwatchRow(amb) { r, g, b -> ed.setAmbient(listOf(r, g, b), lighting.ambientLevel, "lights_ambient") }
-        for (i in 0..2) {
-            val name = listOf("Ambient red", "Ambient green", "Ambient blue")[i]
-            AdvancedSlider(name, amb[i].toDouble(), 0.0, 1.0, 0.01, "lights_ambient_rgb$i") { v, k ->
-                val next = amb.toMutableList().also { it[i] = v.toFloat() }
-                ed.setAmbient(next, lighting.ambientLevel, k)
-            }
+        ColorPicker("Ambient color", android.graphics.Color.rgb(amb[0], amb[1], amb[2])) { c ->
+            ed.setAmbient(listOf(android.graphics.Color.red(c) / 255f, android.graphics.Color.green(c) / 255f, android.graphics.Color.blue(c) / 255f), lighting.ambientLevel, "lights_ambient")
         }
         AdvancedSlider("Ambient level", lighting.ambientLevel, 0.0, 3.0, 0.05, "lights_ambient_level") { v, k ->
             ed.setAmbient(amb, v, k)
@@ -709,13 +704,8 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
                 }
             }
             Spacer(Modifier.height(6.dp))
-            SwatchRow(light.color) { r, g, b -> ed.setLight(light.copy(color = listOf(r, g, b)), "lights_color") }
-            for (i in 0..2) {
-                val name = listOf("Red", "Green", "Blue")[i]
-                AdvancedSlider(name, light.color[i].toDouble(), 0.0, 1.0, 0.01, "lights_rgb$i") { v, k ->
-                    val next = light.color.toMutableList().also { it[i] = v.toFloat() }
-                    ed.setLight(light.copy(color = next), k)
-                }
+            ColorPicker("Light color", android.graphics.Color.rgb(light.color[0], light.color[1], light.color[2])) { c ->
+                ed.setLight(light.copy(color = listOf(android.graphics.Color.red(c) / 255f, android.graphics.Color.green(c) / 255f, android.graphics.Color.blue(c) / 255f)), "lights_color")
             }
             AdvancedSlider("Brightness", light.intensity, 0.0, 8.0, 0.05, "lights_intensity") { v, k ->
                 ed.setLight(light.copy(intensity = v), k)

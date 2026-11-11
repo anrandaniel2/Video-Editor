@@ -423,6 +423,11 @@ impl MobileSession {
         self.main_edit(|s| edits::add_media(s, &paths))
     }
 
+    /// Add photos/videos above the main track at the playhead, with linked source audio.
+    pub fn add_overlays(&self, paths: Vec<String>) -> Result<Vec<u64>, MobileError> {
+        edits::add_overlays(&mut self.lock(), &paths)
+    }
+
     /// Place a transparent drawing above the preview, without inserting into the main track.
     pub fn add_drawing(&self, path: String) -> Result<Vec<u64>, MobileError> {
         edits::add_drawing(&mut self.lock(), &path)

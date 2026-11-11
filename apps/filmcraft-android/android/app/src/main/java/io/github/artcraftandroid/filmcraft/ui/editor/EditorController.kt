@@ -553,8 +553,13 @@ class EditorController(
         host.pick(kind) { uris -> if (uris.isNotEmpty()) importAndAdd(uris, audio = kind == PickKind.FilesAudio) }
     }
 
+    fun addOverlay() {
+        submenu = Submenu.None
+        host.pick(PickKind.FilesVisual) { uris -> if (uris.isNotEmpty()) importAndAdd(uris, audio = false, overlay = true) }
+    }
+
     /** Add picked media; [first] is a new project's starting media, which can't be undone away. */
-    fun importAndAdd(uris: List<Uri>, audio: Boolean, first: Boolean = false) {
+    fun importAndAdd(uris: List<Uri>, audio: Boolean, first: Boolean = false, overlay: Boolean = false) {
         stop()
         scope.launch {
             busy = "Adding media…"
@@ -564,7 +569,7 @@ class EditorController(
                     host.tell("That file can't be added.")
                 } else {
                     engine.command {
-                        if (audio) addAudio(paths) else addMedia(paths)
+                        if (overlay) addOverlays(paths) else if (audio) addAudio(paths) else addMedia(paths)
                         if (first) forgetHistory()
                     }
                     if (paths.size < uris.size) host.tell("Some files couldn't be added.")
