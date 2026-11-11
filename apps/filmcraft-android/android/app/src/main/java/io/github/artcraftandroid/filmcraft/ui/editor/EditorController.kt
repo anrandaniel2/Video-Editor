@@ -61,6 +61,8 @@ import java.util.UUID
 
 /** A tool's panel. */
 sealed interface Panel {
+    data object OnlineSounds : Panel
+    data object Drawing : Panel
     data object Speed : Panel
     data object Volume : Panel
     data object Fade : Panel
@@ -573,6 +575,36 @@ class EditorController(
                 busy = null
             }
             refresh()
+        }
+    }
+
+    fun importOnlineSound(url: String) {
+        stop()
+        scope.launch {
+            busy = "Downloading sound…"
+            try {
+                val path = withContext(Dispatchers.IO) { downloadSound(url, project.mediaDir).absolutePath }
+                engine.command { addAudio(listOf(path)) }
+                panel = null
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            finally { busy = null; refresh() }
+        }
+    }
+
+    fun importDrawing(bitmap: android.graphics.Bitmap) {
+        scope.launch {
+            busy = "Adding drawing…"
+            try {
+                val path = withContext(Dispatchers.IO) {
+                    project.mediaDir.mkdirs()
+                    val file = java.io.File(project.mediaDir, "drawing-${java.util.UUID.randomUUID()}.png")
+                    file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+                    file.absolutePath
+                }
+                engine.command { addMedia(listOf(path)) }
+                panel = null
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            finally { bitmap.recycle(); busy = null; refresh() }
         }
     }
 

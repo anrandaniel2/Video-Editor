@@ -81,7 +81,10 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
                 Vertex { position:v.pos,normal:v.normal,tangent:v.tangent,uv:v.uv,color:v.color,
                     joints:v.joints.map(|j|j as f32),weights:v.weights,morph_index:i as f32 }
             }).collect();
-            scene.draws.push(Draw { vertices, material: model.material(prim.material).clone(), model: Some(model.clone()), pbr: true, deformation });
+            let mut material = model.material(prim.material).clone();
+            let tint = lin(p.color);
+            for i in 0..3 { material.base_color[i] *= tint[i]; }
+            scene.draws.push(Draw { vertices, material, model: Some(model.clone()), pbr: true, deformation });
         }
     } else if p.mesh == 6 {
         let cs = text_contours(p);

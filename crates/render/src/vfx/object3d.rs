@@ -247,7 +247,7 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
         rot: V3::new(fv(e, "rotation_x", cx), fv(e, "rotation_y", cx), rz),
         scale: scale.max(0.0),
         color: cv(e, "color", cx),
-        side: cv(e, "side_color", cx),
+        side: cv(e, "color", cx),
         metal: (fv(e, "metalness", cx) / 100.0).clamp(0.0, 1.0),
         rough: (fv(e, "roughness", cx) / 100.0).clamp(0.0, 1.0),
         lights,
@@ -995,7 +995,7 @@ fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model:
                 n = t.mul(tn.x).add(bit.mul(tn.y)).add(n.mul(tn.z)).norm();
             }
             let tex = sample_map(model, mat.base_texture, uv).unwrap_or([1.0; 4]);
-            let base = std::array::from_fn::<_, 3, _>(|i| (mat.base_color[i] * tex[i] * vc[i]).max(0.0));
+            let base = std::array::from_fn::<_, 3, _>(|i| (mat.base_color[i] * tex[i] * vc[i] * lin(p.color)[i]).max(0.0));
             let mr = sample_map(model, mat.mr_texture, uv).unwrap_or([1.0; 4]);
             let metallic = (mat.metallic * mr[2]).clamp(0.0, 1.0);
             let rough = (mat.roughness * mr[1]).clamp(0.0, 1.0);

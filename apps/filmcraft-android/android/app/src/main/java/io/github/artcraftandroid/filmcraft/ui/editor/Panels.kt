@@ -74,6 +74,8 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
     val clip = ed.selectedClip
     val close = { ed.panel = null }
     when (panel) {
+        Panel.OnlineSounds -> OnlineSoundsPanel(ed, close)
+        Panel.Drawing -> DrawingPanel(ed, close)
         Panel.Speed -> clip?.let { SpeedPanel(ed, it, close, modifier) }
         Panel.Volume -> clip?.let { VolumePanel(ed, it, close, modifier) }
         Panel.Fade -> clip?.let { FadePanel(ed, it, close, modifier) }
@@ -101,7 +103,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         if (panel != Panel.Background && panel != Panel.Tracking) ed.resetAdvancedTools()
     }
     // a panel whose clip went away closes
-    val standalone = panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D
+    val standalone = panel == Panel.OnlineSounds || panel == Panel.Drawing || panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D
     if (clip == null && !standalone) {
         LaunchedEffect(Unit) { ed.panel = null }
     }

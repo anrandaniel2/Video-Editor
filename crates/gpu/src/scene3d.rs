@@ -201,7 +201,7 @@ impl Renderer {
         let mapped=readback.slice(..).get_mapped_range().ok()?;
         let mut px=Vec::with_capacity(w as usize*h as usize*4);
         for line in mapped.chunks_exact(row as usize) {
-            let line=line[..w as usize*8].to_vec();
+            let line=&line[..w as usize*8];
             px.extend(line.chunks_exact(2).map(|b| crate::f16_to_f32(u16::from_le_bytes([b[0],b[1]]))));
         }
         drop(mapped); readback.unmap();

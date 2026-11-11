@@ -559,6 +559,7 @@ fn add_object_with_path(s: &mut Session, mesh: Object3DMesh, model_path: Option<
         if mesh == Object3DMesh::Text {
             set_text(&mut e, "text", "Text");
         } else if mesh == Object3DMesh::Model {
+            set_color(&mut e, "color", 0xffffffff, Tick::ZERO);
             if let Some(path) = model_path { set_text(&mut e, "model_path", path); }
             set_f(&mut e, "model_anim", 0.0, Tick::ZERO);
         } else {

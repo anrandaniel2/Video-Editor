@@ -90,6 +90,7 @@ pub(crate) fn start(s: &mut Session, path: &str, settings: &ExportSettings) -> R
             "burnCaptions": true,
             // composite on the GPU (registered at startup); the CPU renders as the fallback
             "gpuRendering": "auto",
+            "hardwareEncoding": "auto",
         }),
     )?;
     r["job"].as_u64().ok_or_else(|| MobileError::Command("The export did not start.".into()))
