@@ -164,12 +164,12 @@ private fun KeyframeGraph(lane: AnimationLane, selected: Long?, start: Long, dur
     val accent = Fc.Icon
     Canvas(Modifier.fillMaxWidth().height(160.dp).padding(horizontal = 16.dp, vertical = 12.dp).background(Fc.Raised)
         .testTag("keyframes_graph")
-        .pointerInput(lane.id, keys, start, duration) {
+        .pointerInput(lane.id, keys.map { it.time to it.timeline }, start, duration) {
             detectTapGestures { point ->
                 keys.minByOrNull { abs(((it.timeline - start) / span * size.width) - point.x) }?.let { select(it) }
             }
         }
-        .pointerInput(lane.id, keys, start, duration) {
+        .pointerInput(lane.id, keys.map { it.time to it.timeline }, start, duration) {
             detectDragGestures(onDragStart = { point ->
                 dragKey = keys.minByOrNull { abs(((it.timeline - start) / span * size.width) - point.x) }?.takeIf { abs(((it.timeline - start) / span * size.width) - point.x) < 28.dp.toPx() }
                 dragPixels = 0f
@@ -211,6 +211,7 @@ private fun KeyframeGraph(lane: AnimationLane, selected: Long?, start: Long, dur
 
 /** Same temporal handles as the engine; only the graph is evaluated on the UI thread. */
 private fun graphEase(a: AnimationKey, b: AnimationKey, u: Double): Double {
+    if (a.time > b.time) return 1.0 - graphEase(b, a, 1.0-u)
     if (a.interpolation == "Hold") return if (u < 1) 0.0 else 1.0
     val out = a.interpolation in listOf("Bezier", "Auto Bezier", "Continuous Bezier", "Ease Out")
     val incoming = b.interpolation in listOf("Bezier", "Auto Bezier", "Continuous Bezier", "Ease In") || a.interpolation in listOf("Bezier", "Continuous Bezier")

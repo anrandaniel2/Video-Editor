@@ -18,7 +18,18 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
         }).collect(), draws: Vec::new(),
     };
     let off = V3::new(0.0, 0.0, p.z);
-    let place = |v: Vert| vertex(Vert { p: rotate(v.p, p.rot).add(off), n: rotate(v.n, p.rot) });
+    let place = vertex;
+    // Primitive/text vertex transforms are applied by the same vertex stage as model skinning.
+    let primitive_deformation = || {
+        use crate::model::math;
+        let x=rotate(V3::new(1.0,0.0,0.0),p.rot);
+        let y=rotate(V3::new(0.0,1.0,0.0),p.rot);
+        let z=rotate(V3::new(0.0,0.0,1.0),p.rot);
+        let object=[x.x,x.y,x.z,0.0,y.x,y.y,y.z,0.0,z.x,z.y,z.z,0.0,off.x,off.y,off.z,1.0];
+        let mut data=Vec::new(); data.extend(object); data.extend(math::normal_matrix(&object));
+        data.extend(math::IDENTITY);data.extend(math::IDENTITY);data.extend([1.0,0.0,0.0,0.0]);
+        data
+    };
     let material = |col: [f32; 4]| crate::model::Material {
         base_color: { let c = lin(col); [c[0], c[1], c[2], col[3]] },
         metallic: p.metal, roughness: p.rough, double_sided: true,
@@ -112,14 +123,14 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
                 }
             }
         }
-        scene.draws.push(Draw { vertices: face_vertices, material: material(p.color), model: None, pbr: false, deformation:Vec::new() });
-        scene.draws.push(Draw { vertices: side_vertices, material: material(p.side), model: None, pbr: false, deformation:Vec::new() });
+        scene.draws.push(Draw { vertices: face_vertices, material: material(p.color), model: None, pbr: false, deformation:primitive_deformation() });
+        scene.draws.push(Draw { vertices: side_vertices, material: material(p.side), model: None, pbr: false, deformation:primitive_deformation() });
     } else {
         let k=p.size*p.scale*0.5;
         let dz=if p.mesh==5 {0.0} else if p.depth>0.0 {p.depth*p.scale*0.5} else {k};
         let radius=k*scene.camera[2]/p.z.max(1.0);
         let vertices=mesh_tris(p.mesh,k,dz,radius).into_iter().flat_map(|t| t.map(place)).collect();
-        scene.draws.push(Draw { vertices, material:material(p.color), model:None, pbr:false, deformation:Vec::new() });
+        scene.draws.push(Draw { vertices, material:material(p.color), model:None, pbr:false, deformation:primitive_deformation() });
     }
     Some(scene)
 }

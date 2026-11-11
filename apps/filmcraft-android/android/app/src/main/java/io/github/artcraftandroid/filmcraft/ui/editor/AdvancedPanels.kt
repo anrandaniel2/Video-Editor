@@ -84,7 +84,7 @@ fun Object3DPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
         },
     ) {
         Text(
-            "Add a 3D layer, rotate it with the sliders, and turn on keyframes to animate it at the playhead.",
+            "Add a 3D layer and rotate it with the sliders. Open Keyframes to animate individual properties and choose curves.",
             style = FcType.Caption, color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
         )
