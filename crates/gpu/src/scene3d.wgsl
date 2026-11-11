@@ -158,7 +158,7 @@ fn safe_normal(v: vec3<f32>) -> vec3<f32> { return v / max(length(v), 0.000001);
     }
     var color: vec3<f32>;
     if pbr {
-        color=direct+base*(1.0-metallic)*0.22*ao*scene.ambient.xyz+f0*(1.0-rough)*0.08*ao*scene.ambient.xyz+emit;
+        color=direct+base*(1.0-metallic)*0.22*ao*scene.ambient.xyz+f0*(0.08+0.12*(1.0-rough))*ao*scene.ambient.xyz+emit;
     } else {
         color=clamp(base*(0.28*scene.ambient.xyz+0.72*direct)+specular*mat.props.x*0.9,vec3<f32>(0.0),vec3<f32>(1.0));
     }

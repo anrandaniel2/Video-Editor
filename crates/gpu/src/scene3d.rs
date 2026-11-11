@@ -19,12 +19,20 @@ fn bytes(values: impl IntoIterator<Item=f32>) -> Vec<u8> {
     values.into_iter().flat_map(f32::to_le_bytes).collect()
 }
 
+struct CachedMap {
+    // Retain identity: a recycled Arc address must never retrieve a different model's texture.
+    _model: Option<std::sync::Arc<filmcraft_render::model::Model>>,
+    view:wgpu::TextureView,
+    sampler:wgpu::Sampler,
+    bytes:usize,
+}
 struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     opaque: wgpu::RenderPipeline,
     transparent: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    textures:std::collections::HashMap<(usize,usize),CachedMap>,
 }
 
 impl Renderer {
@@ -57,7 +65,7 @@ impl Renderer {
             multiview_mask:None,cache:None,
         });
         let opaque=make_pipeline(false); let transparent=make_pipeline(true);
-        Some(Self {device,queue,opaque,transparent,layout})
+        Some(Self {device,queue,opaque,transparent,layout,textures:Default::default()})
     }
 
     fn buffer(&self, label:&str, data:&[u8], usage:wgpu::BufferUsages) -> wgpu::Buffer {
@@ -71,7 +79,7 @@ impl Renderer {
         self.device.create_texture(&wgpu::TextureDescriptor { label:Some("3D texture"),size:wgpu::Extent3d {width,height,depth_or_array_layers:1},mip_level_count:1,sample_count:samples,dimension:wgpu::TextureDimension::D2,format,usage,view_formats:&[] })
     }
 
-    fn prepare(&self, scene:&Scene, draw:&Draw, lights:&wgpu::Buffer) -> Option<(wgpu::Buffer,wgpu::BindGroup,u32)> {
+    fn prepare(&mut self, scene:&Scene, draw:&Draw, lights:&wgpu::Buffer) -> Option<(wgpu::Buffer,wgpu::BindGroup,u32)> {
         let m=&draw.material;
         let refs=[m.base_texture,m.mr_texture,m.normal_texture,m.occlusion_texture,m.emissive_texture];
         let mut packed=Vec::with_capacity(draw.vertices.len()*24);
@@ -102,16 +110,8 @@ impl Renderer {
         ]),wgpu::BufferUsages::UNIFORM);
         let mut views=Vec::new(); let mut samplers=Vec::new();
         for (i,r) in refs.iter().enumerate() {
-            let source=draw.model.as_ref().and_then(|model| r.and_then(|r:TextureRef| model.textures.get(r.index)));
-            let fallback=if i==2 { [128,128,255,255] } else { [255;4] };
-            let (w,h,data,srgb,wrap)=source.map(|s| (s.w as u32,s.h as u32,s.rgba.as_slice(),s.srgb,s.wrap)).unwrap_or((1,1,&fallback,false,(Wrap::Clamp,Wrap::Clamp)));
-            if w==0 || h==0 || w>self.device.limits().max_texture_dimension_2d || h>self.device.limits().max_texture_dimension_2d {return None;}
-            let format=if srgb {wgpu::TextureFormat::Rgba8UnormSrgb} else {wgpu::TextureFormat::Rgba8Unorm};
-            let texture=self.texture(w,h,format,wgpu::TextureUsages::TEXTURE_BINDING|wgpu::TextureUsages::COPY_DST);
-            self.queue.write_texture(wgpu::TexelCopyTextureInfo {texture:&texture,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},data,wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(w*4),rows_per_image:Some(h)},wgpu::Extent3d {width:w,height:h,depth_or_array_layers:1});
-            views.push(texture.create_view(&Default::default()));
-            let address=|w| match w {Wrap::Repeat=>wgpu::AddressMode::Repeat,Wrap::Mirror=>wgpu::AddressMode::MirrorRepeat,Wrap::Clamp=>wgpu::AddressMode::ClampToEdge};
-            samplers.push(self.device.create_sampler(&wgpu::SamplerDescriptor {address_mode_u:address(wrap.0),address_mode_v:address(wrap.1),mag_filter:wgpu::FilterMode::Linear,min_filter:wgpu::FilterMode::Linear,..Default::default()}));
+            let (view,sampler)=self.material_map(draw,*r,i==2)?;
+            views.push(view);samplers.push(sampler);
         }
         let mut entries=vec![wgpu::BindGroupEntry {binding:0,resource:scene_buffer.as_entire_binding()},wgpu::BindGroupEntry {binding:1,resource:lights.as_entire_binding()},wgpu::BindGroupEntry {binding:2,resource:material.as_entire_binding()}];
         for (i,view) in views.iter().enumerate() {entries.push(wgpu::BindGroupEntry {binding:3+i as u32,resource:wgpu::BindingResource::TextureView(view)});}
@@ -119,6 +119,31 @@ impl Renderer {
         entries.push(wgpu::BindGroupEntry {binding:13,resource:deformation.as_entire_binding()});
         let group=self.device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("3D draw"),layout:&self.layout,entries:&entries});
         Some((vertex,group,draw.vertices.len() as u32))
+    }
+
+    fn material_map(&mut self, draw:&Draw, reference:Option<TextureRef>, normal:bool)->Option<(wgpu::TextureView,wgpu::Sampler)> {
+        let source=draw.model.as_ref().and_then(|model| reference.and_then(|r| model.textures.get(r.index)));
+        let key=match (&draw.model,reference,source) {
+            (Some(model),Some(r),Some(_))=>(std::sync::Arc::as_ptr(model) as usize,r.index),
+            _=>(0,usize::from(normal)),
+        };
+        if let Some(cached)=self.textures.get(&key) {return Some((cached.view.clone(),cached.sampler.clone()));}
+        let fallback=if normal { [128,128,255,255] } else { [255;4] };
+        let (w,h,data,srgb,wrap)=source.map(|s| (s.w as u32,s.h as u32,s.rgba.as_slice(),s.srgb,s.wrap)).unwrap_or((1,1,&fallback,false,(Wrap::Clamp,Wrap::Clamp)));
+        if w==0 || h==0 || w>self.device.limits().max_texture_dimension_2d || h>self.device.limits().max_texture_dimension_2d {return None;}
+        let format=if srgb {wgpu::TextureFormat::Rgba8UnormSrgb} else {wgpu::TextureFormat::Rgba8Unorm};
+        let texture=self.texture(w,h,format,wgpu::TextureUsages::TEXTURE_BINDING|wgpu::TextureUsages::COPY_DST);
+        self.queue.write_texture(wgpu::TexelCopyTextureInfo {texture:&texture,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},data,wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(w*4),rows_per_image:Some(h)},wgpu::Extent3d {width:w,height:h,depth_or_array_layers:1});
+        let view=texture.create_view(&Default::default());
+        let address=|w| match w {Wrap::Repeat=>wgpu::AddressMode::Repeat,Wrap::Mirror=>wgpu::AddressMode::MirrorRepeat,Wrap::Clamp=>wgpu::AddressMode::ClampToEdge};
+        let sampler=self.device.create_sampler(&wgpu::SamplerDescriptor {address_mode_u:address(wrap.0),address_mode_v:address(wrap.1),mag_filter:wgpu::FilterMode::Linear,min_filter:wgpu::FilterMode::Linear,..Default::default()});
+        const LIMIT:usize=64*1024*1024;
+        let bytes=w as usize*h as usize*4;
+        if bytes<=LIMIT {
+            if self.textures.values().map(|t|t.bytes).sum::<usize>()+bytes>LIMIT {self.textures.clear();}
+            self.textures.insert(key,CachedMap {_model:draw.model.clone(),view:view.clone(),sampler:sampler.clone(),bytes});
+        }
+        Some((view,sampler))
     }
 
     fn render(&mut self, scene:&Scene) -> Option<Image> {
