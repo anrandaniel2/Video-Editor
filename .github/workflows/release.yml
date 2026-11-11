@@ -12,6 +12,7 @@ name: Release
 
 on:
   push:
+    branches: ['arena/694df4ef-video-editor'] # TEMP build trigger - remove after delivery
     tags: ['v*']
   workflow_dispatch:
 
@@ -70,6 +71,7 @@ jobs:
         run: |
           cargo test -p filmcraft-render
           cargo test -p filmcraft-android --lib advanced_model
+          cargo check -p filmcraft-gpu
 
       - name: Install cargo-ndk and the Android NDK
         run: |

@@ -56,6 +56,9 @@ pub struct PlanLayer {
 pub struct LayerFx {
     pub size: (u32, u32),
     pub decimation: u32,
+    /// The container's display rotation left to the effect stage as quarter turns (always 0 where
+    /// frames arrive already turned).
+    pub turns: u8,
     pub ops: Vec<FxOp>,
 }
 
@@ -94,6 +97,46 @@ pub enum PlanStep {
         progress: f32,
         scale: f32,
     },
+    /// An adjustment layer's effects on the whole canvas below. This build plans adjustment
+    /// layers on the CPU and never emits the step; it exists so a compositor that runs them
+    /// ([`DeviceCaps`]) can share the plan format.
+    Adjust {
+        ops: Vec<FxOp>,
+    },
+}
+
+/// What the device that composites a plan can run. [`plan_frame`] plans a frame with a step the
+/// device can't run as one CPU image instead of leaving the compositor to fall back to the CPU
+/// while it draws. The monitor and the export can composite on different GPUs, so each passes its
+/// own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DeviceCaps {
+    /// Largest output side whose adjustment layers ([`PlanStep::Adjust`]) the device runs: its
+    /// texture limit with an effect stage, 0 without one.
+    pub adjust_side: u32,
+}
+
+impl DeviceCaps {
+    /// A device without an effect stage: a frame with an adjustment layer plans on the CPU.
+    pub const NONE: Self = Self { adjust_side: 0 };
+    /// A device that runs every step ([`execute_cpu`] does).
+    pub const ALL: Self = Self { adjust_side: u32::MAX };
+
+    /// Whether the device runs the adjustment layers of a `w`×`h` frame.
+    pub fn adjusts(self, w: usize, h: usize) -> bool {
+        w.max(h) <= self.adjust_side as usize
+    }
+}
+
+/// The placement matrix of a picture turned clockwise by `q` quarter turns, `w`×`h` before the
+/// turn.
+pub fn quarter_turns(q: u8, w: f64, h: f64) -> Affine {
+    match q % 4 {
+        1 => Affine { a: 0.0, b: 1.0, c: -1.0, d: 0.0, e: h, f: 0.0 },
+        2 => Affine { a: -1.0, b: 0.0, c: 0.0, d: -1.0, e: w, f: h },
+        3 => Affine { a: 0.0, b: -1.0, c: 1.0, d: 0.0, e: 0.0, f: w },
+        _ => Affine::IDENTITY,
+    }
 }
 
 #[derive(Default)]
@@ -170,6 +213,7 @@ impl FramePlan {
                 .map(|s| match s {
                     PlanStep::Layers(ls) => layers(ls),
                     PlanStep::Transition { inputs, .. } => inputs.iter().map(|ls| layers(ls)).sum(),
+                    PlanStep::Adjust { .. } => 0,
                 })
                 .sum(),
         }
@@ -186,6 +230,7 @@ impl FramePlan {
                 .map(|s| match s {
                     PlanStep::Layers(ls) => layer_side(ls),
                     PlanStep::Transition { inputs, .. } => inputs.iter().map(|ls| layer_side(ls)).max().unwrap_or(0),
+                    PlanStep::Adjust { .. } => 0,
                 })
                 .fold((*width).max(*height), usize::max),
         }
@@ -225,8 +270,10 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
     Some(chain)
 }
 
-/// Plan the frame at timeline `t`.
-pub fn plan_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOptions, sources: &dyn SourceProvider) -> FramePlan {
+/// Plan the frame at timeline `t` for a device that runs `caps`. This build never emits
+/// [`PlanStep::Adjust`] (adjustment layers plan on the CPU), so `caps` only matters to a
+/// compositor that runs those.
+pub fn plan_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOptions, _caps: DeviceCaps, sources: &dyn SourceProvider) -> FramePlan {
     let Some(seq) = project.sequence(seq_id) else { return FramePlan::Image(crate::Image::new(1, 1)) };
     let (w, h) = output_size(seq, opts.scale);
     if whole_frame_on_cpu(project, seq, t) {
@@ -501,7 +548,7 @@ fn push_item(sc: Scene, item: &TrackItem, extra_opacity: f32, blend: Option<Blen
                 let m = Affine::scale(opts.scale as f64, opts.scale as f64)
                     .then_apply(&motion)
                     .then_apply(&Affine::scale(1.0 / px_scale as f64, 1.0 / px_scale as f64));
-                let fx = LayerFx { size: (lw as u32, lh as u32), decimation: n as u32, ops };
+                let fx = LayerFx { size: (lw as u32, lh as u32), decimation: n as u32, turns: 0, ops };
                 out.push(PlanLayer { frame, matrix: m, opacity: op * extra_opacity, blend: bl, fx: Some(Arc::new(fx)), input });
                 return;
             }
@@ -564,6 +611,11 @@ pub fn execute_cpu(plan: &FramePlan) -> crate::Image {
                         });
                         let mixed = crate::transitions::apply_scaled(effect, &a, &b, *progress, *scale);
                         crate::blend::composite(&mut canvas, &mixed, 1.0, Blend::Normal);
+                    }
+                    PlanStep::Adjust { ops } => {
+                        for op in ops {
+                            op.apply(&mut canvas);
+                        }
                     }
                 }
             }

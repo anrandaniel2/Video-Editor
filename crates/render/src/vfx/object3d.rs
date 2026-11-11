@@ -13,6 +13,8 @@ use filmcraft_text::render;
 use crate::effects::FxCtx;
 use crate::image::Image;
 
+use rayon::prelude::*;
+
 use super::{bv, chv, cv, fv, lin, smoothstep, tv};
 
 #[derive(Clone, Copy, Debug)]
@@ -333,12 +335,18 @@ impl Buf {
     fn composite(self, img: &mut Image) {
         let s = self.ss;
         let n = (s * s) as f32;
-        for y in 0..self.h / s {
-            for x in 0..self.w / s {
+        let (x0, y0, bw) = (self.x0 as usize, self.y0 as usize, self.w);
+        let rows = self.h / s;
+        let cols = self.w / s;
+        let iw = img.w;
+        // Each output row reads only its own samples and writes only its own pixels.
+        img.px.par_chunks_mut(iw * 4).enumerate().skip(y0).take(rows).for_each(|(iy, row)| {
+            let y = iy - y0;
+            for x in 0..cols {
                 let mut acc = [0.0f32; 4];
                 for oy in 0..s {
                     for ox in 0..s {
-                        let p = self.px[(y * s + oy) * self.w + x * s + ox];
+                        let p = self.px[(y * s + oy) * bw + x * s + ox];
                         for c in 0..4 {
                             acc[c] += p[c];
                         }
@@ -350,14 +358,14 @@ impl Buf {
                 if acc[3] <= 0.0 {
                     continue;
                 }
-                let (ix, iy) = (self.x0 as usize + x, self.y0 as usize + y);
-                if ix >= img.w || iy >= img.h {
+                let ix = x0 + x;
+                if ix >= iw {
                     continue;
                 }
-                let i = (iy * img.w + ix) * 4;
-                super::over(&mut img.px[i..i + 4], acc);
+                let i = ix * 4;
+                super::over(&mut row[i..i + 4], acc);
             }
-        }
+        });
     }
 }
 
@@ -418,6 +426,21 @@ fn shade(n: V3, wp: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
 
 /// A triangle with a colour per corner: shading is interpolated across the face (Gouraud), so
 /// a curved surface reads as curved instead of as a fan of flat facets.
+/// Run `f(y, zrow, prow)` over rows `y0..=y1` of `buf`, spreading wide fills across the CPU's
+/// cores. One triangle writes each sample of its rows exactly once, so rows never race and the
+/// z-test against earlier triangles is unchanged.
+fn rows_par(buf: &mut Buf, y0: usize, y1: usize, x0: usize, x1: usize, f: impl Fn(usize, &mut [f32], &mut [[f32; 4]]) + Sync) {
+    let rows = y1 - y0 + 1;
+    let w = buf.w;
+    if rows * (x1 - x0 + 1) > 16_384 {
+        buf.z.par_chunks_mut(w).zip(buf.px.par_chunks_mut(w)).enumerate().skip(y0).take(rows).for_each(|(y, (z, p))| f(y, z, p));
+    } else {
+        for y in y0..=y1 {
+            f(y, &mut buf.z[y * w..(y + 1) * w], &mut buf.px[y * w..(y + 1) * w]);
+        }
+    }
+}
+
 fn tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], cols: [[f32; 4]; 3]) {
     let [a, b, d] = pts;
     let area = (b.0 - a.0) * (d.1 - a.1) - (b.1 - a.1) * (d.0 - a.0);
@@ -428,9 +451,10 @@ fn tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], cols: [[f32; 4]; 3]) {
         return;
     };
     let inv = 1.0 / area;
-    for y in y0..=y1 {
+    let (bx, by, ss) = (buf.x0 as f32, buf.y0 as f32, buf.ss as f32);
+    rows_par(buf, y0, y1, x0, x1, |y, zrow, prow| {
         for x in x0..=x1 {
-            let (px, py) = buf.centre(x, y);
+            let (px, py) = (bx + (x as f32 + 0.5) / ss, by + (y as f32 + 0.5) / ss);
             let w0 = ((b.0 - a.0) * (py - a.1) - (b.1 - a.1) * (px - a.0)) * inv;
             let w1 = ((d.0 - b.0) * (py - b.1) - (d.1 - b.1) * (px - b.0)) * inv;
             let w2 = 1.0 - w0 - w1;
@@ -443,13 +467,12 @@ fn tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], cols: [[f32; 4]; 3]) {
             for k in 0..4 {
                 c[k] = w1 * cols[0][k] + w2 * cols[1][k] + w0 * cols[2][k];
             }
-            let i = y * buf.w + x;
-            if iz > buf.z[i] {
-                buf.z[i] = iz;
-                buf.px[i] = c;
+            if iz > zrow[x] {
+                zrow[x] = iz;
+                prow[x] = c;
             }
         }
-    }
+    });
 }
 
 /// A triangle already in world space (rotated and placed), with a normal per corner.
@@ -700,34 +723,60 @@ fn fill_face(buf: &mut Buf, contours: &[Vec<(f32, f32)>], plane: (f32, f32, f32)
     let Some((bx0, bx1, by0, by1)) = buf.range(xmin, xmax, ymin, ymax) else { return };
     let (pa, pb, pc) = plane;
     let ss = buf.ss as f32;
+    let (bx0f, by0f) = (buf.x0 as f32, buf.y0 as f32);
+    let rows = by1 - by0 + 1;
+    if rows * (bx1 - bx0 + 1) > 16_384 {
+        buf.z.par_chunks_mut(buf.w).zip(buf.px.par_chunks_mut(buf.w)).enumerate().skip(by0).take(rows).for_each(|(by, (zrow, prow))| {
+            fill_row(by, bx0, bx1, bx0f, by0f, ss, pa, pb, pc, contours, c, zrow, prow)
+        });
+    } else {
+        for by in by0..=by1 {
+            fill_row(by, bx0, bx1, bx0f, by0f, ss, pa, pb, pc, contours, c, &mut buf.z[by * buf.w..(by + 1) * buf.w], &mut buf.px[by * buf.w..(by + 1) * buf.w])
+        }
+    }
+}
+
+/// One scanline of [`fill_face`] (even-odd crossings at `by`), writing its own row only.
+#[allow(clippy::too_many_arguments)]
+fn fill_row(
+    by: usize,
+    bx0: usize,
+    bx1: usize,
+    bx0f: f32,
+    by0f: f32,
+    ss: f32,
+    pa: f32,
+    pb: f32,
+    pc: f32,
+    contours: &[Vec<(f32, f32)>],
+    c: [f32; 4],
+    zrow: &mut [f32],
+    prow: &mut [[f32; 4]],
+) {
+    let py = by0f + (by as f32 + 0.5) / ss;
     let mut xs = Vec::new();
-    for by in by0..=by1 {
-        let py = buf.y0 as f32 + (by as f32 + 0.5) / ss;
-        xs.clear();
-        for ct in contours {
-            for i in 0..ct.len() {
-                let (x0, ya) = ct[i];
-                let (x1, yb) = ct[(i + 1) % ct.len()];
-                if (ya <= py && yb > py) || (yb <= py && ya > py) {
-                    xs.push(x0 + (py - ya) * (x1 - x0) / (yb - ya));
-                }
+    for ct in contours {
+        for i in 0..ct.len() {
+            let (x0, ya) = ct[i];
+            let (x1, yb) = ct[(i + 1) % ct.len()];
+            if (ya <= py && yb > py) || (yb <= py && ya > py) {
+                xs.push(x0 + (py - ya) * (x1 - x0) / (yb - ya));
             }
         }
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for pair in xs.chunks_exact(2) {
-            let xa = (((pair[0] - buf.x0 as f32) * ss).ceil() as i64).max(bx0 as i64);
-            let xb = (((pair[1] - buf.x0 as f32) * ss).floor() as i64).min(bx1 as i64);
-            if xa > xb || xa >= buf.w as i64 {
-                continue;
-            }
-            for bx in xa as usize..=xb as usize {
-                let px = buf.x0 as f32 + (bx as f32 + 0.5) / ss;
-                let iz = pa * px + pb * py + pc;
-                let i = by * buf.w + bx;
-                if iz > buf.z[i] {
-                    buf.z[i] = iz;
-                    buf.px[i] = c;
-                }
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    for pair in xs.chunks_exact(2) {
+        let xa = (((pair[0] - bx0f) * ss).ceil() as i64).max(bx0 as i64);
+        let xb = (((pair[1] - bx0f) * ss).floor() as i64).min(bx1 as i64);
+        if xa > xb || xa >= zrow.len() as i64 {
+            continue;
+        }
+        for bx in xa as usize..=xb as usize {
+            let px = bx0f + (bx as f32 + 0.5) / ss;
+            let iz = pa * px + pb * py + pc;
+            if iz > zrow[bx] {
+                zrow[bx] = iz;
+                prow[bx] = c;
             }
         }
     }
@@ -911,17 +960,18 @@ fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model:
     let d2 = [v[2].uv[set][0] - v[0].uv[set][0], v[2].uv[set][1] - v[0].uv[set][1]];
     let det = d1[0] * d2[1] - d1[1] * d2[0];
     let fallback = if det.abs() > 1e-10 { e1.mul(d2[1]).sub(e2.mul(d1[1])).mul(1.0 / det).norm() } else { V3::new(1.0, 0.0, 0.0) };
-    for y in y0..=y1 {
+    let (bx, by, ss) = (buf.x0 as f32, buf.y0 as f32, buf.ss as f32);
+    // Rows never share samples: wide triangles (a model's big faces) light on every core.
+    rows_par(buf, y0, y1, x0, x1, |y, zrow, prow| {
         for x in x0..=x1 {
-            let (px, py) = buf.centre(x, y);
+            let (px, py) = (bx + (x as f32 + 0.5) / ss, by + (y as f32 + 0.5) / ss);
             let w0 = ((c.0 - b.0) * (py - b.1) - (c.1 - b.1) * (px - b.0)) * inv;
             let w1 = ((a.0 - c.0) * (py - c.1) - (a.1 - c.1) * (px - c.0)) * inv;
             let w2 = 1.0 - w0 - w1;
             if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 { continue; }
             let iz = w0 * a.2 + w1 * b.2 + w2 * c.2;
             if iz <= 0.0 { continue; }
-            let idx = y * buf.w + x;
-            if iz <= buf.z[idx] { continue; }
+            if iz <= zrow[x] { continue; }
             let q = [w0 * a.2 / iz, w1 * b.2 / iz, w2 * c.2 / iz];
             let mix3 = |get: &dyn Fn(&ModelVert) -> V3| get(&v[0]).mul(q[0]).add(get(&v[1]).mul(q[1])).add(get(&v[2]).mul(q[2]));
             let pos = mix3(&|v| v.p);
@@ -958,14 +1008,13 @@ fn model_tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], v: [ModelVert; 3], model:
             if alpha <= 0.0 { continue; }
             let col = shade_pbr(n, view, pos, p, base, metallic, rough, occ, emissive, alpha.clamp(0.0, 1.0), mat.unlit);
             if blend {
-                let dst = &mut buf.px[idx];
-                super::over(dst, col);
+                super::over(&mut prow[x], col);
             } else {
-                buf.z[idx] = iz;
-                buf.px[idx] = col;
+                zrow[x] = iz;
+                prow[x] = col;
             }
         }
-    }
+    });
 }
 
 fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam: (f32, f32, f32)) {

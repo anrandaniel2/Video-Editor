@@ -1,0 +1,36 @@
+[package]
+name = "filmcraft-gpu"
+description = "wgpu compositor: YUV/RGB layer sampling, linear-light premultiplied compositing in WGSL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+filmcraft-color = { workspace = true }
+filmcraft-frame = { workspace = true }
+filmcraft-geom = { workspace = true }
+filmcraft-project = { workspace = true }
+filmcraft-render = { workspace = true }
+filmcraft-time = { workspace = true }
+wgpu = { version = "30", default-features = false, features = ["wgsl"] }
+log = { workspace = true }
+pollster = "1"
+rayon = { workspace = true }
+
+# The GPU backends the phone draws on: Vulkan where available, OpenGL ES otherwise. Host builds
+# (checks, tests on CI) compile without a backend: `ExportRenderer::new` then has no adapter and
+# the CPU renderer runs everything.
+[target.'cfg(target_os = "android")'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "gles"] }
+
+[dev-dependencies]
+pollster = "1"
+filmcraft-export = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+wgpu = { version = "30", features = ["wgsl", "metal", "vulkan", "dx12", "gles"] }
+filmcraft-media = { workspace = true }
+filmcraft-time = { workspace = true }

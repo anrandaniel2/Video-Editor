@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 pub mod advanced;
 pub mod edits;
 pub mod export;
+mod gpu_export;
 pub mod masks;
 pub mod model;
 pub mod placement;
@@ -250,6 +251,9 @@ impl MobileSession {
         phone_prefs(&mut s);
         let n = filmcraft_text::fonts::add_source(&filmcraft_text::fonts::DirectorySource { dirs: vec!["/system/fonts".into()] });
         log::info!("{n} system font faces");
+        // exports composite on the GPU when the phone has one (the CPU renderer stays the
+        // reference and the fallback)
+        gpu_export::register();
         Ok(())
     }
 
