@@ -134,6 +134,11 @@ private class DrawingView(context: android.content.Context, val backgroundFrame:
     private var zoom = 1f
     private var dx = 0f
     private var dy = 0f
+    private var angle = 0f
+    private var oldAngle = 0f
+    private var lastX = 0f
+    private var lastY = 0f
+    val backdropObservers = mutableSetOf<View>()
     private var oldSpan = 0f
     private var oldX = 0f
     private var oldY = 0f
@@ -154,14 +159,33 @@ private class DrawingView(context: android.content.Context, val backgroundFrame:
             canvas.restoreToCount(saved)
         }
     }
-    override fun onDraw(canvas: Canvas) {
+    private fun transform() = android.graphics.Matrix().apply {
+        postScale(fit() * zoom, fit() * zoom)
+        postRotate(angle)
+        postTranslate(left() + dx, top() + dy)
+    }
+    private fun canvasPoint(x: Float, y: Float): FloatArray {
+        val inverse = android.graphics.Matrix()
+        transform().invert(inverse)
+        return floatArrayOf(x, y).also { inverse.mapPoints(it) }
+    }
+    fun drawScene(canvas: Canvas) {
         canvas.drawColor(android.graphics.Color.rgb(15, 17, 24))
-        canvas.save(); canvas.translate(left() + dx, top() + dy); canvas.scale(fit() * zoom, fit() * zoom)
+        canvas.save(); canvas.concat(transform())
         canvas.clipRect(0f, 0f, canvasW.toFloat(), canvasH.toFloat())
-        paint.reset(); paint.color = android.graphics.Color.BLACK
+        paint.reset(); paint.color = android.graphics.Color.BLACK; paint.isFilterBitmap = true
         canvas.drawRect(0f, 0f, canvasW.toFloat(), canvasH.toFloat(), paint)
         backgroundFrame?.let { canvas.drawBitmap(it, null, android.graphics.Rect(0, 0, canvasW, canvasH), paint) }
         render(canvas); canvas.restore()
+    }
+    override fun onDraw(canvas: Canvas) {
+        drawScene(canvas)
+        backdropObservers.forEach { it.postInvalidateOnAnimation() }
+    }
+    /** Midpoint quadratic interpolation consumes historical samples as well as the latest event. */
+    private fun sample(x: Float, y: Float) {
+        active?.path?.quadTo(lastX, lastY, (lastX + x) * .5f, (lastY + y) * .5f)
+        lastX = x; lastY = y
     }
     fun bitmap(): Bitmap = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888).also { render(Canvas(it)) }
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -171,37 +195,69 @@ private class DrawingView(context: android.content.Context, val backgroundFrame:
             val x = (event.getX(0) + event.getX(1)) / 2
             val y = (event.getY(0) + event.getY(1)) / 2
             val span = kotlin.math.hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
+            val currentAngle = Math.toDegrees(kotlin.math.atan2(event.getY(1) - event.getY(0), event.getX(1) - event.getX(0)).toDouble()).toFloat()
             if (oldSpan > 0 && event.actionMasked == MotionEvent.ACTION_MOVE) {
-                val next = (zoom * span / oldSpan).coerceIn(.25f, 8f)
-                dx = x - left() - (oldX - left() - dx) * next / zoom; dy = y - top() - (oldY - top() - dy) * next / zoom; zoom = next
+                val anchor = canvasPoint(oldX, oldY)
+                zoom = (zoom * span / oldSpan).coerceIn(.25f, 8f)
+                val delta = ((currentAngle - oldAngle + 540f) % 360f) - 180f
+                angle = (angle + delta) % 360f
+                val rotated = floatArrayOf(anchor[0], anchor[1])
+                android.graphics.Matrix().apply { postScale(fit() * zoom, fit() * zoom); postRotate(angle) }.mapPoints(rotated)
+                dx = x - left() - rotated[0]; dy = y - top() - rotated[1]
             }
-            oldSpan = span; oldX = x; oldY = y; invalidate(); return true
+            oldSpan = span; oldAngle = currentAngle; oldX = x; oldY = y; invalidate(); return true
         }
         if (navigating) { if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) navigating = false; return true }
-        val scale = fit() * zoom
-        val x = ((event.x - left() - dx) / scale).coerceIn(0f, canvasW.toFloat())
-        val y = ((event.y - top() - dy) / scale).coerceIn(0f, canvasH.toFloat())
+        val point = canvasPoint(event.x, event.y)
+        val x = point[0]; val y = point[1]
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (event.x < left() + dx || event.x > left() + dx + canvasW * scale || event.y < top() + dy || event.y > top() + dy + canvasH * scale) return true
+                if (x !in 0f..canvasW.toFloat() || y !in 0f..canvasH.toFloat()) return true
+                lastX = x; lastY = y
                 active = Ink(Path().apply { moveTo(x, y); lineTo(x + .01f, y) }, inkColor, if (brush == "Pencil") brushSize * .4f else brushSize, (opacity * 255).toInt(), brush, layer)
                 strokes.add(active!!)
             }
-            MotionEvent.ACTION_MOVE -> active?.path?.lineTo(x, y)
-            MotionEvent.ACTION_UP -> { if (active != null) redo.clear(); active = null; onEdit() }
+            MotionEvent.ACTION_MOVE -> {
+                for (i in 0 until event.historySize) {
+                    val historic = canvasPoint(event.getHistoricalX(i), event.getHistoricalY(i))
+                    sample(historic[0], historic[1])
+                }
+                sample(x, y)
+            }
+            MotionEvent.ACTION_UP -> { active?.path?.lineTo(x, y); if (active != null) redo.clear(); active = null; onEdit() }
             MotionEvent.ACTION_CANCEL -> { active?.let { strokes.remove(it) }; active = null }
         }
         invalidate(); return true
     }
 }
 
-/** Blur a frozen preview behind translucent, bordered glass; controls stay sharp. */
+/** Aligned live backdrop, redrawn by the canvas after strokes and camera gestures. */
+private class DrawingBackdrop(context: android.content.Context, private val drawing: DrawingView) : View(context) {
+    private var buffer: Bitmap? = null
+    private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); drawing.backdropObservers.add(this) }
+    override fun onDetachedFromWindow() { drawing.backdropObservers.remove(this); buffer?.recycle(); buffer = null; super.onDetachedFromWindow() }
+    override fun onDraw(canvas: Canvas) {
+        if (width == 0 || height == 0) return
+        // Quarter-resolution backdrop keeps the blur inexpensive during two-finger navigation.
+        val w = (width / 4).coerceAtLeast(1); val h = (height / 4).coerceAtLeast(1)
+        if (buffer?.width != w || buffer?.height != h) { buffer?.recycle(); buffer = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) }
+        val local = IntArray(2); val source = IntArray(2)
+        getLocationInWindow(local); drawing.getLocationInWindow(source)
+        val target = Canvas(buffer!!)
+        target.scale(w.toFloat() / width, h.toFloat() / height)
+        target.translate((source[0] - local[0]).toFloat(), (source[1] - local[1]).toFloat())
+        drawing.drawScene(target)
+        canvas.drawBitmap(buffer!!, null, android.graphics.Rect(0, 0, width, height), bitmapPaint)
+    }
+}
+
 @Composable
-private fun DrawingGlass(frame: Bitmap?, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Box(modifier.clip(RoundedCornerShape(24.dp)).border(1.dp, Color.White.copy(alpha = .22f), RoundedCornerShape(24.dp))) {
-        frame?.let { Image(it.asImageBitmap(), null, Modifier.matchParentSize().blur(28.dp), contentScale = androidx.compose.ui.layout.ContentScale.Crop) }
-        Box(Modifier.matchParentSize().background(Color(0xD0232835)))
-        Column(Modifier.padding(12.dp), content = content)
+private fun DrawingGlass(view: DrawingView, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Box(modifier.clip(RoundedCornerShape(20.dp)).border(1.dp, Color.White.copy(alpha = .22f), RoundedCornerShape(20.dp))) {
+        AndroidView(factory = { DrawingBackdrop(it, view) }, modifier = Modifier.matchParentSize().blur(20.dp))
+        Box(Modifier.matchParentSize().background(Color(0x99232835)))
+        Column(Modifier.padding(horizontal = 8.dp, vertical = 2.dp), content = content)
     }
 }
 
@@ -264,14 +320,14 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(420, easing = FastOutSlowInEasing)) }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize().background(Color(0xFF0F1118)).systemBarsPadding()) {
-            AndroidView(factory = { view }, modifier = Modifier.fillMaxSize().padding(bottom = 110.dp, top = 56.dp).graphicsLayer {
+            AndroidView(factory = { view }, modifier = Modifier.fillMaxSize().padding(top = 56.dp).graphicsLayer {
                 scaleX = .65f + .35f * entrance.value; scaleY = scaleX; alpha = entrance.value
             })
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = close) { Text("Cancel") }
                 TextButton(onClick = { ed.importDrawing(view.bitmap()) }, enabled = ed.busy == null) { Text("Done") }
             }
-            if (menu != null) DrawingGlass(frame, Modifier.align(Alignment.BottomCenter).padding(bottom = 138.dp, start = 16.dp, end = 16.dp).widthIn(max = 380.dp)) {
+            if (menu != null) DrawingGlass(view, Modifier.align(Alignment.BottomCenter).padding(bottom = 108.dp, start = 16.dp, end = 16.dp).widthIn(max = 380.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(menu!!, color = Color.White)
                     TextButton(onClick = { menu = null }) { Text("Close") }
@@ -288,8 +344,6 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                                 }
                             }
                         }
-                        Text("Size ${brushWidth.toInt()}", color = Color.White)
-                        Slider(brushWidth, { brushWidth = it; view.brushSize = it }, valueRange = 1f..100f)
                     }
                     "Layers" -> {
                         TextButton(onClick = { if (layers < 16) { layers++; layer = layers - 1; view.layers = layers; view.layer = layer } }) { Text("+ Add layer") }
@@ -301,7 +355,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                     }
                 }
             }
-            DrawingGlass(frame, Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth()) {
+            DrawingGlass(view, Modifier.align(Alignment.BottomCenter).padding(horizontal = 10.dp, vertical = 8.dp).fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
                     DrawIcon(LucideIcons.Paintbrush.glyph(), "Brushes") { menu = if (menu == "Brushes") null else "Brushes" }
                     Box(Modifier.size(32.dp).clip(RoundedCornerShape(7.dp)).background(Color(color)).border(2.dp, Color.White, RoundedCornerShape(7.dp)).semantics { contentDescription = "Brush color" }.clickable { menu = if (menu == "Colors") null else "Colors" })
@@ -310,9 +364,13 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                     DrawIcon(LucideIcons.Layers.glyph(), "Layers") { menu = if (menu == "Layers") null else "Layers" }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    GlyphIcon(Glyphs.Checker, Color.White, description = "Opacity")
-                    Slider(opacity, { opacity = it; view.opacity = it }, modifier = Modifier.weight(1f), valueRange = 0f..1f)
-                    Text("${(opacity * 100).toInt()}%", color = Color.White)
+                    GlyphIcon(LucideIcons.Paintbrush.glyph(), Color.White, size = 18.dp, description = "Brush size")
+                    Slider(brushWidth, { brushWidth = it; view.brushSize = it }, modifier = Modifier.weight(1f).height(32.dp).semantics { contentDescription = "Brush size" }, valueRange = 1f..100f)
+                    Text("${brushWidth.toInt()}", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    Spacer(Modifier.width(8.dp))
+                    GlyphIcon(Glyphs.Checker, Color.White, size = 18.dp, description = "Opacity")
+                    Slider(opacity, { opacity = it; view.opacity = it }, modifier = Modifier.weight(1f).height(32.dp).semantics { contentDescription = "Brush opacity" }, valueRange = 0f..1f)
+                    Text("${(opacity * 100).toInt()}%", color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
