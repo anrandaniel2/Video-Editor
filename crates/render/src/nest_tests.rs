@@ -69,7 +69,7 @@ impl Rig {
 
     /// The same frame through the frame plan (what the GPU compositor is given).
     fn planned(&self, seq: ItemId, t: Tick) -> Image {
-        plan::execute_cpu(&plan::plan_frame(&self.p, seq, t, RenderOptions::default(), &self.map))
+        plan::execute_cpu(&plan::plan_frame(&self.p, seq, t, RenderOptions::default(), plan::DeviceCaps::ALL, &self.map))
     }
 }
 
@@ -265,7 +265,7 @@ fn captions_inside_a_nest_are_part_of_its_picture() {
 
 /// How many layers the plan of `seq` at `t` has (None when it fell back to one CPU image).
 fn layer_count(r: &Rig, seq: ItemId, t: Tick) -> Option<usize> {
-    match plan::plan_frame(&r.p, seq, t, RenderOptions::default(), &r.map) {
+    match plan::plan_frame(&r.p, seq, t, RenderOptions::default(), plan::DeviceCaps::ALL, &r.map) {
         plan::FramePlan::Layers { layers, .. } => Some(layers.len()),
         _ => None,
     }
