@@ -96,17 +96,6 @@ internal fun downloadSound(address: String, dir: File): File {
 }
 
 @Composable
-internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
-    var url by remember { mutableStateOf("") }
-    AlertDialog(onDismissRequest = close, title = { Text("Online sound effects") }, text = {
-        Column {
-            Text("Paste a direct HTTPS sound download link. WAV, MP3, OGG, FLAC and AAC supported, up to 100 MB. Only import sounds you have permission to use. Downloads are saved inside your project.")
-            OutlinedTextField(url, { url = it }, label = { Text("Audio download URL") }, singleLine = true)
-        }
-    }, confirmButton = { TextButton(onClick = { ed.importOnlineSound(url) }, enabled = url.startsWith("https://") && ed.busy == null) { Text("Import sound") } }, dismissButton = { TextButton(onClick = close) { Text("Cancel") } })
-}
-
-@Composable
 internal fun ColorPicker(label: String, color: Int, change: (Int) -> Unit) {
     val hsv = remember(color) { FloatArray(3).also { android.graphics.Color.colorToHSV(color, it) } }
     var hex by remember(color) { mutableStateOf("%06X".format(color and 0xffffff)) }

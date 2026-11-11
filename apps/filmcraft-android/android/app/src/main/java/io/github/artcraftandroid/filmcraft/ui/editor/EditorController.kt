@@ -578,12 +578,20 @@ class EditorController(
         }
     }
 
-    fun importOnlineSound(url: String) {
+    fun importOnlineSound(url: String, attribution: String = "") {
+        if (busy != null) return
         stop()
         scope.launch {
             busy = "Downloading sound…"
             try {
-                val path = withContext(Dispatchers.IO) { downloadSound(url, project.mediaDir).absolutePath }
+                val path = withContext(Dispatchers.IO) {
+                    val file = downloadSound(url, project.mediaDir)
+                    if (attribution.isNotBlank()) {
+                        try { java.io.File(file.parentFile, file.name + ".credits.txt").writeText(attribution) }
+                        catch (e: Exception) { file.delete(); throw e }
+                    }
+                    file.absolutePath
+                }
                 engine.command { addAudio(listOf(path)) }
                 panel = null
             } catch (e: Exception) { host.tell(e.userMessage) }
