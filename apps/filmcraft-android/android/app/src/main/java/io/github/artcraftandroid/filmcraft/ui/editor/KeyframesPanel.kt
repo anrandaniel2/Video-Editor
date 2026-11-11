@@ -55,7 +55,7 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
     val lane = lanes.firstOrNull { it.id == laneId } ?: lanes.firstOrNull()
     val key = lane?.keys?.firstOrNull { it.time == selected }
     ToolPanel("Keyframes", close, modifier, tag = "keyframes_panel") {
-        Text("Enable Animate all, move the playhead, and use any slider or the preview controls. Every property is ready to animate. Tap a property title only when you want to edit its curve.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+        Text("Add a keyframe snapshot, move the playhead, then change any slider or preview control. Tap a property title to edit its curve.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
         if (error != null) Text(error.orEmpty(), color = Fc.Detail, modifier = Modifier.padding(12.dp))
         if (clip == null || lane == null) {
             Text("Select a clip with animatable properties.", color = Fc.Detail, modifier = Modifier.padding(12.dp))
@@ -63,7 +63,6 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
         }
         val animated = lanes.any { it.animated }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SelectChip("Animate all", animated, { ed.animationCommand("animation.all", JSONObject().put("clip",clip.id.toLong()).put("action","enable")) }, tag="keyframes_animate_all")
             SelectChip("◆ Key everything",false,{ed.animationCommand("animation.all",JSONObject().put("clip",clip.id.toLong()).put("action","key"))},tag="keyframes_key_all")
             if (animated) SelectChip("Stop animation",false,{ed.animationCommand("animation.all",JSONObject().put("clip",clip.id.toLong()).put("action","disable"))},tag="keyframes_stop_all")
         }

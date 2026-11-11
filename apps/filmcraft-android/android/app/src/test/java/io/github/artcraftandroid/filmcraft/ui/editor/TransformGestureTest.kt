@@ -4,6 +4,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class TransformGestureTest {
+    @Test fun interactiveFramesHaveAThirtyFpsBudgetAndBoundedAdaptiveResolution() {
+        assertEquals(33_333_333L,LivePreviewPolicy.FRAME_NANOS)
+        org.junit.Assert.assertTrue(LivePreviewPolicy.nextSide(720,720,50_000_000L)<720)
+        assertEquals(160,LivePreviewPolicy.nextSide(160,720,50_000_000L))
+        assertEquals(720,LivePreviewPolicy.nextSide(720,720,10_000_000L))
+    }
+
     @Test fun pinchTwistNoiseStaysInTheDeadZone() {
         val gate=RotationGate()
         listOf(1f,-0.5f,2f,-1f,3f,-2f).forEach {assertEquals(0f,gate.update(it),0.0001f)}

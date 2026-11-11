@@ -12,6 +12,7 @@ name: Release
 
 on:
   push:
+    branches: ['arena/694df4ef-video-editor'] # TEMP preview build
     tags: ['v*']
   workflow_dispatch:
 
@@ -117,8 +118,16 @@ jobs:
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
-            -Pfilmcraft.unsigned=true --no-daemon
+          set +e
+          ./gradlew testReleaseUnitTest --tests '*TransformGestureTest' --tests '*GizmoGeometryTest' assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
+            -Pfilmcraft.unsigned=true --no-daemon > /tmp/android-build.log 2>&1
+          rc=$?
+          cat /tmp/android-build.log
+          if [ "$rc" -ne 0 ]; then
+            msg=$(tail -c 7000 /tmp/android-build.log | sed -z 's/%/%25/g; s/\n/%0A/g')
+            echo "::error title=Android build failed::$msg"
+            exit "$rc"
+          fi
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
 

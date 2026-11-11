@@ -45,6 +45,7 @@ import io.github.artcraftandroid.filmcraft.engine.ProjectEntry
 import io.github.artcraftandroid.filmcraft.engine.Projects
 import io.github.artcraftandroid.filmcraft.engine.intoBitmap
 import io.github.artcraftandroid.filmcraft.engine.userMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -238,7 +239,9 @@ class EditorController(
             field = v.coerceIn(160, 1280)
         }
 
-    private data class FrameRequest(val time: Long, val draft: Boolean, val seq: Long)
+    private data class FrameRequest(val time: Long, val draft: Boolean, val seq: Long, val snapshot: Renderer?, val interactive: Boolean)
+    private var refineJob: Job? = null
+    private var interactiveSide = 640
     private val frameRequests = MutableStateFlow<FrameRequest?>(null)
     private var requestSeq = 0L
     private val bitmaps = arrayOfNulls<Bitmap>(2)
@@ -363,6 +366,8 @@ class EditorController(
     suspend fun close() {
         stop()
         captionJob?.let { job -> runCatching { engine.command { cancelCaptions(job) } } }
+        refreshJob?.join()
+        refineJob?.cancel()
         saveJob?.cancel()
         save()
         savePoster()
@@ -502,23 +507,38 @@ class EditorController(
         }
     }
 
-    private fun requestFrame(t: Long, draft: Boolean) {
-        frameRequests.value = FrameRequest(t, draft, ++requestSeq)
+    private fun requestFrame(t: Long, draft: Boolean, interactive: Boolean = false) {
+        refineJob?.cancel()
+        frameRequests.value = FrameRequest(t, draft, ++requestSeq, renderer, interactive)
     }
 
     private suspend fun renderFrames() {
         frameRequests.filterNotNull().collect { req ->
-            val r = renderer ?: return@collect
-            val side = if (req.draft && playing) (previewSide * 3 / 4).coerceAtLeast(160) else previewSide
+            val r = req.snapshot ?: return@collect
+            val side = when {
+                req.interactive -> interactiveSide.coerceIn(160, previewSide)
+                req.draft && playing -> (previewSide * 3 / 4).coerceAtLeast(160)
+                else -> previewSide
+            }
+            val started = System.nanoTime()
             val frame = withContext(engine.preview) { runCatching { r.frame(req.time, side.toUInt(), req.draft, null) }.getOrNull() } ?: return@collect
             val bmp = frame.intoBitmap(bitmaps[nextBitmap]) ?: return@collect
             bitmaps[nextBitmap] = bmp
             nextBitmap = 1 - nextBitmap
             picture = bmp.asImageBitmap()
-            // a draft that is still the newest wish is redrawn properly once things settle
-            if (req.draft && !playing && frameRequests.value?.seq == req.seq) {
-                delay(120)
-                if (frameRequests.value?.seq == req.seq && !playing) requestFrame(req.time, draft = false)
+            if (req.interactive) {
+                val elapsed = System.nanoTime() - started
+                // Adapt working resolution, not input cadence, when a phone cannot render a
+                // complex frame inside 33 ms. A settled frame always returns to full quality.
+                interactiveSide = LivePreviewPolicy.nextSide(side, previewSide, elapsed)
+            }
+            if (req.draft && !req.interactive && !playing && frameRequests.value?.seq == req.seq) {
+                // Never sleep inside the frame collector: that used to hold newer input up
+                // for 120 ms. Refinement is independent and cancelled by the very next edit.
+                refineJob = scope.launch {
+                    delay(100)
+                    if (frameRequests.value?.seq == req.seq && !playing && !liveEditing) requestFrame(req.time, draft = false)
+                }
             }
         }
     }
@@ -744,39 +764,69 @@ class EditorController(
 
     /** Move/scale/turn a clip while a finger does it: one undo step per gesture. */
     fun setPlacement(clip: ULong, p: io.github.artcraftandroid.filmcraft.core.Placement, merge: Boolean) {
-        pendingPlacement = clip to p
-        if (!merge) placementBegin = true
-        if (placementJob?.isActive == true) return
-        placementJob = scope.launch {
-            while (true) {
-                val next = pendingPlacement ?: break
-                pendingPlacement = null
-                val begin = placementBegin
-                placementBegin = false
-                runCatching { engine.command { setPlacement(next.first, next.second.x, next.second.y, next.second.scale, next.second.rotation, !begin) } }
-                refreshSoon()
-                delay(16)
-            }
+        queueLiveEdit("placement:$clip", begin = !merge) { first ->
+            setPlacement(clip, p.x, p.y, p.scale, p.rotation, !first)
         }
     }
 
-    private var pendingPlacement: Pair<ULong, io.github.artcraftandroid.filmcraft.core.Placement>? = null
-    private var placementBegin = false
-    private var placementJob: Job? = null
+    private data class LiveEdit(val begin: Boolean, val operation: MobileSession.(Boolean) -> Unit)
+    private val liveEdits = linkedMapOf<String, LiveEdit>()
+    var liveEditing by mutableStateOf(false)
+        private set
     private var refreshJob: Job? = null
     private var refreshPending = false
 
-    /** Throttle, rather than debounce: the image must keep updating while fingers are down.
-     * An edit received during refresh requests one more pass, including the final position. */
+    /** One latest edit per control, one native batch and one fresh render snapshot per 30 Hz
+     * tick. Pointer events never build an unbounded command queue. Timeline polling, saving,
+     * thumbnails and full-resolution refinement wait until the gesture settles. */
+    private fun queueLiveEdit(key: String, begin: Boolean = false, edit: MobileSession.(Boolean) -> Unit) {
+        liveEdits[key] = LiveEdit(begin || liveEdits[key]?.begin == true, edit)
+        refreshSoon()
+    }
+
     private fun refreshSoon() {
         refreshPending = true
         if (refreshJob?.isActive == true) return
+        liveEditing = true
+        refineJob?.cancel()
         refreshJob = scope.launch {
-            while (refreshPending) {
-                refreshPending = false
-                delay(40)
+            try {
+                var lastEdit = System.nanoTime()
+                while (isActive) {
+                    val tick = System.nanoTime()
+                    if (refreshPending || liveEdits.isNotEmpty()) {
+                        refreshPending = false
+                        lastEdit = tick
+                        val edits = liveEdits.values.toList()
+                        liveEdits.clear()
+                        val errors = mutableListOf<String>()
+                        val snapshot = try {
+                            engine.command {
+                                edits.forEach { edit ->
+                                    try { edit.operation.invoke(this, edit.begin) }
+                                    catch (e: Exception) { errors += e.userMessage }
+                                }
+                                renderer()
+                            }
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { errors += e.userMessage; null }
+                        errors.firstOrNull()?.let { host.tell(it) }
+                        if (snapshot != null) {
+                            renderer = snapshot
+                            media.renderer = snapshot
+                            requestFrame(playhead, draft = true, interactive = true)
+                        }
+                    } else if (tick - lastEdit >= 100_000_000L) break
+                    val remaining = LivePreviewPolicy.FRAME_NANOS - (System.nanoTime() - tick)
+                    if (remaining > 0) delay((remaining / 1_000_000L).coerceAtLeast(1))
+                }
+                liveEditing = false
                 refresh()
+            } finally {
+                liveEditing = false
+                refreshJob = null
             }
+            if (refreshPending || liveEdits.isNotEmpty()) refreshSoon()
         }
     }
 
@@ -833,16 +883,9 @@ class EditorController(
     }
 
     /** Mask drags use the placement gesture's coalesced refresh, not a save/render per pointer event. */
-    private fun maskCommand(block: MobileSession.() -> Unit) {
+    private fun maskCommand(key: String, block: MobileSession.() -> Unit) {
         stop()
-        scope.launch {
-            try {
-                engine.command { block() }
-            } catch (e: Exception) {
-                host.tell(e.userMessage)
-            }
-            refreshSoon()
-        }
+        queueLiveEdit(key) { block() }
     }
 
     private fun optimisticMask(change: (MaskInfo) -> MaskInfo) {
@@ -871,14 +914,14 @@ class EditorController(
         val c = selectedClip ?: return
         val index = selectedMaskIndex
         optimisticMask { it.copy(settings = settings) }
-        maskCommand { setClipMask(c.id, index, settings, merge) }
+        maskCommand("mask-settings:${c.id}:$index") { setClipMask(c.id, index, settings, merge) }
     }
 
     fun setMaskPath(path: MaskPath, merge: String? = null) {
         val c = selectedClip ?: return
         val index = selectedMaskIndex
         optimisticMask { it.copy(path = path) }
-        maskCommand { setClipMaskPath(c.id, index, path, merge) }
+        maskCommand("mask-path:${c.id}:$index") { setClipMaskPath(c.id, index, path, merge) }
     }
 
     fun addMaskVertex(after: Int, at: Pair<Double, Double>) {
@@ -953,6 +996,7 @@ class EditorController(
     }
 
     suspend fun loadObject3D(clip: ULong) {
+        if (liveEditing && object3DState?.clip == clip) return
         object3DState = runCatching { engine.command { object3dState(clip) } }.getOrNull()
     }
 
@@ -1003,11 +1047,7 @@ class EditorController(
         val c = selectedClip ?: return
         object3DState = object3DState?.copy(settings = settings)
         stop()
-        scope.launch {
-            try { engine.command { setObject3d(c.id, settings, merge) } }
-            catch (e: Exception) { host.tell(e.userMessage) }
-            refreshSoon()
-        }
+        queueLiveEdit("object:${c.id}") { setObject3d(c.id, settings, merge) }
     }
 
     fun toggleObjectAnimation() {
@@ -1041,10 +1081,15 @@ class EditorController(
     fun animationCommand(command: String, body: JSONObject) {
         stop()
         val json = body.toString()
+        if (body.has("merge")) {
+            val key = listOf(command, body.opt("clip"), body.opt("effect"), body.opt("mask"), body.opt("param"), body.opt("mediaTime")).joinToString(":")
+            queueLiveEdit(key) { execute(command, json); Unit }
+            return
+        }
         scope.launch {
             try {
                 engine.command { execute(command, json) }
-                if (body.has("merge")) refreshSoon() else refresh()
+                refresh()
             } catch (e: Exception) { host.tell(e.userMessage) }
         }
     }
@@ -1069,19 +1114,17 @@ class EditorController(
                 val out = engine.command { execute("lights.set", light.toJson()) }
                 sceneLights = SceneLightingState.from(out)
                 onAdded(JSONObject(out).optLong("id"))
+                refreshSoon()
             } catch (e: Exception) { host.tell(e.userMessage) }
         }
     }
 
     /** Put a light object in the scene (its `id` edits it; 0 creates one). */
     fun setLight(light: SceneLight, merge: String? = null) {
+        stop()
+        sceneLights = sceneLights.copy(lights = sceneLights.lights.map { if (it.id == light.id) light else it })
         val body = light.toJson(merge)
-        scope.launch {
-            try {
-                val out = engine.command { execute("lights.set", body) }
-                sceneLights = SceneLightingState.from(out)
-            } catch (e: Exception) { host.tell(e.userMessage) }
-        }
+        queueLiveEdit("light:${light.id}") { execute("lights.set", body); Unit }
     }
 
     fun removeLight(id: Long) {
@@ -1090,19 +1133,17 @@ class EditorController(
             try {
                 val out = engine.command { execute("lights.remove", """{"id":$id}""") }
                 sceneLights = SceneLightingState.from(out)
+                refreshSoon()
             } catch (e: Exception) { host.tell(e.userMessage) }
         }
     }
 
     /** The ambient fill: colour × level. */
     fun setAmbient(ambientColor: List<Float>, ambientLevel: Double, merge: String? = null) {
-        val body = SceneLightingState(lights = emptyList(), ambientColor = ambientColor, ambientLevel = ambientLevel).ambientJson(merge)
-        scope.launch {
-            try {
-                val out = engine.command { execute("lights.ambient", body) }
-                sceneLights = SceneLightingState.from(out)
-            } catch (e: Exception) { host.tell(e.userMessage) }
-        }
+        stop()
+        sceneLights = sceneLights.copy(ambientColor = ambientColor, ambientLevel = ambientLevel)
+        val body = sceneLights.ambientJson(merge)
+        queueLiveEdit("ambient") { execute("lights.ambient", body); Unit }
     }
 
     fun trackMotion(stereo: StereoLayout, baseline: Double, maxSeconds: Double) {
