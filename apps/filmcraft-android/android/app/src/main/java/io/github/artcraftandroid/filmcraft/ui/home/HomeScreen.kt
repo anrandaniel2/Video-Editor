@@ -90,6 +90,7 @@ fun HomeScreen(vm: AppViewModel) {
             ) {
                 QuickTile(LucideIcons.Images.glyph(), "From your photo library", "from_your_photo_library") { vm.newProject(NewProject.PhotoLibrary) }
                 QuickTile(LucideIcons.FilePlus.glyph(), "New from files", "new_from_files") { vm.newProject(NewProject.Files) }
+                QuickTile(LucideIcons.Paintbrush.glyph(), "Create drawing", "create_drawing") { vm.newProject(NewProject.Drawing) }
                 QuickTile(LucideIcons.SquarePlus.glyph(), "New blank project", "new_blank_project") { vm.newProject(NewProject.Blank) }
                 QuickTile(LucideIcons.AudioLines.glyph(), "Extract audio", "extract_audio_button") { vm.newProject(NewProject.ExtractAudio) }
             }

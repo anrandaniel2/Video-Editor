@@ -1,5 +1,10 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -115,122 +120,6 @@ internal fun ColorPicker(label: String, color: Int, change: (Int) -> Unit) {
     }
 }
 
-private data class Ink(val path: Path, val color: Int, val width: Float, val alpha: Int, val brush: String, val layer: Int)
-private class DrawingView(context: android.content.Context, val backgroundFrame: Bitmap?, val canvasW: Int, val canvasH: Int) : View(context) {
-    private fun fit() = minOf(width.toFloat() / canvasW, height.toFloat() / canvasH)
-    private fun left() = (width - canvasW * fit()) / 2
-    private fun top() = (height - canvasH * fit()) / 2
-    init { setLayerType(LAYER_TYPE_SOFTWARE, null) }
-    var onEdit: () -> Unit = {}
-    val strokes = mutableListOf<Ink>()
-    val redo = mutableListOf<Ink>()
-    var inkColor = android.graphics.Color.BLACK
-    var brushSize = 12f
-    var opacity = 1f
-    var brush = "Pen"
-    var layer = 0
-    var layers = 1
-    private var active: Ink? = null
-    private var zoom = 1f
-    private var dx = 0f
-    private var dy = 0f
-    private var angle = 0f
-    private var oldAngle = 0f
-    private var lastX = 0f
-    private var lastY = 0f
-    val backdropObservers = mutableSetOf<View>()
-    private var oldSpan = 0f
-    private var oldX = 0f
-    private var oldY = 0f
-    private var navigating = false
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private fun render(canvas: Canvas) {
-        for (l in 0 until layers) {
-            val saved = canvas.saveLayer(0f, 0f, canvasW.toFloat(), canvasH.toFloat(), null)
-            strokes.filter { it.layer == l }.forEach { s ->
-                paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE
-                paint.strokeCap = Paint.Cap.ROUND; paint.strokeJoin = Paint.Join.ROUND
-                paint.color = s.color; paint.alpha = s.alpha; paint.strokeWidth = s.width
-                if (s.brush == "Eraser") paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.CLEAR)
-                if (s.brush == "Airbrush") paint.maskFilter = android.graphics.BlurMaskFilter(s.width * .4f, android.graphics.BlurMaskFilter.Blur.NORMAL)
-                if (s.brush == "Marker") paint.alpha = (s.alpha * .4f).toInt()
-                canvas.drawPath(s.path, paint)
-            }
-            canvas.restoreToCount(saved)
-        }
-    }
-    private fun transform() = android.graphics.Matrix().apply {
-        postScale(fit() * zoom, fit() * zoom)
-        postRotate(angle)
-        postTranslate(left() + dx, top() + dy)
-    }
-    private fun canvasPoint(x: Float, y: Float): FloatArray {
-        val inverse = android.graphics.Matrix()
-        transform().invert(inverse)
-        return floatArrayOf(x, y).also { inverse.mapPoints(it) }
-    }
-    fun drawScene(canvas: Canvas) {
-        canvas.drawColor(android.graphics.Color.rgb(15, 17, 24))
-        canvas.save(); canvas.concat(transform())
-        canvas.clipRect(0f, 0f, canvasW.toFloat(), canvasH.toFloat())
-        paint.reset(); paint.color = android.graphics.Color.BLACK; paint.isFilterBitmap = true
-        canvas.drawRect(0f, 0f, canvasW.toFloat(), canvasH.toFloat(), paint)
-        backgroundFrame?.let { canvas.drawBitmap(it, null, android.graphics.Rect(0, 0, canvasW, canvasH), paint) }
-        render(canvas); canvas.restore()
-    }
-    override fun onDraw(canvas: Canvas) {
-        drawScene(canvas)
-        backdropObservers.forEach { it.postInvalidateOnAnimation() }
-    }
-    /** Midpoint quadratic interpolation consumes historical samples as well as the latest event. */
-    private fun sample(x: Float, y: Float) {
-        active?.path?.quadTo(lastX, lastY, (lastX + x) * .5f, (lastY + y) * .5f)
-        lastX = x; lastY = y
-    }
-    fun bitmap(): Bitmap = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888).also { render(Canvas(it)) }
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        parent?.requestDisallowInterceptTouchEvent(true)
-        if (event.pointerCount > 1) {
-            if (!navigating) { active?.let { strokes.remove(it) }; active = null; navigating = true; oldSpan = 0f; onEdit() }
-            val x = (event.getX(0) + event.getX(1)) / 2
-            val y = (event.getY(0) + event.getY(1)) / 2
-            val span = kotlin.math.hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
-            val currentAngle = Math.toDegrees(kotlin.math.atan2(event.getY(1) - event.getY(0), event.getX(1) - event.getX(0)).toDouble()).toFloat()
-            if (oldSpan > 0 && event.actionMasked == MotionEvent.ACTION_MOVE) {
-                val anchor = canvasPoint(oldX, oldY)
-                zoom = (zoom * span / oldSpan).coerceIn(.25f, 8f)
-                val delta = ((currentAngle - oldAngle + 540f) % 360f) - 180f
-                angle = (angle + delta) % 360f
-                val rotated = floatArrayOf(anchor[0], anchor[1])
-                android.graphics.Matrix().apply { postScale(fit() * zoom, fit() * zoom); postRotate(angle) }.mapPoints(rotated)
-                dx = x - left() - rotated[0]; dy = y - top() - rotated[1]
-            }
-            oldSpan = span; oldAngle = currentAngle; oldX = x; oldY = y; invalidate(); return true
-        }
-        if (navigating) { if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) navigating = false; return true }
-        val point = canvasPoint(event.x, event.y)
-        val x = point[0]; val y = point[1]
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                if (x !in 0f..canvasW.toFloat() || y !in 0f..canvasH.toFloat()) return true
-                lastX = x; lastY = y
-                active = Ink(Path().apply { moveTo(x, y); lineTo(x + .01f, y) }, inkColor, if (brush == "Pencil") brushSize * .4f else brushSize, (opacity * 255).toInt(), brush, layer)
-                strokes.add(active!!)
-            }
-            MotionEvent.ACTION_MOVE -> {
-                for (i in 0 until event.historySize) {
-                    val historic = canvasPoint(event.getHistoricalX(i), event.getHistoricalY(i))
-                    sample(historic[0], historic[1])
-                }
-                sample(x, y)
-            }
-            MotionEvent.ACTION_UP -> { active?.path?.lineTo(x, y); if (active != null) redo.clear(); active = null; onEdit() }
-            MotionEvent.ACTION_CANCEL -> { active?.let { strokes.remove(it) }; active = null }
-        }
-        invalidate(); return true
-    }
-}
-
 /** Aligned live backdrop, redrawn by the canvas after strokes and camera gestures. */
 private class DrawingBackdrop(context: android.content.Context, private val drawing: DrawingView) : View(context) {
     private var buffer: Bitmap? = null
@@ -300,19 +189,43 @@ private fun WheelPicker(color: Int, change: (Int) -> Unit) {
 @Composable
 internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val frame = remember { ed.stop(); ed.picture?.asAndroidBitmap()?.copy(Bitmap.Config.ARGB_8888, false) }
+    val frame = remember { ed.stop(); (if (ed.blankDrawing) null else ed.picture)?.asAndroidBitmap()?.copy(Bitmap.Config.ARGB_8888, false) }
     val view = remember {
         val w = ed.timeline?.width?.toInt()?.coerceAtLeast(1) ?: 1080
         val h = ed.timeline?.height?.toInt()?.coerceAtLeast(1) ?: 1920
-        val ratio = minOf(1f, 2048f / maxOf(w, h))
+        val ratio = minOf(1f, 1536f / maxOf(w, h))
         DrawingView(context, frame, (w * ratio).toInt().coerceAtLeast(1), (h * ratio).toInt().coerceAtLeast(1))
     }
-    DisposableEffect(Unit) { onDispose { frame?.recycle() } }
+    DisposableEffect(Unit) { onDispose { view.dispose(); frame?.recycle(); ed.blankDrawing = false } }
     var color by remember { mutableIntStateOf(android.graphics.Color.BLACK) }
     var brushWidth by remember { mutableFloatStateOf(12f) }
     var opacity by remember { mutableFloatStateOf(1f) }
-    var layer by remember { mutableIntStateOf(0) }
-    var layers by remember { mutableIntStateOf(1) }
+    var tool by remember { mutableStateOf("Brush") }
+    var selectedOnly by remember { mutableStateOf(false) }
+    var currentOnly by remember { mutableStateOf(true) }
+    var transformScale by remember { mutableFloatStateOf(1f) }
+    var meshPoints by remember { mutableFloatStateOf(3f) }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    val importScope = rememberCoroutineScope()
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) importScope.launch {
+            importing = true
+            try {
+                val image = withContext(Dispatchers.IO) {
+                    val src = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
+                    android.graphics.ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
+                        decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                        val ratio = minOf(1f, 1536f / maxOf(info.size.width, info.size.height))
+                        decoder.setTargetSize((info.size.width * ratio).toInt().coerceAtLeast(1), (info.size.height * ratio).toInt().coerceAtLeast(1))
+                    }
+                }
+                view.importImage(image); importError = null
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { importError = "Could not import that picture." }
+            finally { importing = false }
+        }
+    }
     var menu by remember { mutableStateOf<String?>(null) }
     var brush by remember { mutableStateOf("Pen") }
     var revision by remember { mutableIntStateOf(0) }
@@ -325,18 +238,43 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
             })
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = close) { Text("Cancel") }
-                TextButton(onClick = { ed.importDrawing(view.bitmap()) }, enabled = ed.busy == null) { Text("Done") }
+                TextButton(onClick = { ed.importDrawing(view.bitmap()) }, enabled = ed.busy == null && !importing && view.transformMode == null) { Text("Done") }
+            }
+            DrawingGlass(view, Modifier.align(Alignment.CenterStart).padding(start = 8.dp, top = 60.dp, bottom = 110.dp).width(58.dp)) {
+                Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                    listOf("Brush" to LucideIcons.Paintbrush.glyph(), "Eraser" to LucideIcons.DrawEraser.glyph(), "Smudge" to LucideIcons.DrawSmudge.glyph(), "Blur" to LucideIcons.DrawBlur.glyph(), "Lasso" to LucideIcons.DrawLasso.glyph(), "Magic wand" to LucideIcons.WandSparkles.glyph()).forEach { (name, icon) ->
+                        Box(Modifier.background(if (tool == name) Color.White.copy(alpha = .18f) else Color.Transparent, RoundedCornerShape(10.dp))) {
+                            DrawIcon(icon, name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes" }
+                        }
+                    }
+                    DrawIcon(LucideIcons.Maximize.glyph(), "Transform current layer", view.transformMode == null) { selectedOnly = false; menu = "Transform" }
+                }
+            }
+            if ((tool == "Lasso" || tool == "Magic wand") && view.transformMode == null) {
+                DrawingGlass(view, Modifier.align(Alignment.TopCenter).padding(top = 54.dp, start = 72.dp, end = 8.dp).widthIn(max = 420.dp)) {
+                    Row {
+                        DrawIcon(LucideIcons.Copy.glyph(), "Copy selection", view.selection != null) { view.copySelection() }
+                        DrawIcon(LucideIcons.ClipboardPaste.glyph(), "Paste", view.canPaste && view.canAddLayer) { view.paste() }
+                        DrawIcon(LucideIcons.DrawMove.glyph(), "Move selection", view.selection != null) { selectedOnly = true; view.beginTransform("Normal", true); transformScale = 1f; menu = "Transform" }
+                        DrawIcon(LucideIcons.Maximize.glyph(), "Transform selection", view.selection != null) { selectedOnly = true; menu = "Transform" }
+                        DrawIcon(LucideIcons.CircleX.glyph(), "Clear selection", view.selection != null) { view.clearSelection(); revision++ }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(currentOnly, { currentOnly = it; view.currentLayerOnly = it })
+                        Text("Current layer only", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
             }
             if (menu != null) DrawingGlass(view, Modifier.align(Alignment.BottomCenter).padding(bottom = 108.dp, start = 16.dp, end = 16.dp).widthIn(max = 380.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(menu!!, color = Color.White)
-                    TextButton(onClick = { menu = null }) { Text("Close") }
+                    TextButton(onClick = { if (view.transformMode != null) view.finishTransform(false); menu = null }) { Text("Close") }
                 }
                 when (menu) {
                     "Colors" -> WheelPicker(color) { color = it; view.inkColor = it }
                     "Brushes" -> {
                         listOf("Pen", "Pencil", "Marker", "Airbrush", "Eraser").forEach { name ->
-                            Row(Modifier.fillMaxWidth().clickable { brush = name; view.brush = name; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.fillMaxWidth().clickable { brush = name; view.brush = name; tool = if (name == "Eraser") "Eraser" else "Brush"; view.tool = tool; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text(if (brush == name) "• $name" else name, color = Color.White, modifier = Modifier.width(90.dp))
                                 ComposeCanvas(Modifier.weight(1f).height(28.dp)) {
                                     val path = androidx.compose.ui.graphics.Path().apply { moveTo(0f, size.height / 2); cubicTo(size.width * .3f, -10f, size.width * .6f, size.height + 10f, size.width, size.height / 2) }
@@ -345,11 +283,35 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                             }
                         }
                     }
+                    "Transform" -> {
+                        if (view.transformMode == null) {
+                            Text(if (selectedOnly) "Transform selection on current layer" else "Transform current layer", color = Color.White)
+                            listOf("Normal", "Perspective", "Mesh").forEach { mode ->
+                                TextButton(onClick = { view.beginTransform(mode, selectedOnly); transformScale = 1f; revision++ }) { Text("$mode transform") }
+                            }
+                        } else {
+                            Text("${view.transformMode} • drag ${if (view.transformMode == "Normal") "to move" else "control points"}", color = Color.White)
+                            if (view.transformMode == "Normal") {
+                                Text("Scale ${(transformScale * 100).toInt()}%", color = Color.White)
+                                Slider(transformScale, { transformScale = it; view.setScale(it) }, valueRange = .1f..4f)
+                            }
+                            if (view.transformMode == "Mesh") {
+                                Text("Mesh divisions ${meshPoints.toInt()}", color = Color.White)
+                                Slider(meshPoints, { meshPoints = it; view.resetMesh(it.toInt()) }, valueRange = 2f..12f, steps = 9)
+                            }
+                            Row {
+                                TextButton(onClick = { view.finishTransform(false); menu = null }) { Text("Cancel transform") }
+                                TextButton(onClick = { view.finishTransform(true); menu = null }) { Text("Apply") }
+                            }
+                        }
+                    }
                     "Layers" -> {
-                        TextButton(onClick = { if (layers < 16) { layers++; layer = layers - 1; view.layers = layers; view.layer = layer } }) { Text("+ Add layer") }
+                        TextButton(onClick = { view.addLayer() }, enabled = view.canAddLayer) { Text("+ Add layer") }
+                        TextButton(onClick = { imagePicker.launch("image/*") }, enabled = view.canAddLayer && !importing) { Text(if (importing) "Importing…" else "Import picture") }
+                        importError?.let { Text(it, color = Color.White) }
                         Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
-                            (layers - 1 downTo 0).forEach { index ->
-                                TextButton(onClick = { layer = index; view.layer = index }) { Text("${if (layer == index) "●" else "○"} Layer ${index + 1}") }
+                            (view.layers - 1 downTo 0).forEach { index ->
+                                TextButton(onClick = { view.layer = index; revision++ }) { Text("${if (view.layer == index) "●" else "○"} Layer ${index + 1}") }
                             }
                         }
                     }
@@ -357,11 +319,11 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
             }
             DrawingGlass(view, Modifier.align(Alignment.BottomCenter).padding(horizontal = 10.dp, vertical = 8.dp).fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
-                    DrawIcon(LucideIcons.Paintbrush.glyph(), "Brushes") { menu = if (menu == "Brushes") null else "Brushes" }
-                    Box(Modifier.size(32.dp).clip(RoundedCornerShape(7.dp)).background(Color(color)).border(2.dp, Color.White, RoundedCornerShape(7.dp)).semantics { contentDescription = "Brush color" }.clickable { menu = if (menu == "Colors") null else "Colors" })
-                    DrawIcon(LucideIcons.Undo2.glyph(), "Undo", revision >= 0 && view.strokes.isNotEmpty()) { view.redo.add(view.strokes.removeAt(view.strokes.lastIndex)); view.invalidate(); revision++ }
-                    DrawIcon(LucideIcons.Redo2.glyph(), "Redo", revision >= 0 && view.redo.isNotEmpty()) { view.strokes.add(view.redo.removeAt(view.redo.lastIndex)); view.invalidate(); revision++ }
-                    DrawIcon(LucideIcons.Layers.glyph(), "Layers") { menu = if (menu == "Layers") null else "Layers" }
+                    DrawIcon(LucideIcons.Paintbrush.glyph(), "Brushes", view.transformMode == null) { menu = if (menu == "Brushes") null else "Brushes" }
+                    Box(Modifier.size(32.dp).clip(RoundedCornerShape(7.dp)).background(Color(color)).border(2.dp, Color.White, RoundedCornerShape(7.dp)).semantics { contentDescription = "Brush color" }.clickable(enabled = view.transformMode == null) { menu = if (menu == "Colors") null else "Colors" })
+                    DrawIcon(LucideIcons.Undo2.glyph(), "Undo", revision >= 0 && view.canUndo) { view.undo() }
+                    DrawIcon(LucideIcons.Redo2.glyph(), "Redo", revision >= 0 && view.canRedo) { view.redo() }
+                    DrawIcon(LucideIcons.Layers.glyph(), "Layers", view.transformMode == null) { menu = if (menu == "Layers") null else "Layers" }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     GlyphIcon(LucideIcons.Paintbrush.glyph(), Color.White, size = 18.dp, description = "Brush size")

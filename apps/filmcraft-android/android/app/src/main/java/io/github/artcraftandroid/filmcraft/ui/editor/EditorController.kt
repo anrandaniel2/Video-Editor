@@ -604,6 +604,8 @@ class EditorController(
         }
     }
 
+    var blankDrawing = false
+
     fun importDrawing(bitmap: android.graphics.Bitmap) {
         scope.launch {
             busy = "Adding drawing…"

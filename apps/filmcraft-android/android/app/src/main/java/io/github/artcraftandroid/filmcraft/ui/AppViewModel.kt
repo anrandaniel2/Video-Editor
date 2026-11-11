@@ -37,7 +37,7 @@ import kotlinx.coroutines.withContext
 enum class Screen { Home, Editor, Export, Settings, About, Licences }
 
 /** How a new project starts. */
-enum class NewProject { PhotoLibrary, Files, Blank, ExtractAudio }
+enum class NewProject { PhotoLibrary, Files, Blank, Drawing, ExtractAudio }
 
 /** A request for the activity: show a picker and hand back what was chosen. */
 data class PickRequest(val kind: PickKind, val onPicked: (List<Uri>) -> Unit)
@@ -148,10 +148,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     fun newProject(how: NewProject) {
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
         when (how) {
-            NewProject.Blank -> viewModelScope.launch {
-                val (w, h) = 1080 to 1920
+            NewProject.Blank, NewProject.Drawing -> viewModelScope.launch {
+                val (w, h) = if (how == NewProject.Drawing) 1080 to 1080 else 1080 to 1920
                 val p = withContext(Dispatchers.IO) { projects.create(projects.todaysName(), w, h) }
                 open(e, p, fresh = true)
+                if (how == NewProject.Drawing) editor?.let { it.blankDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
             }
             NewProject.PhotoLibrary, NewProject.Files -> pick(if (how == NewProject.PhotoLibrary) PickKind.PhotosAndVideos else PickKind.FilesVisual) { uris ->
                 if (uris.isEmpty()) return@pick
