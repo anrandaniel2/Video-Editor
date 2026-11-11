@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 
 pub fn register() { filmcraft_render::scene3d::register_backend(render); }
 
-fn render(scene: &Scene) -> Option<Image> {
+pub fn render(scene: &Scene) -> Option<Image> {
     static GPU: OnceLock<Option<Mutex<Renderer>>> = OnceLock::new();
     if crate::export_renderer::device_failed() { return None; }
     let mut gpu = GPU.get_or_init(|| Renderer::new().map(Mutex::new)).as_ref()?.lock().ok()?;

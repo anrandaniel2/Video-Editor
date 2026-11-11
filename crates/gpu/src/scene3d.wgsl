@@ -38,9 +38,9 @@ fn matrix_at(i:u32) -> mat4x4<f32> { return mat4x4<f32>(deformation[i],deformati
         let joint_count=u32(info.y); let morph_count=u32(info.z); let vertex_count=u32(info.w);
         let weights_start=17u+joint_count*8u;
         let deltas_start=weights_start+morph_count;
-        for(var target=0u; target<morph_count; target=target+1u) {
-            let weight=deformation[weights_start+target].x;
-            let offset=deltas_start+(target*vertex_count+u32(v.morph_index))*3u;
+        for(var morph=0u; morph<morph_count; morph=morph+1u) {
+            let weight=deformation[weights_start+morph].x;
+            let offset=deltas_start+(morph*vertex_count+u32(v.morph_index))*3u;
             position=position+weight*deformation[offset].xyz;
             normal=normal+weight*deformation[offset+1u].xyz;
             tangent=tangent+weight*deformation[offset+2u].xyz;
