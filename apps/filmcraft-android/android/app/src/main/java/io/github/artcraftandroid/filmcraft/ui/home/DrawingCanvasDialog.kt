@@ -3,6 +3,13 @@ package io.github.artcraftandroid.filmcraft.ui.home
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -37,21 +44,42 @@ internal fun DrawingCanvasDialog(close: () -> Unit, create: (Int, Int) -> Unit) 
     Dialog(onDismissRequest = close, properties = DialogProperties(decorFitsSystemWindows = false)) {
         ImmersiveDialog()
         CompositionLocalProvider(LocalEditorGlass provides glass) {
-            Column(Modifier.fillMaxWidth().editorGlass(24.dp).padding(20.dp).verticalScroll(rememberScrollState())) {
-                Text("Create drawing", style = MaterialTheme.typography.titleLarge)
-                Text("Canvas resolution", style = MaterialTheme.typography.bodyMedium)
-                listOf("Small square" to (512 to 512), "Square" to (1080 to 1080), "Portrait" to (1080 to 1920), "Landscape" to (1920 to 1080), "2K square" to (2048 to 2048)).forEach { (name, size) ->
-                    TextButton(onClick = { width = size.first.toString(); height = size.second.toString() }) { Text("$name · ${size.first} × ${size.second}") }
+            Column(Modifier.fillMaxWidth().editorGlass(28.dp).padding(24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("New canvas", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                        Text("A little space for your next idea", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = .65f))
+                    }
+                    IconButton(onClick = close) { GlyphIcon(LucideIcons.CircleX.glyph(), Color.White, description = "Close") }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(width, { width = it.filter(Char::isDigit).take(4) }, label = { Text("Width") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
-                    OutlinedTextField(height, { height = it.filter(Char::isDigit).take(4) }, label = { Text("Height") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
+                Box(Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = .04f)), contentAlignment = Alignment.Center) {
+                    val ratio = if (w > 0 && h > 0) w.toFloat() / h else 1f
+                    Box(Modifier.height(if (ratio >= 1) (80 / ratio.coerceAtMost(4f)).dp else 80.dp).aspectRatio(ratio.coerceIn(.25f, 4f)).background(Color.White, RoundedCornerShape(4.dp)))
                 }
-                Text("64–4096 px per side, up to 4 megapixels. Your chosen resolution is preserved.", style = MaterialTheme.typography.bodySmall)
-                Row(Modifier.align(Alignment.End)) {
-                    TextButton(onClick = close) { Text("Cancel") }
-                    TextButton(onClick = { create(w, h) }, enabled = valid) { Text("Create") }
+                Text("CHOOSE A PRESET", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .6f))
+                val presets = listOf("Sketch" to (512 to 512), "Square" to (1080 to 1080), "Portrait" to (1080 to 1920), "Landscape" to (1920 to 1080), "2K square" to (2048 to 2048))
+                presets.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        row.forEach { (name, size) ->
+                            val selected = w == size.first && h == size.second
+                            Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = if (selected) .16f else .04f))
+                                .border(1.dp, Color.White.copy(alpha = if (selected) .75f else .12f), RoundedCornerShape(14.dp))
+                                .clickable { width = size.first.toString(); height = size.second.toString() }.padding(12.dp)) {
+                                Text(name, style = MaterialTheme.typography.labelLarge)
+                                Text("${size.first} × ${size.second}", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = .65f))
+                            }
+                        }
+                        if (row.size == 1) Spacer(Modifier.weight(1f))
+                    }
                 }
+                Text("CUSTOM SIZE", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .6f))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(width, { width = it.filter(Char::isDigit).take(4) }, label = { Text("Width · px") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp))
+                    IconButton(onClick = { val old = width; width = height; height = old }) { GlyphIcon(LucideIcons.RotateCcw.glyph(), Color.White, description = "Swap dimensions") }
+                    OutlinedTextField(height, { height = it.filter(Char::isDigit).take(4) }, label = { Text("Height · px") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp))
+                }
+                Text(if (valid) "${"%.1f".format(w.toLong() * h / 1_000_000.0)} MP · transparent canvas" else "Use 64–4096 px per side, up to 4 megapixels.", style = MaterialTheme.typography.bodySmall, color = if (valid) Color.White.copy(alpha = .65f) else MaterialTheme.colorScheme.error)
+                Button(onClick = { create(w, h) }, enabled = valid, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(14.dp)) { Text("Create canvas") }
             }
         }
     }

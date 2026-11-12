@@ -107,6 +107,7 @@ private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modif
 }
 
 private fun addTools(ed: EditorController) = listOf(
+    Tool("editor_tool_online_videos", "Online videos", LucideIcons.Film.glyph()) { ed.submenu = Submenu.None; ed.panel = Panel.OnlineVideos },
     Tool("editor_tool_overlay", "Overlay", LucideIcons.Layers.glyph()) { ed.addOverlay() },
     Tool("editor_tool_drawing", "Draw", LucideIcons.Images.glyph()) { ed.panel = Panel.Drawing },
     Tool("editor_tool_audio", "Audio", LucideIcons.Music.glyph()) { ed.submenu = Submenu.AddAudio },
@@ -127,6 +128,7 @@ private fun addAudioTools(ed: EditorController) = listOf(
 )
 
 private fun filesTools(ed: EditorController) = listOf(
+    Tool("editor_tool_files_online_videos", "Online videos", LucideIcons.Film.glyph()) { ed.submenu = Submenu.None; ed.panel = Panel.OnlineVideos },
     Tool("editor_tool_files_overlay", "Photo / video overlay", LucideIcons.Layers.glyph()) { ed.addOverlay() },
     Tool("editor_tool_files_visual", "Images and videos", LucideIcons.Images.glyph()) { ed.addMedia(PickKind.FilesVisual) },
     Tool("editor_tool_files_audio", "Audio", LucideIcons.Music.glyph()) { ed.addMedia(PickKind.FilesAudio) },

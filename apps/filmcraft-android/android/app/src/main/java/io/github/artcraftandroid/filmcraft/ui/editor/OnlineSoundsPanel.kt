@@ -24,14 +24,14 @@ import java.net.URI
 import java.net.URLEncoder
 
 internal data class OnlineSound(val id: Long, val title: String, val url: String, val page: String, val artist: String, val license: String, val licenseUrl: String, val bytes: Long) {
-    val credits: String get() = "$title\nCreator: $artist\nLicense: $license\n$licenseUrl\nSource: $page\nAudio: $url\n"
+    val credits: String get() = "$title\nCreator: $artist\nLicense: $license\n$licenseUrl\nSource: $page\nMedia: $url\n"
 }
 internal data class SoundPage(val sounds: List<OnlineSound>, val next: Int?)
 
 /** Public catalog: no embedded secret, scraping, or proxy service required. */
 internal object CommonsSounds {
     private fun plain(value: String) = Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString().trim()
-    fun parse(json: JSONObject): SoundPage {
+    fun parse(json: JSONObject, video: Boolean = false): SoundPage {
         json.optJSONObject("error")?.let { error(it.optString("info", "The sound service returned an error.")) }
         val pages = json.optJSONObject("query")?.optJSONArray("pages")
         val sounds = buildList {
@@ -41,22 +41,23 @@ internal object CommonsSounds {
                 val url = info.optString("url")
                 val mime = info.optString("mime")
                 val ext = runCatching { URI(url).path.substringAfterLast('.').lowercase() }.getOrDefault("")
-                if (!url.startsWith("https://") || !mime.startsWith("audio/") || ext !in listOf("wav", "mp3", "ogg", "flac", "m4a", "aac", "opus")) continue
+                val extensions = if (video) listOf("webm", "mp4", "mov", "m4v") else listOf("wav", "mp3", "ogg", "flac", "m4a", "aac", "opus")
+                if (!url.startsWith("https://") || !mime.startsWith(if (video) "video/" else "audio/") || ext !in extensions) continue
                 val meta = info.optJSONObject("extmetadata") ?: continue
                 fun field(key: String) = plain(meta.optJSONObject(key)?.optString("value").orEmpty())
                 val license = field("LicenseShortName")
                 // Do not offer media without visible rights information or files above the importer limit.
                 val bytes = info.optLong("size")
-                if (license.isBlank() || bytes <= 0 || bytes > 100L * 1024 * 1024) continue
+                if (license.isBlank() || bytes <= 0 || bytes > (if (video) 250L else 100L) * 1024 * 1024) continue
                 add(OnlineSound(page.getLong("pageid"), page.optString("title").removePrefix("File:").substringBeforeLast('.'), url,
                     info.optString("descriptionurl"), field("Artist").ifBlank { "See source page" }, license, field("LicenseUrl"), bytes))
             }
         }
         return SoundPage(sounds, json.optJSONObject("continue")?.let { if (it.has("gsroffset")) it.getInt("gsroffset") else null })
     }
-    suspend fun search(query: String, offset: Int = 0): SoundPage = withContext(Dispatchers.IO) {
-        val term = query.trim().ifBlank { "sound effect" }
-        val encoded = URLEncoder.encode("filetype:audio $term", "UTF-8")
+    suspend fun search(query: String, offset: Int = 0, video: Boolean = false): SoundPage = withContext(Dispatchers.IO) {
+        val term = query.trim().ifBlank { if (video) "nature" else "sound effect" }
+        val encoded = URLEncoder.encode("filetype:${if (video) "video" else "audio"} $term", "UTF-8")
         val url = "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&generator=search&gsrnamespace=6&gsrlimit=20&gsroffset=$offset&gsrsearch=$encoded&prop=imageinfo&iiprop=url%7Cmime%7Csize%7Cextmetadata&iiextmetadatafilter=Artist%7CLicenseShortName%7CLicenseUrl&maxlag=5"
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = 15000; connection.readTimeout = 20000
@@ -75,7 +76,7 @@ internal object CommonsSounds {
                 output.toByteArray()
             }
             require(body.size <= 2 * 1024 * 1024) { "Sound service response was too large." }
-            parse(JSONObject(String(body, Charsets.UTF_8)))
+            parse(JSONObject(String(body, Charsets.UTF_8)), video)
         } finally { connection.disconnect() }
     }
 }

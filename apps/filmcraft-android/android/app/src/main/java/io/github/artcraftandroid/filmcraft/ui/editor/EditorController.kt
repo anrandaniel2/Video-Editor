@@ -61,6 +61,7 @@ import java.util.UUID
 
 /** A tool's panel. */
 sealed interface Panel {
+    data object OnlineVideos : Panel
     data object OnlineSounds : Panel
     data object Drawing : Panel
     data object Speed : Panel
@@ -580,6 +581,25 @@ class EditorController(
                 busy = null
             }
             refresh()
+        }
+    }
+
+    fun importOnlineVideo(url: String, attribution: String, overlay: Boolean) {
+        if (busy != null) return
+        stop()
+        scope.launch {
+            busy = "Downloading video…"
+            try {
+                val path = withContext(Dispatchers.IO) {
+                    val file = downloadSound(url, project.mediaDir, video = true)
+                    try { java.io.File(file.parentFile, file.name + ".credits.txt").writeText(attribution) }
+                    catch (e: Exception) { file.delete(); throw e }
+                    file.absolutePath
+                }
+                engine.command { if (overlay) addOverlays(listOf(path)) else addMedia(listOf(path)) }
+                panel = null
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            finally { busy = null; refresh() }
         }
     }
 

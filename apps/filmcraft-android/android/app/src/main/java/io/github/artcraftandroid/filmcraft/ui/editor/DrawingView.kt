@@ -21,6 +21,20 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     val canRedo get() = future.isNotEmpty() && transformMode == null && !shapes.pending
     var inkColor = Color.BLACK
     var brushSize = 12f
+    var usePressure = true
+    private data class PressureSegment(val path: Path, val pressure: Float)
+    private val pressureSegments = mutableListOf<PressureSegment>()
+    private var pressureStroke = false
+    private var eraserStroke = false
+    private var lastPressure = 1f
+    private var midX = 0f
+    private var midY = 0f
+    private fun penPressure(event: MotionEvent, history: Int? = null): Float {
+        val raw = if (history == null) event.pressure else event.getHistoricalPressure(history)
+        val range = event.device?.getMotionRange(MotionEvent.AXIS_PRESSURE, event.source)
+        val normalized = if (range != null && range.range > 0) (raw - range.min) / range.range else raw
+        return if (normalized.isFinite()) normalized.coerceIn(0f, 1f) else 1f
+    }
     var opacity = 1f
     var brush = "Pen"
     val shapes = DrawingShapes()
@@ -242,11 +256,16 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     override fun onDraw(canvas: Canvas) { drawScene(canvas); backdropObservers.forEach { it.postInvalidateOnAnimation() } }
     private fun drawStroke(c: Canvas, path: Path) {
         c.save(); selection?.let { c.clipPath(it) }
-        if (tool == "Eraser") {
-            paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE; paint.strokeCap = Paint.Cap.ROUND; paint.strokeJoin = Paint.Join.ROUND
-            paint.strokeWidth = brushSize; paint.alpha = (opacity * 255).toInt(); paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-            c.drawPath(path, paint)
-        } else DrawingBrushes.draw(c, path, brush, inkColor, brushSize, opacity)
+        fun draw(path: Path, pressure: Float) {
+            val width = brushSize * if (pressureStroke) .1f + .9f * sqrt(pressure) else 1f
+            val strength = opacity * if (pressureStroke) .45f + .55f * pressure else 1f
+            if (eraserStroke) {
+                paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE; paint.strokeCap = Paint.Cap.ROUND; paint.strokeJoin = Paint.Join.ROUND
+                paint.strokeWidth = width; paint.alpha = (strength * 255).toInt(); paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+                c.drawPath(path, paint)
+            } else DrawingBrushes.draw(c, path, brush, inkColor, width, strength)
+        }
+        if (pressureStroke) pressureSegments.forEach { draw(it.path, it.pressure) } else draw(path, 1f)
         c.restore()
     }
 
@@ -324,6 +343,11 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                 lastX = x; lastY = y
                 if (tool == "Magic wand") { wand(x.toInt(), y.toInt()); return true }
                 strokeBefore = if (tool == "Lasso") null else copy(images[layer])
+                val pen = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                pressureStroke = usePressure && pen && (tool == "Brush" || tool == "Eraser")
+                eraserStroke = tool == "Eraser" || e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                pressureSegments.clear(); lastPressure = if (pressureStroke) penPressure(e) else 1f; midX = x; midY = y
+                if (pressureStroke) pressureSegments.add(PressureSegment(Path().apply { moveTo(x, y); lineTo(x + .01f, y) }, lastPressure))
                 stroke = Path().apply { moveTo(x, y); lineTo(x + .01f, y) }
             }
             MotionEvent.ACTION_MOVE -> if (stroke != null) {
@@ -338,6 +362,12 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                             filterStamp(xx, yy); lastX = xx; lastY = yy
                         }
                     }
+                    if (pressureStroke) {
+                        val pressure = penPressure(e, if (i == e.historySize) null else i)
+                        val mx = (lastX + q[0]) / 2; val my = (lastY + q[1]) / 2
+                        pressureSegments.add(PressureSegment(Path().apply { moveTo(midX, midY); quadTo(lastX, lastY, mx, my) }, (lastPressure + pressure) / 2))
+                        midX = mx; midY = my; lastPressure = pressure
+                    }
                     stroke!!.quadTo(lastX, lastY, (lastX + q[0]) / 2, (lastY + q[1]) / 2); lastX = q[0]; lastY = q[1]
                 }
                 // Keep the existing selection while previewing an additive/subtractive lasso.
@@ -345,6 +375,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
             MotionEvent.ACTION_UP -> {
                 stroke?.let { path ->
                     path.lineTo(x, y)
+                    if (pressureStroke) pressureSegments.add(PressureSegment(Path().apply { moveTo(midX, midY); quadTo(lastX, lastY, x, y) }, lastPressure))
                     if (tool == "Lasso") mergeSelection(Path(path).apply { close() }, selectionMode)
                     else { if (tool == "Brush" || tool == "Eraser") drawStroke(Canvas(images[layer]), path); strokeBefore?.let { record(it) } }
                 }

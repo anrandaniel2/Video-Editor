@@ -56,10 +56,10 @@ import java.net.HttpURLConnection
 import java.net.URI
 
 /** Downloads only on explicit request, to project-local storage, with a bounded streaming copy. */
-internal fun downloadSound(address: String, dir: File): File {
+internal fun downloadSound(address: String, dir: File, video: Boolean = false): File {
     var url = URI(address.trim()).toURL()
     dir.mkdirs()
-    val temporary = File(dir, "sound-${java.util.UUID.randomUUID()}.part")
+    val temporary = File(dir, "${if (video) "video" else "sound"}-${java.util.UUID.randomUUID()}.part")
     try {
         repeat(6) {
             require(url.protocol == "https") { "Use a direct HTTPS audio link." }
@@ -74,7 +74,12 @@ internal fun downloadSound(address: String, dir: File): File {
                 } else {
                     require(code in 200..299) { "Download failed (HTTP $code)." }
                     val type = connection.contentType.orEmpty().substringBefore(';').lowercase()
-                    val ext = when {
+                    val ext = if (video) when {
+                        type.contains("webm") -> "webm"
+                        type.contains("mp4") -> "mp4"
+                        type.contains("quicktime") -> "mov"
+                        else -> url.path.substringAfterLast('.', "").lowercase()
+                    } else when {
                         type.contains("wav") -> "wav"
                         type.contains("ogg") -> "ogg"
                         type.contains("flac") -> "flac"
@@ -82,7 +87,8 @@ internal fun downloadSound(address: String, dir: File): File {
                         type.contains("mpeg") -> "mp3"
                         else -> url.path.substringAfterLast('.', "").lowercase()
                     }
-                    require(ext in listOf("wav", "mp3", "ogg", "flac", "m4a", "aac", "opus") && !type.contains("text/html")) { "This is a webpage, not a supported audio file. Paste its direct download link." }
+                    require(ext in (if (video) listOf("webm", "mp4", "mov", "m4v") else listOf("wav", "mp3", "ogg", "flac", "m4a", "aac", "opus")) && !type.contains("text/html")) { "The service did not return a supported ${if (video) "video" else "audio"} file." }
+                    require(connection.contentLengthLong <= (if (video) 250L else 100L) * 1024 * 1024) { "File exceeds the download size limit." }
                     connection.inputStream.use { input -> temporary.outputStream().use { output ->
                         val buffer = ByteArray(32768)
                         var total = 0L
@@ -90,7 +96,7 @@ internal fun downloadSound(address: String, dir: File): File {
                             val count = input.read(buffer)
                             if (count < 0) break
                             total += count
-                            require(total <= 100L * 1024 * 1024) { "Sounds must be under 100 MB." }
+                            require(total <= (if (video) 250L else 100L) * 1024 * 1024) { "File exceeds the ${if (video) 250 else 100} MB limit." }
                             output.write(buffer, 0, count)
                         }
                         require(total > 0) { "The sound file was empty." }
@@ -257,6 +263,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     var brush by remember { mutableStateOf("Pen") }
     var brushQuery by remember { mutableStateOf("") }
     var brushFamily by remember { mutableStateOf("All") }
+    var penPressure by remember { mutableStateOf(true) }
     var shape by remember { mutableStateOf("Circle") }
     var revision by remember { mutableIntStateOf(0) }
     val entrance = remember { Animatable(0f) }
@@ -344,6 +351,10 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                         }
                     }
                     "Brushes" -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(penPressure, { penPressure = it; view.usePressure = it })
+                            Text("Pen pressure · size & opacity", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                        }
                         OutlinedTextField(brushQuery, { brushQuery = it }, label = { Text("Search 150 brushes") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                             (listOf("All") + DrawingBrushes.families).forEach { family -> TextButton(onClick = { brushFamily = family }) { Text(if (brushFamily == family) "• $family" else family) } }
