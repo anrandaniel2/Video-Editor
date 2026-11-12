@@ -75,16 +75,18 @@ fun rememberEditorGlass(frame: ImageBitmap?): ImageBitmap? = remember(frame) {
 
 /** Paint the glass only: child text/icons and gesture targets are never blurred. */
 @Composable
-fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp = 20.dp): Modifier {
+fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp = 20.dp, captureSurface: Boolean = true): Modifier {
     val state = LocalEditorBackdrop.current
     if (state != null) {
         val style = remember(blurRadius) {
             HazeStyle(backgroundColor = Color.Transparent, tints = emptyList(), blurRadius = blurRadius,
                 noiseFactor = 0f, fallbackTint = HazeTint(Color.Transparent))
         }
-        // Blur only the sources below this surface; never blur its own controls.
+        // Floating catalogs use effect-only panes: all panes sample the editor, not each
+        // other's render layers. Capturing nested full-screen effects can form a draw cycle.
+        // Normal editor panels retain their explicit source ordering.
         return clip(RoundedCornerShape(corner))
-            .hazeSource(state, zIndex = layer)
+            .then(if (captureSurface) Modifier.hazeSource(state, zIndex = layer) else Modifier)
             .hazeEffect(state, style = style)
     }
     val backdrop = LocalEditorGlass.current

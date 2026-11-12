@@ -50,9 +50,12 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
     val context = LocalContext.current
     val listState = rememberLazyListState()
     val visited = remember { mutableSetOf<String>() }
-    val player = remember { MediaPlayer() }
-    fun stopPreview() { player.reset(); preview = null }
-    DisposableEffect(player) { onDispose { player.release() } }
+    var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    fun stopPreview() {
+        val old = player; player = null; preview = null
+        runCatching { old?.release() }
+    }
+    DisposableEffect(Unit) { onDispose { runCatching { player?.release() }; player = null } }
     LaunchedEffect(query, retry) {
         pageJob?.cancelAndJoin(); visited.clear(); stopPreview(); results = emptyList(); next = null; loading = true; error = null
         listState.scrollToItem(0)
@@ -95,10 +98,10 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
     }
     BackHandler { if (selected != null) selected = null else close() }
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxSize().editorGlass(0.dp, layer = 4f, blurRadius = 8.dp)
+        Box(Modifier.fillMaxSize().editorGlass(0.dp, layer = 4f, blurRadius = 8.dp, captureSurface = false)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = close))
         Column(Modifier.padding(16.dp).widthIn(max = 720.dp).fillMaxWidth().height(maxHeight * .88f)
-            .editorGlass(28.dp, layer = 5f, blurRadius = 18.dp)
+            .editorGlass(28.dp, layer = 5f, blurRadius = 18.dp, captureSurface = false)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
             .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -121,7 +124,7 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                 if (resolving) { Text("Loading published download options…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(results, key = { it.id }) { asset ->
-                        Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 38.dp).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 38.dp, captureSurface = false).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (video && preview != asset.id) MixkitThumbnail(asset)
                                 Text(asset.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 if (video && preview == asset.id) AndroidView(factory = { ctx ->
@@ -136,10 +139,15 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                                         if (preview == asset.id) stopPreview() else {
                                             stopPreview(); error = null; preview = asset.id
                                             if (!video) try {
-                                                player.setOnPreparedListener { it.start() }
-                                                player.setOnCompletionListener { preview = null }
-                                                player.setOnErrorListener { _, what, extra -> error = "Preview failed ($what/$extra)."; stopPreview(); true }
-                                                player.setDataSource(context, Uri.parse(asset.preview), onlineMediaHeaders + ("Referer" to "https://mixkit.co/")); player.prepareAsync()
+                                                val audio = MediaPlayer(); player = audio
+                                                audio.setOnPreparedListener { ready ->
+                                                    if (player === ready) runCatching { ready.start() }.onFailure { error = "Could not start preview."; stopPreview() }
+                                                }
+                                                audio.setOnCompletionListener { if (player === it) stopPreview() }
+                                                audio.setOnErrorListener { failed, what, extra ->
+                                                    if (player === failed) { error = "Preview failed ($what/$extra)."; stopPreview() }; true
+                                                }
+                                                audio.setDataSource(context, Uri.parse(asset.preview), onlineMediaHeaders + ("Referer" to "https://mixkit.co/")); audio.prepareAsync()
                                             } catch (e: Exception) { error = e.message; stopPreview() }
                                         }
                                     }, enabled = asset.preview.isNotBlank()) { Text(if (preview == asset.id) "Stop" else "Preview") }
@@ -159,7 +167,7 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
     val asset = selected
     val options = offer
     if (asset != null && options != null) AlertDialog(
-        modifier = Modifier.editorGlass(24.dp, layer = 8f, blurRadius = 38.dp),
+        modifier = Modifier.editorGlass(24.dp, layer = 8f, blurRadius = 38.dp, captureSurface = false),
         containerColor = Color.Transparent,
         onDismissRequest = { if (!resolving) selected = null },
         title = { Text(if (video) "Import video" else "Import sound effect") },

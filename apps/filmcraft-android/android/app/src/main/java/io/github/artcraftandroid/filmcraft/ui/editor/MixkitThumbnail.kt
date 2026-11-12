@@ -58,7 +58,7 @@ private object MixkitThumbnails {
                     retriever.setDataSource(asset.preview, onlineMediaHeaders + ("Referer" to "https://mixkit.co/"))
                     bitmap = retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270)
                 } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                finally { retriever.release() }
+                finally { runCatching { retriever.release() } }
             }
             bitmap?.let { images.put(asset.id, it) }
             bitmap
@@ -70,7 +70,12 @@ private object MixkitThumbnails {
 internal fun MixkitThumbnail(asset: MixkitAsset) {
     var bitmap by remember(asset.id) { mutableStateOf<Bitmap?>(null) }
     var loading by remember(asset.id) { mutableStateOf(true) }
-    LaunchedEffect(asset.id) { try { bitmap = MixkitThumbnails.load(asset) } finally { loading = false } }
+    LaunchedEffect(asset.id) {
+        try { bitmap = MixkitThumbnails.load(asset) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { bitmap = null }
+        finally { loading = false }
+    }
     Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black.copy(alpha = .15f)), contentAlignment = Alignment.Center) {
         val image = bitmap
         if (image != null) Image(image.asImageBitmap(), asset.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
