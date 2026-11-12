@@ -299,7 +299,11 @@ impl Pipeline {
     fn place(&self, img: Image) -> Image {
         let (w, h) = (self.w as usize, self.h as usize);
         let img = match self.geom.content {
-            Some((cw, ch)) if (cw, ch) != (img.w, img.h) => resample(&img, cw, ch),
+            Some((cw, ch)) if (cw, ch) != (img.w, img.h) => {
+                let resized = resample(&img, cw, ch);
+                filmcraft_frame::pool::recycle_f32(img.px);
+                resized
+            },
             _ => img,
         };
         if img.w == w && img.h == h && self.geom.offset == (0, 0) {
@@ -310,6 +314,7 @@ impl Pipeline {
         let x0 = ox.max(0) as usize;
         let x1 = (ox + img.w as i64).clamp(0, w as i64) as usize;
         if x1 <= x0 {
+            filmcraft_frame::pool::recycle_f32(img.px);
             return out;
         }
         out.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
@@ -321,6 +326,7 @@ impl Pipeline {
             let src = &img.px[(sy as usize * img.w + sx0) * 4..(sy as usize * img.w + sx0 + (x1 - x0)) * 4];
             row[x0 * 4..x1 * 4].copy_from_slice(src);
         });
+        filmcraft_frame::pool::recycle_f32(img.px);
         out
     }
 
@@ -434,8 +440,12 @@ fn load_overlay(path: &str, width: f32) -> Result<Image> {
 /// Separable resample of a premultiplied image with a triangle filter widened by the reduction
 /// factor (area-correct when downscaling, bilinear when enlarging).
 pub(crate) fn resample(src: &Image, nw: usize, nh: usize) -> Image {
+    if nw == src.w { return resample_axis(src, nh, false); }
+    if nh == src.h { return resample_axis(src, nw, true); }
     let tmp = resample_axis(src, nw, true);
-    resample_axis(&tmp, nh, false)
+    let out = resample_axis(&tmp, nh, false);
+    filmcraft_frame::pool::recycle_f32(tmp.px);
+    out
 }
 
 fn weights(n_src: usize, n_dst: usize) -> Vec<(usize, Vec<f32>)> {
@@ -467,7 +477,7 @@ fn resample_axis(src: &Image, n: usize, horizontal: bool) -> Image {
         return src.clone();
     }
     let ws = weights(if horizontal { src.w } else { src.h }, n);
-    let mut out = Image::new(w, h);
+    let mut out = Image { w, h, px: filmcraft_frame::pool::take_f32_overwritten(w * h * 4) };
     out.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
         for x in 0..w {
             let (lo, k) = if horizontal { &ws[x] } else { &ws[y] };
@@ -532,5 +542,22 @@ mod overlay_budget_tests {
         assert!(bounded_overlay_dimensions(4096, 4096).is_ok());
         assert!(bounded_overlay_dimensions(4097, 4096).is_err());
         assert!(bounded_overlay_dimensions(usize::MAX, 2).is_err());
+    }
+}
+
+#[cfg(test)]
+mod resample_reuse_tests {
+    use super::*;
+
+    #[test]
+    fn optimized_resample_matches_two_pass_reference_on_each_axis() {
+        let source = Image { w: 7, h: 5, px: (0..7 * 5 * 4).map(|i| (i % 19) as f32 / 19.0).collect() };
+        for (w, h) in [(7, 5), (9, 5), (7, 11), (4, 3), (13, 9)] {
+            let horizontal = resample_axis(&source, w, true);
+            let reference = resample_axis(&horizontal, h, false);
+            let actual = resample(&source, w, h);
+            assert_eq!((actual.w, actual.h), (w, h));
+            assert_eq!(actual.px, reference.px, "resample mismatch at {w}x{h}");
+        }
     }
 }

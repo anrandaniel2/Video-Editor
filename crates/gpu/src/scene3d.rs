@@ -43,6 +43,7 @@ struct Renderer {
     layout: wgpu::BindGroupLayout,
     textures:std::collections::HashMap<(usize,usize),CachedMap>,
     targets: Option<Targets>,
+    readback_scratch: Vec<u8>,
 }
 
 impl Renderer {
@@ -75,7 +76,7 @@ impl Renderer {
             multiview_mask:None,cache:None,
         });
         let opaque=make_pipeline(false); let transparent=make_pipeline(true);
-        Some(Self {device,queue,opaque,transparent,layout,textures:Default::default(),targets:None})
+        Some(Self {device,queue,opaque,transparent,layout,textures:Default::default(),targets:None,readback_scratch:Vec::new()})
     }
 
     fn buffer(&self, label:&str, data:&[u8], usage:wgpu::BufferUsages) -> wgpu::Buffer {
@@ -214,11 +215,8 @@ impl Renderer {
         readback.slice(..).map_async(wgpu::MapMode::Read,move |r| {let _=tx.send(r);});
         crate::wait_mapped(&self.device,&rx)?;
         let mapped=readback.slice(..).get_mapped_range().ok()?;
-        let mut px=Vec::with_capacity(w as usize*h as usize*4);
-        for line in mapped.chunks_exact(row as usize) {
-            let line=&line[..w as usize*8];
-            px.extend(line.chunks_exact(2).map(|b| crate::f16_to_f32(u16::from_le_bytes([b[0],b[1]]))));
-        }
+        let mut px=filmcraft_frame::pool::take_f32_overwritten(w as usize*h as usize*4);
+        if !crate::decode_half_rows(&mapped,row as usize,w as usize,h as usize,&mut px,&mut self.readback_scratch,false) {return None;}
         drop(mapped); readback.unmap();
         self.targets=Some(targets);
         Some(Image {w:w as usize,h:h as usize,px})

@@ -83,6 +83,8 @@ pub struct GpuCompositor {
     backdrop: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     output: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     accum_readback_buf: Option<(wgpu::Buffer, u64)>,
+    /// Cached ordinary-memory strip; avoids reading uncached mapped memory sample by sample.
+    readback_scratch: Vec<u8>,
     uploads: HashMap<(usize, u32, u32), Uploaded>,
     clock: u64,
     dummy: wgpu::TextureView,
@@ -425,6 +427,7 @@ impl GpuCompositor {
             backdrop: None,
             output: None,
             accum_readback_buf: None,
+            readback_scratch: Vec::new(),
             uploads: HashMap::new(),
             clock: 0,
             dummy,
@@ -1236,16 +1239,7 @@ impl GpuCompositor {
         let (width, row) = (w as usize, row as usize);
         let mut out = filmcraft_frame::pool::take_f32_overwritten(width.checked_mul(h as usize)?.checked_mul(4)?);
         let data = slice.get_mapped_range().ok()?;
-        let mut line = Vec::with_capacity(width * 8);
-        // every row must be there: the pooled output holds stale values until written
-        let converted = out.chunks_exact_mut(width * 4).enumerate().all(|(y, dst)| {
-            let Some(src) = data.get(y * row..y * row + width * 8) else { return false };
-            copy_mapped(src, &mut line);
-            for (d, s) in dst.iter_mut().zip(line.as_chunks::<2>().0) {
-                *d = f16_to_f32_fast(u16::from_le_bytes(*s));
-            }
-            true
-        });
+        let converted = decode_half_rows(&data, row, width, h as usize, &mut out, &mut self.readback_scratch, true);
         drop(data);
         if !converted {
             return None;
@@ -1319,6 +1313,38 @@ fn wait_mapped<T>(device: &wgpu::Device, rx: &std::sync::mpsc::Receiver<Result<(
 pub(crate) fn copy_mapped(src: &[u8], line: &mut Vec<u8>) {
     line.clear();
     line.extend_from_slice(src);
+}
+
+/// Bulk-copy bounded strips out of possibly uncached GPU staging memory, then decode rows in
+/// parallel from cached RAM. Shares the same bit-exact conversion in 2D export and 3D rendering.
+/// Scratch storage stays at most 4 MiB (or a single row for unusually wide targets).
+pub(crate) fn decode_half_rows(data: &[u8], row: usize, width: usize, height: usize, out: &mut [f32], scratch: &mut Vec<u8>, parallel: bool) -> bool {
+    let Some(samples) = width.checked_mul(4) else { return false };
+    let Some(pixel_bytes) = width.checked_mul(8) else { return false };
+    let Some(total) = samples.checked_mul(height) else { return false };
+    let Some(mapped_bytes) = row.checked_mul(height) else { return false };
+    if width == 0 || height == 0 || row < pixel_bytes || out.len() != total || data.len() < mapped_bytes { return false; }
+    let rows_per_strip = ((4 << 20) / row).max(1).min(height);
+    // Release a scratch buffer left by a much wider export rather than retaining it forever.
+    if scratch.capacity() > (rows_per_strip * row).saturating_mul(4) { *scratch = Vec::new(); }
+    for (strip, dst) in out.chunks_mut(rows_per_strip * samples).enumerate() {
+        let rows = dst.len() / samples;
+        let offset = strip * rows_per_strip * row;
+        copy_mapped(&data[offset..offset + rows * row], scratch);
+        let convert = |(dst, src): (&mut [f32], &[u8])| {
+            for (d, bytes) in dst.iter_mut().zip(src[..pixel_bytes].as_chunks::<2>().0) {
+                *d = f16_to_f32_fast(u16::from_le_bytes(*bytes));
+            }
+        };
+        if parallel {
+            dst.par_chunks_mut(samples).zip(scratch.par_chunks_exact(row)).for_each(convert);
+        } else {
+            // The 3D renderer holds a shared mutex. Nested Rayon work there could steal a
+            // second frame that needs the same mutex, deadlocking its suspended ancestor.
+            dst.chunks_mut(samples).zip(scratch.chunks_exact(row)).for_each(convert);
+        }
+    }
+    true
 }
 
 /// Shader source: kind (0 RGBA8 sRGB, 1 linear premultiplied RGBA, 2 YUV), sampling scales, dimensions, color.

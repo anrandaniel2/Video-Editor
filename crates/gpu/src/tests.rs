@@ -798,3 +798,43 @@ fn accumulator_readback_retires_rejected_native_map() {
         "cleanup attempted to unmap an already rejected mapping"
     );
 }
+
+#[test]
+fn readback_strips_preserve_half_float_bits_and_skip_padding() {
+    let values = [0x0000u16, 0x8000, 0x3c00, 0xbc00, 0x0001, 0x03ff, 0x7bff, 0x7c00, 0xfc00, 0x7e01, 0x3555, 0x0400];
+    let (width, height, row) = (3, 7, 256);
+    let mut bytes = vec![0xff; row * height];
+    for y in 0..height {
+        for (i, value) in values.iter().enumerate() { bytes[y * row + i * 2..y * row + i * 2 + 2].copy_from_slice(&value.to_le_bytes()); }
+    }
+    for parallel in [false, true] {
+        let mut output = vec![123.0; width * height * 4];
+        let mut scratch = Vec::new();
+        assert!(decode_half_rows(&bytes, row, width, height, &mut output, &mut scratch, parallel));
+        for (i, sample) in output.iter().enumerate() { assert_eq!(sample.to_bits(), f16_to_f32(values[i % values.len()]).to_bits()); }
+    }
+}
+
+#[test]
+fn readback_conversion_handles_strip_boundaries_and_reuses_scratch() {
+    let (width, height, row) = (64, 8193, 512);
+    let bytes = [0x00, 0x3c].repeat(row * height / 2);
+    let mut output = vec![0.0; width * height * 4];
+    let mut scratch = Vec::new();
+    assert!(decode_half_rows(&bytes, row, width, height, &mut output, &mut scratch, true));
+    assert!(output.iter().all(|&x| x == 1.0));
+    let pointer = scratch.as_ptr();
+    assert!(decode_half_rows(&bytes, row, width, height, &mut output, &mut scratch, true));
+    assert_eq!(pointer, scratch.as_ptr());
+    assert!(scratch.capacity() <= 4 << 20);
+}
+
+#[test]
+fn readback_conversion_rejects_invalid_layout_before_touching_output() {
+    let mut out = [42.0; 4];
+    let mut scratch = Vec::new();
+    assert!(!decode_half_rows(&[0; 7], 8, 1, 1, &mut out, &mut scratch, true));
+    assert!(!decode_half_rows(&[0; 8], 7, 1, 1, &mut out, &mut scratch, true));
+    assert!(!decode_half_rows(&[], 0, 0, 0, &mut out, &mut scratch, true));
+    assert_eq!(out, [42.0; 4]);
+}
