@@ -102,13 +102,9 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ]; then
             printf '%s' "$KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.p12"
             echo "kind=release" >>"$GITHUB_OUTPUT"
-          elif [ "$GITHUB_REF_TYPE" = tag ]; then
-            echo "::error::No release key: a release is never signed with the public dry-run key"
-            exit 1
           else
-            cp .github/signing/dryrun-release.p12 "$RUNNER_TEMP/release.p12"
-            echo "kind=dryrun" >>"$GITHUB_OUTPUT"
-            echo "::notice::No release secrets: signing this dry run with the public dry-run key. Uninstall any published build before installing it."
+            echo "::error::Normal release signing key unavailable. Configure FILMCRAFT_KEYSTORE_BASE64, FILMCRAFT_KEYSTORE_PASSWORD, FILMCRAFT_KEY_ALIAS and FILMCRAFT_KEY_PASSWORD in repository Actions secrets. Test-key fallback is disabled."
+            exit 1
           fi
           echo "FILMCRAFT_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
 
