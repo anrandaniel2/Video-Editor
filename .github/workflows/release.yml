@@ -142,15 +142,8 @@ jobs:
           FILMCRAFT_KEY_PASSWORD: ${{ secrets.FILMCRAFT_KEY_PASSWORD }}
         run: |
           apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
-          if [ "$KEY_KIND" = dryrun ]; then
-            FILMCRAFT_KEY_ALIAS=filmcraft-dryrun
-            FILMCRAFT_KEYSTORE_PASSWORD=filmcraft-dryrun
-            FILMCRAFT_KEY_PASSWORD=filmcraft-dryrun
-            extra=(--v2-signing-enabled true --v3-signing-enabled true)
-          else
-            extra=(--v2-signing-enabled false --v3-signing-enabled true
-              --lineage .github/signing/lightcraft-to-artcraft.lineage --rotation-min-sdk-version 28)
-          fi
+          # This is a new signing identity, not a rotation of the old published key.
+          extra=(--v2-signing-enabled true --v3-signing-enabled true)
           for apk in dist/*.apk; do
             "$apksigner" sign --ks "$FILMCRAFT_KEYSTORE" --ks-key-alias "$FILMCRAFT_KEY_ALIAS" \
               --ks-pass env:FILMCRAFT_KEYSTORE_PASSWORD --key-pass env:FILMCRAFT_KEY_PASSWORD \
