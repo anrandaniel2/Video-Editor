@@ -115,7 +115,6 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                     }
                 }
                 Text("Mixkit · Check the displayed license. Video resolution is chosen before downloading.", style = MaterialTheme.typography.bodySmall)
-                if (video) Row { Checkbox(overlay, { overlay = it }); Text("Import as overlay", Modifier.padding(top = 12.dp)) }
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("Retry catalog") } }
@@ -144,7 +143,7 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                                             } catch (e: Exception) { error = e.message; stopPreview() }
                                         }
                                     }, enabled = asset.preview.isNotBlank()) { Text(if (preview == asset.id) "Stop" else "Preview") }
-                                    TextButton(onClick = { stopPreview(); selected = asset }, enabled = ed.busy == null && !resolving) { Text(if (video) "Choose resolution" else "Import") }
+                                    TextButton(onClick = { stopPreview(); selected = asset }, enabled = ed.busy == null && !resolving) { Text("Import") }
                                 }
                         }
                     }
@@ -163,12 +162,19 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
         modifier = Modifier.editorGlass(24.dp, layer = 8f, blurRadius = 38.dp),
         containerColor = Color.Transparent,
         onDismissRequest = { if (!resolving) selected = null },
-        title = { Text(if (video) "Choose video resolution" else "Import sound effect") },
+        title = { Text(if (video) "Import video" else "Import sound effect") },
         text = {
             ImmersiveDialog()
             Column {
                 Text(asset.title)
                 Text(options.license, style = MaterialTheme.typography.bodySmall)
+                if (video) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(overlay, { overlay = it }, enabled = !resolving)
+                        Text("Import as overlay")
+                    }
+                    Text("Resolution", style = MaterialTheme.typography.labelLarge)
+                }
                 options.choices.forEach { option ->
                     Row { RadioButton(choice == option, { choice = option }, enabled = !resolving); TextButton(onClick = { choice = option }, enabled = !resolving) { Text(option.label) } }
                 }
@@ -188,7 +194,7 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                 catch (e: Exception) { error = e.message; selected = null }
                 finally { resolving = false }
             }
-        }) { Text("Download & import") } },
+        }) { Text("Import") } },
         dismissButton = { TextButton(onClick = { selected = null }, enabled = !resolving) { Text("Cancel") } },
     )
 }
