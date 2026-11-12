@@ -1,6 +1,7 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.compose.foundation.Canvas
+import io.github.artcraftandroid.filmcraft.ui.editorBackdropSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -91,7 +92,7 @@ fun Timeline(ed: EditorController, modifier: Modifier = Modifier, compact: Boole
     var move by remember { mutableStateOf<MoveDrag?>(null) }
     var scrollY by remember { mutableStateOf(0f) }
     val edState by rememberUpdatedState(ed)
-    BoxWithConstraints(modifier.background(Fc.Black).testTag("editor_timeline")) {
+    BoxWithConstraints(modifier.editorBackdropSource().background(Fc.Black).testTag("editor_timeline")) {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
         with(density) {

@@ -181,6 +181,7 @@ fun LicencesScreen(vm: AppViewModel) {
             "UniFFI" to "MPL-2.0, Mozilla",
             "JNA" to "Apache-2.0",
             "AndroidX, Jetpack Compose, Kotlin coroutines" to "Apache-2.0",
+            "Haze (live backdrop blur)" to "Apache-2.0, Christopher Banes and Haze contributors",
             "candle (speech and voices on the phone)" to "MIT OR Apache-2.0, Hugging Face",
             "Whisper speech models (downloaded when asked)" to "MIT, OpenAI",
             "Kokoro-82M natural voices (downloaded when asked)" to "Apache-2.0, hexgrad; CMUdict: BSD-style, Carnegie Mellon University",

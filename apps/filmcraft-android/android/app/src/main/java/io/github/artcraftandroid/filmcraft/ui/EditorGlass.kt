@@ -1,5 +1,10 @@
 package io.github.artcraftandroid.filmcraft.ui
 
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeStyle
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.hazeEffect
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -29,7 +34,16 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 
-/** One small shared blur per preview update, not a screen capture or blur per control. */
+/** Live editor sources are actual screen-positioned UI layers, never a stretched monitor image. */
+val LocalEditorBackdrop = staticCompositionLocalOf<HazeState?> { null }
+
+@Composable
+fun Modifier.editorBackdropSource(): Modifier {
+    val state = LocalEditorBackdrop.current
+    return if (state != null) hazeSource(state, zIndex = 0f) else this
+}
+
+/** Static screenshot fallback for the Home canvas dialog, outside the editor's live source tree. */
 val LocalEditorGlass = staticCompositionLocalOf<ImageBitmap?> { null }
 
 @Composable
@@ -63,7 +77,26 @@ fun rememberEditorGlass(frame: ImageBitmap?): ImageBitmap? = remember(frame) {
 
 /** Paint the glass only: child text/icons and gesture targets are never blurred. */
 @Composable
-fun Modifier.editorGlass(corner: Dp = 16.dp): Modifier {
+fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f): Modifier {
+    val state = LocalEditorBackdrop.current
+    if (state != null) {
+        val style = remember {
+            HazeStyle(backgroundColor = Color(0xFF0F1118), tint = HazeTint(Color(0x99232835)),
+                blurRadius = 20.dp, noiseFactor = .025f, fallbackTint = HazeTint(Color(0xDD232835)))
+        }
+        // Capture this panel for higher layers, but only sample sources below this one.
+        // This prevents its own labels and glass from feeding back into its backdrop.
+        return clip(RoundedCornerShape(corner))
+            .hazeSource(state, zIndex = layer)
+            .hazeEffect(state, style = style)
+            .drawWithCache {
+                val sheen = Brush.verticalGradient(listOf(Color.White.copy(alpha = .08f), Color.Transparent))
+                onDrawBehind {
+                    drawRect(sheen)
+                    drawRoundRect(Color.White.copy(alpha = .18f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner.toPx()), style = Stroke(1.dp.toPx()))
+                }
+            }
+    }
     val backdrop = LocalEditorGlass.current
     var origin by remember { mutableStateOf(Offset.Zero) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }

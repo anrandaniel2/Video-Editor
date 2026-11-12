@@ -1,8 +1,9 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.compose.runtime.CompositionLocalProvider
-import io.github.artcraftandroid.filmcraft.ui.LocalEditorGlass
-import io.github.artcraftandroid.filmcraft.ui.rememberEditorGlass
+import io.github.artcraftandroid.filmcraft.ui.LocalEditorBackdrop
+import dev.chrisbanes.haze.rememberHazeState
+import io.github.artcraftandroid.filmcraft.ui.editorBackdropSource
 import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -111,7 +112,7 @@ fun EditorScreen(ed: EditorController) {
             else -> ed.closeEditor()
         }
     }
-    CompositionLocalProvider(LocalEditorGlass provides rememberEditorGlass(ed.picture)) {
+    CompositionLocalProvider(LocalEditorBackdrop provides rememberHazeState()) {
         BoxWithConstraints(
             Modifier
                 .fillMaxSize()
@@ -319,7 +320,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
         if (object3d && sel != null) ed.loadObject3D(sel.id)
         if (masking && sel != null) ed.loadMasks(sel.id)
     }
-    BoxWithConstraints(modifier.background(Fc.Black).testTag("editor_player_area"), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(modifier.editorBackdropSource().background(Fc.Black).testTag("editor_player_area"), contentAlignment = Alignment.Center) {
         val aspect = if (t != null && t.height.toInt() > 0) t.width.toFloat() / t.height.toFloat() else 9f / 16f
         // an empty project shows the whole monitor; otherwise the frame, fitted
         val empty = (t?.duration ?: 0L) == 0L

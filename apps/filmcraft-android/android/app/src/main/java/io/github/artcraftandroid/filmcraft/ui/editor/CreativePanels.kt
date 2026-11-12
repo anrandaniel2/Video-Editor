@@ -116,7 +116,7 @@ internal fun ColorPicker(label: String, color: Int, change: (Int) -> Unit) {
             .clickable { expanded = true })
     }
     if (expanded) Dialog(onDismissRequest = { expanded = false }) {
-        Column(Modifier.widthIn(max = 340.dp).editorGlass(24.dp).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.widthIn(max = 340.dp).editorGlass(24.dp, layer = 2f).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, color = Color.White)
             Spacer(Modifier.height(12.dp))
             WheelPicker(color, change)
