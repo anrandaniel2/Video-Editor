@@ -333,11 +333,12 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                 .size(boxW, boxH)
                 .border(1.dp, Fc.Raised)
                 .pointerInput(sel?.id, movable, object3d, ed.panel, t?.width, t?.height) {
-                    if (masking || advanced || object3d || ed.panel is Panel.TextInput) return@pointerInput
+                    if (masking || advanced || ed.panel is Panel.TextInput) return@pointerInput
                     val frameW = t?.width?.toFloat() ?: return@pointerInput
                     val k = size.width / frameW
                     awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        var handledByChild = down.isConsumed
                         var p = placement
                         var moved = false
                         var edited = false
@@ -349,6 +350,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                         while (true) {
                             val ev = awaitPointerEvent()
                             val fingers = ev.changes.count { it.pressed }
+                            if (ev.changes.any { it.isConsumed }) handledByChild = true
                             if (fingers == 0) break
                             if (ev.changes.any { it.isConsumed }) continue
                             if (fingers != count) {
@@ -376,9 +378,17 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                                 ed.setPlacement(sel.id, next, merge = edited)
                                 edited = true
                                 ev.changes.forEach { it.consume() }
-                            } else if (moved) ev.changes.forEach { it.consume() }
+                            } else if (moved && !object3d) ev.changes.forEach { it.consume() }
                         }
-                        if (!moved && !multi) ed.togglePlay()
+                        if (!moved && !multi && !handledByChild) {
+                            val point = down.position / k
+                            val tolerance = 8.dp.toPx() / k
+                            scope.launch {
+                                val hit = ed.pickPreview(point, tolerance.toDouble())
+                                if (hit != null) { ed.stop(); if (ed.selectedClip?.id != hit) ed.select(hit) }
+                                else ed.togglePlay()
+                            }
+                        }
                     }
                 }
                 .semantics { contentDescription = "Preview" },

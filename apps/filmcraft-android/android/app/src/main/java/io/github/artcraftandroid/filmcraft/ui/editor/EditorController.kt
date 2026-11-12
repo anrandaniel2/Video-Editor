@@ -832,6 +832,11 @@ class EditorController(
 
     // ---- placement on the frame ----
 
+    internal suspend fun previewObjectSettings(clip: ULong): Object3DSettings? =
+        try { engine.command { object3dState(clip) }.takeIf { it.hasObject }?.settings }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { null }
+
     suspend fun placementOf(clip: ULong): io.github.artcraftandroid.filmcraft.core.Placement? =
         runCatching { engine.command { placement(clip) } }.getOrNull()
 
