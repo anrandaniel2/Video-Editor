@@ -53,7 +53,7 @@ internal fun OnlineVideosPanel(ed: EditorController, close: () -> Unit) {
                 OutlinedTextField(query, { query = it; offset = 0 }, label = { Text("Search videos") }, placeholder = { Text("Nature, ocean, city…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row { listOf("Nature", "Ocean", "City", "Space").forEach { term -> TextButton(onClick = { query = term; offset = 0 }) { Text(term) } } }
                 Row { Checkbox(overlay, { overlay = it }); Text("Import as overlay", modifier = Modifier.padding(top = 12.dp)) }
-                Text("Wikimedia Commons · up to 250 MB per video. Check the source license; credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
+                Text("Internet Archive · up to 250 MB per video. Check the source license; credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 previewError?.let { Text(it, color = MaterialTheme.colorScheme.error) }

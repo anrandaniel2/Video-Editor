@@ -17,6 +17,7 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -59,29 +60,59 @@ internal object CommonsSounds {
         }
         return SoundPage(sounds, json.optJSONObject("continue")?.let { if (it.has("gsroffset")) it.getInt("gsroffset") else null })
     }
-    suspend fun search(query: String, offset: Int = 0, video: Boolean = false): SoundPage = withContext(Dispatchers.IO) {
-        val term = query.trim().ifBlank { if (video) "nature" else "sound effect" }
-        val encoded = URLEncoder.encode("filetype:${if (video) "video" else "audio"} $term", "UTF-8")
-        val url = "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&generator=search&gsrnamespace=6&gsrlimit=20&gsroffset=$offset&gsrsearch=$encoded&prop=imageinfo&iiprop=url%7Cmime%7Csize%7Cextmetadata&iiextmetadatafilter=Artist%7CLicenseShortName%7CLicenseUrl&maxlag=5"
-        val connection = URI(url).toURL().openConnection() as HttpURLConnection
+    private fun request(address: String): JSONObject {
+        val connection = URI(address).toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = 15000; connection.readTimeout = 20000
         connection.setRequestProperty("User-Agent", ONLINE_MEDIA_AGENT)
+        connection.setRequestProperty("Accept", "application/json")
         try {
-            require(connection.responseCode == 200) { "Sound service unavailable (HTTP ${connection.responseCode}). Try again." }
-            val body = connection.inputStream.use { input ->
-                val output = java.io.ByteArrayOutputStream()
+            require(connection.responseCode == 200) { "Internet Archive unavailable (HTTP ${connection.responseCode}). Try again shortly." }
+            val output = java.io.ByteArrayOutputStream()
+            connection.inputStream.use { input ->
                 val buffer = ByteArray(8192)
                 while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    require(output.size() + count <= 2 * 1024 * 1024) { "Sound service response was too large." }
-                    output.write(buffer, 0, count)
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    require(output.size() + n <= 4 * 1024 * 1024) { "Catalog response was too large." }
+                    output.write(buffer, 0, n)
                 }
-                output.toByteArray()
             }
-            require(body.size <= 2 * 1024 * 1024) { "Sound service response was too large." }
-            parse(JSONObject(String(body, Charsets.UTF_8)), video)
+            return JSONObject(output.toString("UTF-8"))
         } finally { connection.disconnect() }
+    }
+    suspend fun search(query: String, offset: Int = 0, video: Boolean = false): SoundPage = withContext(Dispatchers.IO) {
+        val term = query.trim().ifBlank { if (video) "nature" else "sound" }
+        // Treat user input as text, not as Archive query operators.
+        val words = term.replace(Regex("[^\\p{L}\\p{N} ]"), " ").trim().ifBlank { "nature" }
+        val q = URLEncoder.encode("mediatype:${if (video) "movies" else "audio"} AND ($words) AND licenseurl:*", "UTF-8")
+        val pageNumber = offset / 8 + 1
+        val response = request("https://archive.org/advancedsearch.php?q=$q&fl[]=identifier&fl[]=title&rows=8&page=$pageNumber&output=json").getJSONObject("response")
+        val docs = response.getJSONArray("docs")
+        val results = mutableListOf<OnlineSound>()
+        for (i in 0 until docs.length()) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val doc = docs.getJSONObject(i)
+            val id = doc.getString("identifier")
+            val encodedId = URLEncoder.encode(id, "UTF-8").replace("+", "%20")
+            val item = request("https://archive.org/metadata/$encodedId")
+            if (item.optBoolean("is_dark") || item.optJSONObject("metadata")?.optString("access-restricted-item") == "true") continue
+            val meta = item.optJSONObject("metadata") ?: continue
+            val licenseUrl = meta.opt("licenseurl").let { if (it is org.json.JSONArray) it.optString(0) else it?.toString().orEmpty() }
+            if (!licenseUrl.startsWith("https://") && !licenseUrl.startsWith("http://")) continue
+            val files = item.optJSONArray("files") ?: continue
+            val candidates = (0 until files.length()).map { files.getJSONObject(it) }.filter {
+                val name = it.optString("name").lowercase()
+                val bytes = it.optString("size").toLongOrNull() ?: 0L
+                bytes in 1..(if (video) 250L else 100L) * 1024 * 1024 &&
+                    (if (video) name.endsWith(".mp4") else name.endsWith(".mp3")) && it.optString("private") != "true"
+            }
+            val file = candidates.minByOrNull { it.optString("size").toLong() } ?: continue
+            val name = file.getString("name").split('/').joinToString("/") { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
+            val url = "https://archive.org/download/$encodedId/$name"
+            results.add(OnlineSound(id.fold(0L) { acc, c -> acc * 31 + c.code }, doc.optString("title", id), url,
+                "https://archive.org/details/$encodedId", plain(meta.optString("creator", "See source page")), "See source license", licenseUrl, file.getString("size").toLong()))
+        }
+        SoundPage(results, if (offset + docs.length() < response.optInt("numFound")) offset + 8 else null)
     }
 }
 
@@ -123,7 +154,7 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     listOf("Rain", "Nature", "Footsteps", "Whoosh").forEach { term -> TextButton(onClick = { query = term }) { Text(term) } }
                 }
-                Text("Wikimedia Commons • Check the license for your intended use. Credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
+                Text("Internet Archive • Check the license for your intended use. Credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 previewError?.let { Text(it, color = MaterialTheme.colorScheme.error) }

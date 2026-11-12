@@ -45,14 +45,15 @@ private fun JSONObject.lanes(): List<AnimationLane> {
 @Composable
 fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
     val clip = ed.selectedClip
-    var data by remember(clip?.id) { mutableStateOf<JSONObject?>(null) }
+    var lanes by remember(clip?.id) { mutableStateOf<List<AnimationLane>>(emptyList()) }
     var error by remember(clip?.id) { mutableStateOf<String?>(null) }
     var laneId by remember(clip?.id) { mutableStateOf<String?>(null) }
     var selected by remember(clip?.id, laneId) { mutableStateOf<Long?>(null) }
     LaunchedEffect(clip?.id, ed.playhead, ed.timeline?.revision) {
-        if (clip != null) try { data = ed.animationState(clip.id); error = null } catch (e: Exception) { error = e.message }
+        if (clip != null) try { lanes = ed.animationState(clip.id).lanes(); error = null }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: Exception) { lanes = emptyList(); error = "Could not load keyframes: ${e.message}" }
     }
-    val lanes = data?.lanes().orEmpty()
     val lane = lanes.firstOrNull { it.id == laneId } ?: lanes.firstOrNull()
     val key = lane?.keys?.firstOrNull { it.time == selected }
     ToolPanel("Keyframes", close, modifier, tag = "keyframes_panel") {
@@ -122,9 +123,13 @@ private fun AnimationSlider(label:String,value:Double,min:Double,max:Double,tag:
     var dragging by remember(tag) { mutableStateOf(false) }
     var token by remember(tag) { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     LaunchedEffect(value) { if(!dragging) v=value }
-    val lo=minOf(min,value);val hi=maxOf(max,value,lo+0.01)
+    // Optional/unbounded engine ranges are JSON null; optDouble returns NaN for them.
+    // Never feed NaN/infinite fractions into Compose's slider/layout calculations.
+    val safeValue = value.takeIf { it.isFinite() } ?: 0.0
+    val lo=minOf(min.takeIf { it.isFinite() } ?: -1000.0,safeValue)
+    val hi=maxOf(max.takeIf { it.isFinite() } ?: 1000.0,safeValue,lo+0.01)
     SliderRow(label,"${kotlin.math.round(v*100)/100}") {
-        FcSlider(fraction=((v-lo)/(hi-lo)).toFloat().coerceIn(0f,1f),onChange={f ->
+        FcSlider(fraction=(((v.takeIf { it.isFinite() } ?: safeValue)-lo)/(hi-lo)).toFloat().coerceIn(0f,1f),onChange={f ->
             dragging=true;v=lo+f*(hi-lo);save(v,token)
         },onDone={dragging=false;token=java.util.UUID.randomUUID().toString()},description=label,tag="keyframes_slider_$tag")
     }
