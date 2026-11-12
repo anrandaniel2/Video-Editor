@@ -14,15 +14,17 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     private data class Edit(val layer: Int, val before: Bitmap?)
     private val history = ArrayDeque<Edit>()
     private val future = ArrayDeque<Edit>()
-    val canUndo get() = history.isNotEmpty() && transformMode == null
-    val canRedo get() = future.isNotEmpty() && transformMode == null
+    val canUndo get() = (history.isNotEmpty() || shapes.pending) && transformMode == null
+    val canRedo get() = future.isNotEmpty() && transformMode == null && !shapes.pending
     var inkColor = Color.BLACK
     var brushSize = 12f
     var opacity = 1f
     var brush = "Pen"
+    val shapes = DrawingShapes()
     var tool = "Brush"
+        set(value) { if (field != value) shapes.clear(); field = value }
     var layer = 0
-        set(value) { if (transformMode != null) finishTransform(false); field = value.coerceIn(0, images.lastIndex); clearSelection() }
+        set(value) { shapes.clear(); if (transformMode != null) finishTransform(false); field = value.coerceIn(0, images.lastIndex); clearSelection() }
     val layers get() = images.size
     val canAddLayer get() = images.size < 16 && transformMode == null && (images.size + 1L) * canvasW * canvasH * 4 <= 96L * 1024 * 1024
     var currentLayerOnly = true
@@ -52,6 +54,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     private var oldX = 0f
     private var oldY = 0f
     private var navigating = false
+    private var shapeTouchActive = false
     private var stroke: Path? = null
     private var strokeBefore: Bitmap? = null
     private var lastX = 0f
@@ -72,7 +75,19 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         // Bound undo storage to 64 MiB (clipboard/layers are separately bounded).
         while (history.size > 1 && history.sumOf { it.before?.allocationByteCount?.toLong() ?: 0L } > 64L * 1024 * 1024) history.removeFirst().before?.recycle()
     }
-    fun undo() = exchange(history, future)
+    fun undo() { if (shapes.pending) { shapes.removeLast(); changed() } else exchange(history, future) }
+    fun changeShape(name: String) { shapes.kind = name; changed() }
+    fun connectShape() { shapes.connected = !shapes.connected; changed() }
+    fun cancelShapeDraft() { shapes.clear(); changed() }
+    private fun shapeStroke(c: Canvas, path: Path) {
+        c.save(); selection?.let { c.clipPath(it) }
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = inkColor; alpha = (opacity * 255).toInt(); style = Paint.Style.STROKE; strokeWidth = brushSize; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+        c.drawPath(path, p); c.restore()
+    }
+    fun commitShapeDraft() {
+        val path = shapes.path() ?: return
+        val before = copy(images[layer]); shapeStroke(Canvas(images[layer]), path); record(before); shapes.clear(); changed()
+    }
     fun redo() = exchange(future, history)
     private fun exchange(from: ArrayDeque<Edit>, to: ArrayDeque<Edit>) {
         if (from.isEmpty() || transformMode != null) return
@@ -111,6 +126,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         if (merged) images.forEach { c.drawBitmap(it, 0f, 0f, null) } else c.drawBitmap(images[layer], 0f, 0f, null)
     }
     fun beginTransform(mode: String, selectedOnly: Boolean) {
+        commitShapeDraft()
         if (transformMode != null) finishTransform(true)
         if (selectedOnly && selection == null) return
         original = copy(images[layer]); source = if (selectedOnly) selectedPixels() else copy(images[layer])
@@ -180,11 +196,13 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
             if (i == layer) {
                 if (transformMode != null) transformed(c)
                 stroke?.let { path -> if (tool == "Brush" || tool == "Eraser") drawStroke(c, path) }
+                if (tool == "Shapes") shapes.path()?.let { shapeStroke(c, it) }
             }
             c.restoreToCount(saved)
         }
         paint.reset(); paint.isAntiAlias = true; paint.color = Color.CYAN; paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f / (fit() * zoom)
         selection?.let { c.drawPath(it, paint) }
+        if (tool == "Shapes") shapes.guides(c, fit() * zoom)
         if (transformMode != null) {
             val points = if (transformMode == "Mesh") vertices else if (transformMode == "Perspective") corners else floatArrayOf(bounds.left * normalScale + bounds.centerX() * (1 - normalScale) + moveX, bounds.top * normalScale + bounds.centerY() * (1 - normalScale) + moveY, bounds.right * normalScale + bounds.centerX() * (1 - normalScale) + moveX, bounds.bottom * normalScale + bounds.centerY() * (1 - normalScale) + moveY)
             for (i in points.indices step 2) c.drawCircle(points[i], points[i + 1], 7f / (fit() * zoom), paint)
@@ -202,12 +220,14 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     override fun onDraw(canvas: Canvas) { drawScene(canvas); backdropObservers.forEach { it.postInvalidateOnAnimation() } }
     private fun drawStroke(c: Canvas, path: Path) {
         c.save(); selection?.let { c.clipPath(it) }
-        paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE; paint.strokeCap = Paint.Cap.ROUND; paint.strokeJoin = Paint.Join.ROUND
-        paint.color = inkColor; paint.alpha = (opacity * 255 * if (brush == "Marker") .4f else 1f).toInt(); paint.strokeWidth = brushSize * if (brush == "Pencil") .4f else 1f
-        if (tool == "Eraser") paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-        if (brush == "Airbrush" && tool != "Eraser") paint.maskFilter = BlurMaskFilter(brushSize * .4f, BlurMaskFilter.Blur.NORMAL)
-        c.drawPath(path, paint); c.restore()
+        if (tool == "Eraser") {
+            paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE; paint.strokeCap = Paint.Cap.ROUND; paint.strokeJoin = Paint.Join.ROUND
+            paint.strokeWidth = brushSize; paint.alpha = (opacity * 255).toInt(); paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+            c.drawPath(path, paint)
+        } else DrawingBrushes.draw(c, path, brush, inkColor, brushSize, opacity)
+        c.restore()
     }
+
     private fun filterStamp(x: Float, y: Float) {
         val b = images[layer]; val radius = (brushSize / 2).toInt().coerceAtLeast(2)
         val left = (x.toInt() - radius).coerceIn(0, canvasW - 1); val top = (y.toInt() - radius).coerceIn(0, canvasH - 1)
@@ -241,6 +261,8 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     override fun onTouchEvent(e: MotionEvent): Boolean {
         parent?.requestDisallowInterceptTouchEvent(true)
         if (e.pointerCount > 1) {
+            shapeTouchActive = false
+            if (tool == "Shapes" && !navigating) shapes.cancelGesture()
             if (!navigating) { stroke = null; strokeBefore?.let { images[layer].recycle(); images[layer] = it }; strokeBefore = null; navigating = true; oldSpan = 0f }
             val x = (e.getX(0) + e.getX(1)) / 2; val y = (e.getY(0) + e.getY(1)) / 2
             val span = hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0)); val a = Math.toDegrees(atan2(e.getY(1) - e.getY(0), e.getX(1) - e.getX(0)).toDouble()).toFloat()
@@ -265,6 +287,15 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                 lastX = x; lastY = y; invalidate()
             }
             return true
+        }
+        if (tool == "Shapes") {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { shapeTouchActive = x >= 0 && x < canvasW && y >= 0 && y < canvasH; if (shapeTouchActive) shapes.down(x, y, 24f / (fit() * zoom)) }
+                MotionEvent.ACTION_MOVE -> if (shapeTouchActive) shapes.drag(x, y)
+                MotionEvent.ACTION_UP -> { if (shapeTouchActive) { shapes.drag(x, y); if (!shapes.multi) commitShapeDraft(); shapes.endGesture() }; shapeTouchActive = false }
+                MotionEvent.ACTION_CANCEL -> { shapeTouchActive = false; shapes.cancelGesture() }
+            }
+            changed(); return true
         }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

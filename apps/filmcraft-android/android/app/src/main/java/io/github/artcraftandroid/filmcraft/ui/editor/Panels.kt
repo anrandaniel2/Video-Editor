@@ -103,7 +103,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         if (panel != Panel.Background && panel != Panel.Tracking) ed.resetAdvancedTools()
     }
     // a panel whose clip went away closes
-    val standalone = panel == Panel.OnlineSounds || panel == Panel.Drawing || panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D
+    val standalone = panel == Panel.Lights || panel == Panel.OnlineSounds || panel == Panel.Drawing || panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D
     if (clip == null && !standalone) {
         LaunchedEffect(Unit) { ed.panel = null }
     }

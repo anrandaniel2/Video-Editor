@@ -13,6 +13,11 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.compose.runtime.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -228,6 +233,9 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     }
     var menu by remember { mutableStateOf<String?>(null) }
     var brush by remember { mutableStateOf("Pen") }
+    var brushQuery by remember { mutableStateOf("") }
+    var brushFamily by remember { mutableStateOf("All") }
+    var shape by remember { mutableStateOf("Circle") }
     var revision by remember { mutableIntStateOf(0) }
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(420, easing = FastOutSlowInEasing)) }
@@ -238,16 +246,26 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
             })
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = close) { Text("Cancel") }
-                TextButton(onClick = { ed.importDrawing(view.bitmap()) }, enabled = ed.busy == null && !importing && view.transformMode == null) { Text("Done") }
+                TextButton(onClick = { view.commitShapeDraft(); ed.importDrawing(view.bitmap()) }, enabled = ed.busy == null && !importing && view.transformMode == null) { Text("Done") }
             }
             DrawingGlass(view, Modifier.align(Alignment.CenterStart).padding(start = 8.dp, top = 60.dp, bottom = 110.dp).width(58.dp)) {
                 Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
-                    listOf("Brush" to LucideIcons.Paintbrush.glyph(), "Eraser" to LucideIcons.DrawEraser.glyph(), "Smudge" to LucideIcons.DrawSmudge.glyph(), "Blur" to LucideIcons.DrawBlur.glyph(), "Lasso" to LucideIcons.DrawLasso.glyph(), "Magic wand" to LucideIcons.WandSparkles.glyph()).forEach { (name, icon) ->
+                    listOf("Brush" to LucideIcons.Paintbrush.glyph(), "Eraser" to LucideIcons.DrawEraser.glyph(), "Smudge" to LucideIcons.DrawSmudge.glyph(), "Blur" to LucideIcons.DrawBlur.glyph(), "Lasso" to LucideIcons.DrawLasso.glyph(), "Magic wand" to LucideIcons.WandSparkles.glyph(), "Shapes" to LucideIcons.Shapes.glyph()).forEach { (name, icon) ->
                         Box(Modifier.background(if (tool == name) Color.White.copy(alpha = .18f) else Color.Transparent, RoundedCornerShape(10.dp))) {
-                            DrawIcon(icon, name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes" }
+                            DrawIcon(icon, name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes"; if (name == "Shapes") menu = "Shapes" }
                         }
                     }
                     DrawIcon(LucideIcons.Maximize.glyph(), "Transform current layer", view.transformMode == null) { selectedOnly = false; menu = "Transform" }
+                }
+            }
+            if (tool == "Shapes" && (shape == "Lines" || shape == "Curves")) {
+                DrawingGlass(view, Modifier.align(Alignment.TopCenter).padding(top = 54.dp, start = 72.dp, end = 8.dp)) {
+                    Text(if (shape == "Curves") "Tap points • drag points or segments to curve" else "Tap to add points • drag points to move", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    Row {
+                        TextButton(onClick = { view.connectShape() }, enabled = view.shapes.points.size > 2) { Text(if (view.shapes.connected) "Disconnect" else "Connect") }
+                        TextButton(onClick = { view.commitShapeDraft() }, enabled = view.shapes.points.size > 1) { Text("Apply") }
+                        TextButton(onClick = { view.cancelShapeDraft() }) { Text("Cancel") }
+                    }
                 }
             }
             if ((tool == "Lasso" || tool == "Magic wand") && view.transformMode == null) {
@@ -272,15 +290,31 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                 }
                 when (menu) {
                     "Colors" -> WheelPicker(color) { color = it; view.inkColor = it }
+                    "Shapes" -> {
+                        Text("Drag circles, triangles and squares from their center. Rectangles: corner to corner.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+                            view.shapes.names.forEach { name -> TextButton(onClick = { shape = name; tool = "Shapes"; view.tool = tool; view.changeShape(name); menu = null }) { Text(if (shape == name) "• $name" else name) } }
+                        }
+                    }
                     "Brushes" -> {
-                        listOf("Pen", "Pencil", "Marker", "Airbrush", "Eraser").forEach { name ->
-                            Row(Modifier.fillMaxWidth().clickable { brush = name; view.brush = name; tool = if (name == "Eraser") "Eraser" else "Brush"; view.tool = tool; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(if (brush == name) "• $name" else name, color = Color.White, modifier = Modifier.width(90.dp))
-                                ComposeCanvas(Modifier.weight(1f).height(28.dp)) {
-                                    val path = androidx.compose.ui.graphics.Path().apply { moveTo(0f, size.height / 2); cubicTo(size.width * .3f, -10f, size.width * .6f, size.height + 10f, size.width, size.height / 2) }
-                                    drawPath(path, Color.White.copy(alpha = if (name == "Marker") .4f else 1f), style = Stroke(if (name == "Pencil") 2f else if (name == "Airbrush") 16f else 7f, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                        OutlinedTextField(brushQuery, { brushQuery = it }, label = { Text("Search 150 brushes") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                            (listOf("All") + DrawingBrushes.families).forEach { family -> TextButton(onClick = { brushFamily = family }) { Text(if (brushFamily == family) "• $family" else family) } }
+                        }
+                        val shown = DrawingBrushes.all.filter { (brushFamily == "All" || it.family == brushFamily) && it.name.contains(brushQuery, true) }
+                        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
+                            items(shown, key = { it.name }) { preset ->
+                                Row(Modifier.fillMaxWidth().clickable { brush = preset.name; view.brush = preset.name; tool = "Brush"; view.tool = tool; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(if (brush == preset.name) "• ${preset.name}" else preset.name, color = Color.White, modifier = Modifier.width(130.dp), style = MaterialTheme.typography.labelSmall)
+                                    ComposeCanvas(Modifier.weight(1f).height(36.dp)) {
+                                        drawIntoCanvas { canvas ->
+                                            val path = Path().apply { moveTo(0f, size.height / 2); cubicTo(size.width * .3f, 0f, size.width * .6f, size.height, size.width, size.height / 2) }
+                                            DrawingBrushes.draw(canvas.nativeCanvas, path, preset.name, android.graphics.Color.WHITE, 12.dp.toPx(), 1f)
+                                        }
+                                    }
                                 }
                             }
+                            if (shown.isEmpty()) item { Text("No matching brushes", color = Color.White) }
                         }
                     }
                     "Transform" -> {
