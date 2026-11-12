@@ -10,10 +10,10 @@ import org.json.JSONObject
 import java.net.URI
 import java.net.HttpURLConnection
 
-internal data class MixkitAsset(val id: String, val title: String, val page: String, val preview: String, val download: String = "", val thumbnail: String = "")
+internal data class MixkitAsset(val id: String, val title: String, val page: String, val preview: String, val download: String = "", val thumbnail: String = "", val provider: String = "Mixkit")
 internal data class MixkitPage(val items: List<MixkitAsset>, val next: String?)
 internal data class MixkitResolution(val label: String, val address: String, val modal: Boolean)
-internal data class MixkitOffer(val license: String, val choices: List<MixkitResolution>)
+internal data class MixkitOffer(val license: String, val choices: List<MixkitResolution>, val licenseUrl: String = "https://mixkit.co/license/")
 
 /** Read only published links. No guessed CDN filenames, automatic crawling, or bulk downloads. */
 internal object MixkitCatalog {

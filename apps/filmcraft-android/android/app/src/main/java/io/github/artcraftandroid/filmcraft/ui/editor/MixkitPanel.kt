@@ -53,6 +53,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
     var error by remember { mutableStateOf<String?>(null) }
     var retry by remember { mutableIntStateOf(0) }
     var preview by remember { mutableStateOf<String?>(null) }
+    var previewUrl by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<MixkitAsset?>(null) }
     var offer by remember { mutableStateOf<MixkitOffer?>(null) }
     var choice by remember { mutableStateOf<MixkitResolution?>(null) }
@@ -75,7 +76,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
         }
     }
     fun stopPreview() {
-        val old = player; player = null; preview = null; playbackProgress = 0f
+        val old = player; player = null; preview = null; previewUrl = ""; playbackProgress = 0f
         runCatching { old?.release() }
     }
     DisposableEffect(Unit) { onDispose { runCatching { player?.release() }; player = null } }
@@ -84,18 +85,18 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
         listState.scrollToItem(0)
         delay(350)
         try {
-            val page = MixkitCatalog.search(MixkitCatalog.listingUrl(video, query), video)
-            visited.add(MixkitCatalog.listingUrl(video, query))
+            val page = OnlineMediaCatalog.search(OnlineMediaCatalog.listingUrl(video, query), video)
+            visited.add(OnlineMediaCatalog.listingUrl(video, query))
             results = page.items; next = page.next
         } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { error = e.message ?: "Could not load Mixkit." }
+        catch (e: Exception) { error = e.message ?: "Could not load online media." }
         finally { loading = false }
     }
     LaunchedEffect(selected) {
         offer = null; choice = null
         val asset = selected ?: return@LaunchedEffect
         resolving = true; error = null
-        try { offer = MixkitCatalog.offer(asset, video) }
+        try { offer = OnlineMediaCatalog.offer(asset, video) }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { error = e.message; selected = null }
         finally { resolving = false }
@@ -106,7 +107,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
         loading = true; error = null
         pageJob = scope.launch {
             try {
-                val page = MixkitCatalog.search(url, video)
+                val page = OnlineMediaCatalog.search(url, video)
                 results = (results + page.items).distinctBy { it.id }
                 next = page.next?.takeUnless { it in visited }
             } catch (e: CancellationException) { throw e }
@@ -128,19 +129,15 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
             .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column(Modifier.weight(1f)) {
-                        Text("MIXKIT LIBRARY", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .65f))
-                        Text(if (video) "Find your next shot" else "Make it sound right", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    }
+                    Text(if (video) "Online videos" else "Online sounds", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                     FcIconButton(LucideIcons.X.glyph(), "Close media browser", close, tint = Color.White)
                 }
-                OutlinedTextField(query, { query = it }, singleLine = true, label = { Text("Browse Mixkit category") }, placeholder = { Text(if (video) "Nature, city, aerial…" else "Whoosh, impact, cinematic…") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(query, { query = it }, singleLine = true, label = { Text("Browse category") }, placeholder = { Text(if (video) "Nature, city, aerial…" else "Whoosh, impact, cinematic…") }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     (if (video) listOf("All", "Nature", "City", "Aerial") else listOf("All", "Whoosh", "Impact", "Cinematic")).forEach { category ->
                         TextButton(onClick = { query = if (category == "All") "" else category }) { Text(category) }
                     }
                 }
-                Text("Mixkit · Check the displayed license. Video resolution is chosen before downloading.", style = MaterialTheme.typography.bodySmall)
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("Retry catalog") } }
@@ -150,11 +147,11 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
                         Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 38.dp, captureSurface = false).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (video && preview != asset.id) MixkitThumbnail(asset)
                                 Text(asset.title, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                                if (video && preview == asset.id) AndroidView(factory = { ctx ->
+                                if (video && preview == asset.id && previewUrl.isNotBlank()) AndroidView(factory = { ctx ->
                                     VideoView(ctx).apply {
                                         setOnPreparedListener { it.isLooping = true; start() }
                                         setOnErrorListener { _, what, extra -> error = "Preview failed ($what/$extra). Try another clip."; preview = null; true }
-                                        setVideoURI(Uri.parse(asset.preview), onlineMediaHeaders + ("Referer" to "https://mixkit.co/"))
+                                        setVideoURI(Uri.parse(previewUrl), onlineMediaHeaders + ("Referer" to asset.page))
                                     }
                                 }, modifier = Modifier.fillMaxWidth().height(180.dp), onReset = null, onRelease = { it.stopPlayback() })
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -162,19 +159,27 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
                                         if (preview == asset.id) "Stop preview" else "Play preview", onClick = {
                                         if (preview == asset.id) stopPreview() else {
                                             stopPreview(); error = null; preview = asset.id
-                                            if (!video) try {
-                                                val audio = MediaPlayer(); player = audio
-                                                audio.setOnPreparedListener { ready ->
-                                                    if (player === ready) runCatching { ready.start() }.onFailure { error = "Could not start preview."; stopPreview() }
-                                                }
-                                                audio.setOnCompletionListener { if (player === it) stopPreview() }
-                                                audio.setOnErrorListener { failed, what, extra ->
-                                                    if (player === failed) { error = "Preview failed ($what/$extra)."; stopPreview() }; true
-                                                }
-                                                audio.setDataSource(context, Uri.parse(asset.preview), onlineMediaHeaders + ("Referer" to "https://mixkit.co/")); audio.prepareAsync()
-                                            } catch (e: Exception) { error = e.message; stopPreview() }
+                                            scope.launch {
+                                                try {
+                                                    val url = OnlineMediaCatalog.preview(asset)
+                                                    if (preview != asset.id) return@launch
+                                                    previewUrl = url
+                                                    if (!video) {
+                                                        val audio = MediaPlayer(); player = audio
+                                                        audio.setOnPreparedListener { ready ->
+                                                            if (player === ready) runCatching { ready.start() }.onFailure { error = "Could not start preview."; stopPreview() }
+                                                        }
+                                                        audio.setOnCompletionListener { if (player === it) stopPreview() }
+                                                        audio.setOnErrorListener { failed, what, extra ->
+                                                            if (player === failed) { error = "Preview failed ($what/$extra)."; stopPreview() }; true
+                                                        }
+                                                        audio.setDataSource(context, Uri.parse(url), onlineMediaHeaders + ("Referer" to asset.page)); audio.prepareAsync()
+                                                    }
+                                                } catch (e: CancellationException) { throw e }
+                                                catch (e: Exception) { if (preview == asset.id) { error = e.message; stopPreview() } }
+                                            }
                                         }
-                                    }, enabled = asset.preview.isNotBlank(), tint = Color.White)
+                                    }, tint = Color.White)
                                     if (!video) MixkitWaveform(asset, if (preview == asset.id) playbackProgress else 0f, Modifier.weight(1f))
                                     FcIconButton(LucideIcons.Download.glyph(), "Import ${asset.title}", { stopPreview(); selected = asset }, enabled = ed.busy == null && !resolving, tint = Color.White)
                                 }
@@ -219,8 +224,8 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
             resolving = true; error = null
             scope.launch {
                 try {
-                    val url = MixkitCatalog.resolve(chosen, video)
-                    val credits = "${asset.title}\nSource: ${asset.page}\nLicense: ${options.license}\nhttps://mixkit.co/license/\nSelected format: ${chosen.label}\n"
+                    val url = OnlineMediaCatalog.resolve(asset, chosen, video)
+                    val credits = "${asset.title}\nSource: ${asset.page}\nLicense: ${options.license}\n${options.licenseUrl}\nSelected format: ${chosen.label}\n"
                     selected = null
                     if (video) ed.importOnlineVideo(url, credits, overlay) else ed.importOnlineSound(url, credits)
                 } catch (e: CancellationException) { throw e }

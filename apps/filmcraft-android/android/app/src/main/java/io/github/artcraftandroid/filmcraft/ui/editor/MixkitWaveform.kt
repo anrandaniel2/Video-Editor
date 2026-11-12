@@ -23,14 +23,14 @@ import kotlin.math.*
 private object PreviewPeaks {
     val slots = Semaphore(2)
     val cache = LruCache<String, FloatArray>(64)
-    suspend fun load(url: String): FloatArray = withContext(Dispatchers.IO) {
+    suspend fun load(url: String, source: String): FloatArray = withContext(Dispatchers.IO) {
         cache.get(url)?.let { return@withContext it }
         slots.withPermit {
             cache.get(url)?.let { return@withPermit it }
             val extractor = MediaExtractor()
             var codec: MediaCodec? = null
             try {
-                extractor.setDataSource(url, onlineMediaHeaders + ("Referer" to "https://mixkit.co/"))
+                extractor.setDataSource(url, onlineMediaHeaders + ("Referer" to source))
                 val track = (0 until extractor.trackCount).firstOrNull { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
                     ?: error("No audio stream")
                 extractor.selectTrack(track)
@@ -93,7 +93,7 @@ internal fun MixkitWaveform(asset: MixkitAsset, progress: Float, modifier: Modif
     var peaks by remember(asset.preview) { mutableStateOf<FloatArray?>(null) }
     var loading by remember(asset.preview) { mutableStateOf(true) }
     LaunchedEffect(asset.preview) {
-        try { if (asset.preview.isNotBlank()) peaks = PreviewPeaks.load(asset.preview) }
+        try { if (asset.preview.isNotBlank()) peaks = PreviewPeaks.load(asset.preview, asset.page) }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { peaks = null }
         finally { loading = false }

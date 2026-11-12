@@ -55,7 +55,7 @@ private object MixkitThumbnails {
             if (bitmap == null && asset.preview.isNotBlank()) {
                 val retriever = MediaMetadataRetriever()
                 try {
-                    retriever.setDataSource(asset.preview, onlineMediaHeaders + ("Referer" to "https://mixkit.co/"))
+                    retriever.setDataSource(asset.preview, onlineMediaHeaders + ("Referer" to asset.page))
                     bitmap = retriever.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 270)
                 } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                 finally { runCatching { retriever.release() } }
