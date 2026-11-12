@@ -1,6 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
-import io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog
+import io.github.artcraftandroid.filmcraft.ui.*
 import android.media.MediaPlayer
 import android.text.Html
 import androidx.compose.foundation.layout.*
@@ -148,7 +148,7 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Online sounds", style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = close) { Text("Close") }
+                    FcIconButton(LucideIcons.X.glyph(), "Close", close)
                 }
                 OutlinedTextField(query, { query = it }, label = { Text("Search sounds") }, placeholder = { Text("Rain, footsteps, birds…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {

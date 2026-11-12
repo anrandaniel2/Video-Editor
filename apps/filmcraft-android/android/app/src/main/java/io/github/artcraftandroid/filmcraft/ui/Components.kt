@@ -215,6 +215,7 @@ fun ToolPanel(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (actions != null) Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+                    FcIconButton(LucideIcons.X.glyph(), "Close panel", { close() })
                 }
             }
         }

@@ -13,7 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog
+import io.github.artcraftandroid.filmcraft.ui.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
@@ -48,7 +48,7 @@ internal fun OnlineVideosPanel(ed: EditorController, close: () -> Unit) {
             Column(Modifier.padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Online videos", style = MaterialTheme.typography.titleLarge)
-                    TextButton(onClick = close) { Text("Close") }
+                    FcIconButton(LucideIcons.X.glyph(), "Close", close)
                 }
                 OutlinedTextField(query, { query = it; offset = 0 }, label = { Text("Search videos") }, placeholder = { Text("Nature, ocean, city…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row { listOf("Nature", "Ocean", "City", "Space").forEach { term -> TextButton(onClick = { query = term; offset = 0 }) { Text(term) } } }

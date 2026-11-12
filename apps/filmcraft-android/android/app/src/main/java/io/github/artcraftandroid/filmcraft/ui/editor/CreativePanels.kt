@@ -130,7 +130,7 @@ internal fun ColorPicker(label: String, color: Int, change: (Int) -> Unit) {
             Text(label, color = Color.White)
             Spacer(Modifier.height(12.dp))
             WheelPicker(color, change)
-            TextButton(onClick = { expanded = false }) { Text("Done") }
+            FcIconButton(LucideIcons.X.glyph(), "Close color picker", { expanded = false })
         }
     }
 }
@@ -278,7 +278,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                 scaleX = .65f + .35f * entrance.value; scaleY = scaleX; alpha = entrance.value
             })
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onClick = close) { Text("Cancel") }
+                FcIconButton(LucideIcons.X.glyph(), "Close", close)
                 EditorExportButton({ exportMessage = null; menu = "Export" }, enabled = ed.busy == null && !importing && !exporting && view.transformMode == null)
             }
             DrawingGlass(view, Modifier.align(Alignment.CenterStart).padding(start = 8.dp, top = 60.dp, bottom = 110.dp).width(58.dp)) {
@@ -328,7 +328,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
             if (menu != null) DrawingGlass(view, Modifier.align(Alignment.BottomCenter).padding(bottom = 108.dp, start = 16.dp, end = 16.dp).widthIn(max = 380.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(menu!!, color = Color.White)
-                    TextButton(onClick = { if (view.transformMode != null) view.finishTransform(false); menu = null }) { Text("Close") }
+                    FcIconButton(LucideIcons.X.glyph(), "Close drawing menu", { if (view.transformMode != null) view.finishTransform(false); menu = null })
                 }
                 when (menu) {
                     "Export" -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {

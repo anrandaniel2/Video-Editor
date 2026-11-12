@@ -50,7 +50,7 @@ internal fun DrawingCanvasDialog(close: () -> Unit, create: (Int, Int) -> Unit) 
                         Text("New canvas", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                         Text("A little space for your next idea", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = .65f))
                     }
-                    IconButton(onClick = close) { GlyphIcon(LucideIcons.CircleX.glyph(), Color.White, description = "Close") }
+                    IconButton(onClick = close) { GlyphIcon(LucideIcons.X.glyph(), Color.White, description = "Close") }
                 }
                 Box(Modifier.fillMaxWidth().height(112.dp).clip(RoundedCornerShape(18.dp)).background(Color.White.copy(alpha = .04f)), contentAlignment = Alignment.Center) {
                     val ratio = if (w > 0 && h > 0) w.toFloat() / h else 1f

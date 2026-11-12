@@ -11,7 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import io.github.artcraftandroid.filmcraft.ui.editorGlass
+import io.github.artcraftandroid.filmcraft.ui.*
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,6 +33,18 @@ import kotlinx.coroutines.launch
 /** Native catalog UI. Web pages are parsed as data, never rendered in a WebView. */
 @Composable
 internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit) {
+    val white = Color.White
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
+        primary = white, onPrimary = Color.Black, secondary = white, tertiary = white,
+        onSurface = white, onSurfaceVariant = white.copy(alpha = .8f), onBackground = white,
+        outline = white.copy(alpha = .5f), outlineVariant = white.copy(alpha = .25f),
+    )) {
+        CompositionLocalProvider(LocalContentColor provides white) { MixkitPanelContent(ed, video, close) }
+    }
+}
+
+@Composable
+private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var overlay by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<MixkitAsset>>(emptyList()) }
@@ -51,8 +63,19 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
     val listState = rememberLazyListState()
     val visited = remember { mutableSetOf<String>() }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
+    var playbackProgress by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(player, preview) {
+        playbackProgress = 0f
+        val audio = player ?: return@LaunchedEffect
+        while (player === audio) {
+            playbackProgress = runCatching {
+                if (audio.isPlaying && audio.duration > 0) (audio.currentPosition.toFloat() / audio.duration).coerceIn(0f, 1f) else 0f
+            }.getOrDefault(0f)
+            delay(33)
+        }
+    }
     fun stopPreview() {
-        val old = player; player = null; preview = null
+        val old = player; player = null; preview = null; playbackProgress = 0f
         runCatching { old?.release() }
     }
     DisposableEffect(Unit) { onDispose { runCatching { player?.release() }; player = null } }
@@ -109,7 +132,7 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                         Text("MIXKIT LIBRARY", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .65f))
                         Text(if (video) "Find your next shot" else "Make it sound right", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                     }
-                    TextButton(onClick = close) { Text("Close") }
+                    FcIconButton(LucideIcons.X.glyph(), "Close media browser", close, tint = Color.White)
                 }
                 OutlinedTextField(query, { query = it }, singleLine = true, label = { Text("Browse Mixkit category") }, placeholder = { Text(if (video) "Nature, city, aerial…" else "Whoosh, impact, cinematic…") }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -126,7 +149,7 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                     items(results, key = { it.id }) { asset ->
                         Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 38.dp, captureSurface = false).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (video && preview != asset.id) MixkitThumbnail(asset)
-                                Text(asset.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text(asset.title, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 if (video && preview == asset.id) AndroidView(factory = { ctx ->
                                     VideoView(ctx).apply {
                                         setOnPreparedListener { it.isLooping = true; start() }
@@ -134,8 +157,9 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                                         setVideoURI(Uri.parse(asset.preview), onlineMediaHeaders + ("Referer" to "https://mixkit.co/"))
                                     }
                                 }, modifier = Modifier.fillMaxWidth().height(180.dp), onReset = null, onRelease = { it.stopPlayback() })
-                                Row {
-                                    TextButton(onClick = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    FcIconButton(if (preview == asset.id) Glyphs.Pause else Glyphs.Play,
+                                        if (preview == asset.id) "Stop preview" else "Play preview", onClick = {
                                         if (preview == asset.id) stopPreview() else {
                                             stopPreview(); error = null; preview = asset.id
                                             if (!video) try {
@@ -150,8 +174,9 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                                                 audio.setDataSource(context, Uri.parse(asset.preview), onlineMediaHeaders + ("Referer" to "https://mixkit.co/")); audio.prepareAsync()
                                             } catch (e: Exception) { error = e.message; stopPreview() }
                                         }
-                                    }, enabled = asset.preview.isNotBlank()) { Text(if (preview == asset.id) "Stop" else "Preview") }
-                                    TextButton(onClick = { stopPreview(); selected = asset }, enabled = ed.busy == null && !resolving) { Text("Import") }
+                                    }, enabled = asset.preview.isNotBlank(), tint = Color.White)
+                                    if (!video) MixkitWaveform(asset, if (preview == asset.id) playbackProgress else 0f, Modifier.weight(1f))
+                                    FcIconButton(LucideIcons.Download.glyph(), "Import ${asset.title}", { stopPreview(); selected = asset }, enabled = ed.busy == null && !resolving, tint = Color.White)
                                 }
                         }
                     }
@@ -202,7 +227,7 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                 catch (e: Exception) { error = e.message; selected = null }
                 finally { resolving = false }
             }
-        }) { Text("Import") } },
-        dismissButton = { TextButton(onClick = { selected = null }, enabled = !resolving) { Text("Cancel") } },
+        }) { GlyphIcon(LucideIcons.Download.glyph(), Color.White, description = "Import") } },
+        dismissButton = { FcIconButton(LucideIcons.X.glyph(), "Close import options", { selected = null }, enabled = !resolving, tint = Color.White) },
     )
 }
