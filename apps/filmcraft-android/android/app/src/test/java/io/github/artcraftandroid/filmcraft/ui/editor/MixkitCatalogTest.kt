@@ -5,6 +5,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MixkitCatalogTest {
+    @Test fun numericPaginationAndPosterArePublishedWithoutNextButton() {
+        val doc = Jsoup.parse("""
+            <div class="item-grid-card"><h3>Ocean</h3>
+              <a href="/free-stock-video/ocean-42/">Ocean</a>
+              <video poster="https://assets.mixkit.co/ocean.jpg"><source src="https://assets.mixkit.co/ocean.mp4"></video>
+            </div>
+            <a href="?page=1">1</a><a href="?page=2">2</a><a href="?page=3">3</a>
+        """, "https://mixkit.co/free-stock-video/")
+        val page = MixkitCatalog.parseListing(doc, true)
+        assertTrue(page.next!!.endsWith("page=2"))
+        assertEquals("https://assets.mixkit.co/ocean.jpg", page.items.single().thumbnail)
+    }
+
     @Test fun publishedResolutionsAreKeptSeparate() {
         val doc = Jsoup.parse("""
             <div><a data-license="videoFree">Free</a>

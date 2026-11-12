@@ -134,6 +134,9 @@ fun EditorScreen(ed: EditorController) {
                         .padding(bottom = 8.dp),
                 )
             }
+            if (ed.panel == Panel.OnlineVideos || ed.panel == Panel.OnlineSounds) {
+                MixkitPanel(ed, video = ed.panel == Panel.OnlineVideos, close = { ed.panel = null })
+            }
             ed.busy?.let { BusyOverlay(it) }
         }
     }
@@ -153,7 +156,7 @@ private fun BusyOverlay(text: String) {
 @Composable
 private fun Stacked(ed: EditorController) {
     val density = LocalDensity.current
-    val panel = ed.panel
+    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds }
     val textInput = panel as? Panel.TextInput
     val showPanel = panel != null && textInput == null
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -197,7 +200,7 @@ private fun Stacked(ed: EditorController) {
 @Composable
 private fun SideBySide(ed: EditorController) {
     val density = LocalDensity.current
-    val panel = ed.panel
+    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds }
     val textInput = panel as? Panel.TextInput
     val showPanel = panel != null && textInput == null
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {

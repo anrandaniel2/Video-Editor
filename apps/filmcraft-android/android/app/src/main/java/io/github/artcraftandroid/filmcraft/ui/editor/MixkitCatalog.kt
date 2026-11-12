@@ -10,7 +10,7 @@ import org.json.JSONObject
 import java.net.URI
 import java.net.HttpURLConnection
 
-internal data class MixkitAsset(val id: String, val title: String, val page: String, val preview: String, val download: String = "")
+internal data class MixkitAsset(val id: String, val title: String, val page: String, val preview: String, val download: String = "", val thumbnail: String = "")
 internal data class MixkitPage(val items: List<MixkitAsset>, val next: String?)
 internal data class MixkitResolution(val label: String, val address: String, val modal: Boolean)
 internal data class MixkitOffer(val license: String, val choices: List<MixkitResolution>)
@@ -85,7 +85,10 @@ internal object MixkitCatalog {
             val title = card.selectFirst("h2, h3, .item-grid-card__title, [class*=title]")?.text().orEmpty()
             if (title.isNotBlank() && (page.isNotBlank() || preview.isNotBlank())) {
                 val id = page.ifBlank { preview }
-                items[id] = MixkitAsset(id, title, page.ifBlank { doc.baseUri() }, preview, download)
+                val poster = card.selectFirst("video[poster]")?.absUrl("poster").orEmpty()
+                val image = card.selectFirst("img[src], img[data-src]")
+                val thumbnail = poster.ifBlank { image?.absUrl("data-src").orEmpty().ifBlank { image?.absUrl("src").orEmpty() } }.takeIf { allowed(it) }.orEmpty()
+                items[id] = MixkitAsset(id, title, page.ifBlank { doc.baseUri() }, preview, download, thumbnail)
             }
         }
         // Schema.org is also published by Mixkit and survives many visual markup changes.
@@ -99,7 +102,8 @@ internal object MixkitCatalog {
                         val name = value.optString("name")
                         val page = absolute(doc.baseUri(), value.optString("url", doc.baseUri()))
                         if (name.isNotBlank() && media(content, video) && items.values.none { it.preview == content || it.page == page }) {
-                            items[content] = MixkitAsset(content, name, page, content, if (video) "" else content)
+                            val thumb = value.opt("thumbnailUrl").let { if (it is JSONArray) it.optString(0) else it as? String }.orEmpty()
+                            items[content] = MixkitAsset(content, name, page, content, if (video) "" else content, absolute(doc.baseUri(), thumb).takeIf { thumb.isNotBlank() && allowed(it) }.orEmpty())
                         }
                     }
                     value.keys().forEach { walk(value.opt(it)) }
@@ -109,8 +113,13 @@ internal object MixkitCatalog {
         doc.select("script[type=application/ld+json]").forEach { script ->
             runCatching { org.json.JSONTokener(script.data()).nextValue() }.getOrNull()?.let { walk(it) }
         }
+        fun pageNumber(url: String) = Regex("[?&]page=(\\d+)").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        val currentPage = pageNumber(doc.baseUri())
+        val numberedNext = doc.select("a[href]").map { it.absUrl("href") }.filter {
+            allowed(it) && it.substringBefore('?').trimEnd('/') == doc.baseUri().substringBefore('?').trimEnd('/') && pageNumber(it) > currentPage
+        }.minByOrNull { pageNumber(it) }
         val next = doc.selectFirst("a[rel=next], a.pagination__link--next")?.absUrl("href")?.takeIf { allowed(it) }
-            ?: doc.select("a.pagination__link").firstOrNull { it.text().lowercase() in listOf("next", "next page", "›", "→") }?.absUrl("href")?.takeIf { allowed(it) }
+            ?: doc.select("a.pagination__link").firstOrNull { it.text().lowercase() in listOf("next", "next page", "›", "→") }?.absUrl("href")?.takeIf { allowed(it) } ?: numberedNext
         require(items.isNotEmpty() || doc.text().contains("no results", true)) { "Mixkit did not publish readable results for this category. Try a category such as Nature or Whoosh." }
         return MixkitPage(items.values.toList(), next)
     }

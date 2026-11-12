@@ -4,6 +4,16 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.widget.VideoView
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
+import androidx.activity.compose.BackHandler
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -17,6 +27,7 @@ import androidx.compose.ui.window.DialogProperties
 import io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 
 /** Native catalog UI. Web pages are parsed as data, never rendered in a WebView. */
@@ -37,14 +48,18 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
     var pageJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val listState = rememberLazyListState()
+    val visited = remember { mutableSetOf<String>() }
     val player = remember { MediaPlayer() }
     fun stopPreview() { player.reset(); preview = null }
     DisposableEffect(player) { onDispose { player.release() } }
     LaunchedEffect(query, retry) {
-        pageJob?.cancel(); stopPreview(); results = emptyList(); next = null; loading = true; error = null
+        pageJob?.cancelAndJoin(); visited.clear(); stopPreview(); results = emptyList(); next = null; loading = true; error = null
+        listState.scrollToItem(0)
         delay(350)
         try {
             val page = MixkitCatalog.search(MixkitCatalog.listingUrl(video, query), video)
+            visited.add(MixkitCatalog.listingUrl(video, query))
             results = page.items; next = page.next
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { error = e.message ?: "Could not load Mixkit." }
@@ -59,12 +74,38 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
         catch (e: Exception) { error = e.message; selected = null }
         finally { resolving = false }
     }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        ImmersiveDialog()
-        Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().padding(16.dp)) {
+    fun loadNext() {
+        val url = next ?: return
+        if (loading || !visited.add(url)) return
+        loading = true; error = null
+        pageJob = scope.launch {
+            try {
+                val page = MixkitCatalog.search(url, video)
+                results = (results + page.items).distinctBy { it.id }
+                next = page.next?.takeUnless { it in visited }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { visited.remove(url); error = e.message }
+            finally { loading = false }
+        }
+    }
+    LaunchedEffect(listState, next, loading, results.size, error) {
+        if (loading || next == null || error != null || results.isEmpty()) return@LaunchedEffect
+        snapshotFlow { (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= results.lastIndex - 2 }
+            .distinctUntilChanged().collect { nearBottom -> if (nearBottom && !loading) loadNext() }
+    }
+    BackHandler { if (selected != null) selected = null else close() }
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().editorGlass(0.dp, layer = 4f, blurRadius = 8.dp)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = close))
+        Column(Modifier.padding(16.dp).widthIn(max = 720.dp).fillMaxWidth().height(maxHeight * .88f)
+            .editorGlass(28.dp, layer = 5f, blurRadius = 18.dp)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
+            .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(if (video) "Stock videos" else "Sound effects", style = MaterialTheme.typography.titleLarge)
+                    Column(Modifier.weight(1f)) {
+                        Text("MIXKIT LIBRARY", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .65f))
+                        Text(if (video) "Find your next shot" else "Make it sound right", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    }
                     TextButton(onClick = close) { Text("Close") }
                 }
                 OutlinedTextField(query, { query = it }, singleLine = true, label = { Text("Browse Mixkit category") }, placeholder = { Text(if (video) "Nature, city, aerial…" else "Whoosh, impact, cinematic…") }, modifier = Modifier.fillMaxWidth())
@@ -79,11 +120,11 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                 ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("Retry catalog") } }
                 if (resolving) { Text("Loading published download options…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(results, key = { it.id }) { asset ->
-                        OutlinedCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(asset.title, style = MaterialTheme.typography.titleSmall)
+                        Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 38.dp).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (video && preview != asset.id) MixkitThumbnail(asset)
+                                Text(asset.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 if (video && preview == asset.id) AndroidView(factory = { ctx ->
                                     VideoView(ctx).apply {
                                         setOnPreparedListener { it.isLooping = true; start() }
@@ -105,33 +146,26 @@ internal fun MixkitPanel(ed: EditorController, video: Boolean, close: () -> Unit
                                     }, enabled = asset.preview.isNotBlank()) { Text(if (preview == asset.id) "Stop" else "Preview") }
                                     TextButton(onClick = { stopPreview(); selected = asset }, enabled = ed.busy == null && !resolving) { Text(if (video) "Choose resolution" else "Import") }
                                 }
-                            }
                         }
                     }
                     if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                     if (!loading && results.isEmpty() && error == null) item { Text("No assets found. Try another category.") }
-                    if (!loading && next != null) item {
-                        TextButton(onClick = {
-                            val url = next ?: return@TextButton
-                            loading = true; error = null
-                            pageJob = scope.launch {
-                                try { val page = MixkitCatalog.search(url, video); results = (results + page.items).distinctBy { it.id }; next = page.next }
-                                catch (e: CancellationException) { throw e }
-                                catch (e: Exception) { error = e.message }
-                                finally { loading = false }
-                            }
-                        }) { Text("Load more") }
+                    if (!loading && error != null && results.isNotEmpty() && next != null) item {
+                        TextButton(onClick = { loadNext() }) { Text("Retry loading more") }
                     }
                 }
-            }
         }
     }
+
     val asset = selected
     val options = offer
     if (asset != null && options != null) AlertDialog(
+        modifier = Modifier.editorGlass(24.dp, layer = 8f, blurRadius = 38.dp),
+        containerColor = Color.Transparent,
         onDismissRequest = { if (!resolving) selected = null },
         title = { Text(if (video) "Choose video resolution" else "Import sound effect") },
         text = {
+            ImmersiveDialog()
             Column {
                 Text(asset.title)
                 Text(options.license, style = MaterialTheme.typography.bodySmall)
