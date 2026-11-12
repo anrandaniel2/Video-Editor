@@ -1,5 +1,8 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import android.content.Context
 import android.graphics.*
 import android.view.MotionEvent
@@ -27,12 +30,14 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         set(value) { shapes.clear(); if (transformMode != null) finishTransform(false); field = value.coerceIn(0, images.lastIndex); clearSelection() }
     val layers get() = images.size
     val canAddLayer get() = images.size < 16 && transformMode == null && (images.size + 1L) * canvasW * canvasH * 4 <= 96L * 1024 * 1024
-    var currentLayerOnly = true
-    var selection: Path? = null
+    var currentLayerOnly = false
+    var selectionMode = "Add"
+    var wandTolerance = 16
+    var selection: Path? by mutableStateOf(null)
         private set
-    private var clipboard: Bitmap? = null
+    private var clipboard: Bitmap? by mutableStateOf(null)
     val canPaste get() = clipboard != null
-    var transformMode: String? = null
+    var transformMode: String? by mutableStateOf(null)
         private set
     var meshDivisions = 3
         private set
@@ -110,7 +115,20 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         Canvas(images[layer]).drawBitmap(bitmap, null, RectF((canvasW - w) / 2, (canvasH - h) / 2, (canvasW + w) / 2, (canvasH + h) / 2), paint)
         bitmap.recycle(); changed()
     }
-    fun clearSelection() { selection = null; invalidate() }
+    fun clearSelection() { selection = null; changed() }
+    private fun mergeSelection(path: Path, mode: String) {
+        val clip = Region(0, 0, canvasW, canvasH)
+        val next = Region().apply { setPath(path, clip) }
+        val previous = Region().apply { selection?.let { setPath(it, clip) } }
+        when (mode) { "Add" -> next.op(previous, Region.Op.UNION); "Subtract" -> { previous.op(next, Region.Op.DIFFERENCE); next.set(previous) } }
+        selection = if (next.isEmpty) null else next.boundaryPath
+        changed()
+    }
+    private fun visibleSample(): Bitmap = blank().also { b ->
+        val c = Canvas(b); c.drawColor(Color.WHITE)
+        backgroundFrame?.let { c.drawBitmap(it, null, Rect(0, 0, canvasW, canvasH), null) }
+        images.forEach { c.drawBitmap(it, 0f, 0f, null) }
+    }
     fun copySelection() {
         if (selection == null || transformMode != null) return
         clipboard?.recycle(); clipboard = selectedPixels(merged = !currentLayerOnly); changed()
@@ -123,7 +141,10 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     }
     private fun selectedPixels(merged: Boolean = false): Bitmap = blank().also { result ->
         val c = Canvas(result); selection?.let { c.clipPath(it) }
-        if (merged) images.forEach { c.drawBitmap(it, 0f, 0f, null) } else c.drawBitmap(images[layer], 0f, 0f, null)
+        if (merged) {
+            backgroundFrame?.let { c.drawBitmap(it, null, Rect(0, 0, canvasW, canvasH), null) }
+            images.forEach { c.drawBitmap(it, 0f, 0f, null) }
+        } else c.drawBitmap(images[layer], 0f, 0f, null)
     }
     fun beginTransform(mode: String, selectedOnly: Boolean) {
         commitShapeDraft()
@@ -202,6 +223,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         }
         paint.reset(); paint.isAntiAlias = true; paint.color = Color.CYAN; paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f / (fit() * zoom)
         selection?.let { c.drawPath(it, paint) }
+        if (tool == "Lasso") stroke?.let { c.drawPath(it, paint) }
         if (tool == "Shapes") shapes.guides(c, fit() * zoom)
         if (transformMode != null) {
             val points = if (transformMode == "Mesh") vertices else if (transformMode == "Perspective") corners else floatArrayOf(bounds.left * normalScale + bounds.centerX() * (1 - normalScale) + moveX, bounds.top * normalScale + bounds.centerY() * (1 - normalScale) + moveY, bounds.right * normalScale + bounds.centerX() * (1 - normalScale) + moveX, bounds.bottom * normalScale + bounds.centerY() * (1 - normalScale) + moveY)
@@ -242,11 +264,11 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         c.restore(); if (patch !== b) patch.recycle()
     }
     private fun wand(x: Int, y: Int) {
-        val merged = if (currentLayerOnly) images[layer] else bitmap()
+        val merged = if (currentLayerOnly) images[layer] else visibleSample()
         val pixels = IntArray(canvasW * canvasH); merged.getPixels(pixels, 0, canvasW, 0, 0, canvasW, canvasH)
         if (!currentLayerOnly) merged.recycle()
         val seed = y * canvasW + x; val color = pixels[seed]; val seen = BooleanArray(pixels.size); val queue = IntArray(pixels.size)
-        fun similar(c: Int) = abs(Color.alpha(c) - Color.alpha(color)) <= 24 && (Color.alpha(c) < 16 && Color.alpha(color) < 16 || abs(Color.red(c) - Color.red(color)) <= 32 && abs(Color.green(c) - Color.green(color)) <= 32 && abs(Color.blue(c) - Color.blue(color)) <= 32)
+        fun similar(c: Int) = abs(Color.alpha(c) - Color.alpha(color)) <= wandTolerance && (Color.alpha(c) < 16 && Color.alpha(color) < 16 || abs(Color.red(c) - Color.red(color)) <= wandTolerance && abs(Color.green(c) - Color.green(color)) <= wandTolerance && abs(Color.blue(c) - Color.blue(color)) <= wandTolerance)
         var head = 0; var tail = 0; queue[tail++] = seed; seen[seed] = true
         while (head < tail) {
             val index = queue[head++]; val xx = index % canvasW; val yy = index / canvasW
@@ -254,9 +276,8 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
             if (xx > 0) visit(index - 1); if (xx + 1 < canvasW) visit(index + 1); if (yy > 0) visit(index - canvasW); if (yy + 1 < canvasH) visit(index + canvasW)
         }
         val chosen = BooleanArray(pixels.size); for (i in 0 until tail) chosen[queue[i]] = true
-        selection = Path().apply { for (yy in 0 until canvasH) { var xx = 0; while (xx < canvasW) { if (!chosen[yy * canvasW + xx]) { xx++; continue }; val start = xx; while (xx < canvasW && chosen[yy * canvasW + xx]) xx++; addRect(start.toFloat(), yy.toFloat(), xx.toFloat(), yy + 1f, Path.Direction.CW) } } }
-        selection = Region().apply { setPath(selection!!, Region(0, 0, canvasW, canvasH)) }.boundaryPath
-        changed()
+        val added = Path().apply { for (yy in 0 until canvasH) { var xx = 0; while (xx < canvasW) { if (!chosen[yy * canvasW + xx]) { xx++; continue }; val start = xx; while (xx < canvasW && chosen[yy * canvasW + xx]) xx++; addRect(start.toFloat(), yy.toFloat(), xx.toFloat(), yy + 1f, Path.Direction.CW) } } }
+        mergeSelection(added, "Add")
     }
     override fun onTouchEvent(e: MotionEvent): Boolean {
         parent?.requestDisallowInterceptTouchEvent(true)
@@ -319,12 +340,12 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                     }
                     stroke!!.quadTo(lastX, lastY, (lastX + q[0]) / 2, (lastY + q[1]) / 2); lastX = q[0]; lastY = q[1]
                 }
-                if (tool == "Lasso") selection = Path(stroke!!).apply { close() }
+                // Keep the existing selection while previewing an additive/subtractive lasso.
             }
             MotionEvent.ACTION_UP -> {
                 stroke?.let { path ->
                     path.lineTo(x, y)
-                    if (tool == "Lasso") selection = Path(path).apply { close() }
+                    if (tool == "Lasso") mergeSelection(Path(path).apply { close() }, selectionMode)
                     else { if (tool == "Brush" || tool == "Eraser") drawStroke(Canvas(images[layer]), path); strokeBefore?.let { record(it) } }
                 }
                 stroke = null; strokeBefore = null; onEdit()

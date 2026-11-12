@@ -198,7 +198,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     val view = remember {
         val w = ed.timeline?.width?.toInt()?.coerceAtLeast(1) ?: 1080
         val h = ed.timeline?.height?.toInt()?.coerceAtLeast(1) ?: 1920
-        val ratio = minOf(1f, 1536f / maxOf(w, h))
+        val ratio = if (ed.blankDrawing) 1f else minOf(1f, 1536f / maxOf(w, h))
         DrawingView(context, frame, (w * ratio).toInt().coerceAtLeast(1), (h * ratio).toInt().coerceAtLeast(1))
     }
     DisposableEffect(Unit) { onDispose { view.dispose(); frame?.recycle(); ed.blankDrawing = false } }
@@ -207,12 +207,34 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     var opacity by remember { mutableFloatStateOf(1f) }
     var tool by remember { mutableStateOf("Brush") }
     var selectedOnly by remember { mutableStateOf(false) }
-    var currentOnly by remember { mutableStateOf(true) }
+    var currentOnly by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf("Add") }
+    var tolerance by remember { mutableFloatStateOf(16f) }
     var transformScale by remember { mutableFloatStateOf(1f) }
     var meshPoints by remember { mutableFloatStateOf(3f) }
     var importError by remember { mutableStateOf<String?>(null) }
     var importing by remember { mutableStateOf(false) }
     val importScope = rememberCoroutineScope()
+    var exportFormat by remember { mutableStateOf(DrawingFormat.PNG) }
+    var exportName by remember { mutableStateOf("Drawing") }
+    var pendingExport by remember { mutableStateOf<Bitmap?>(null) }
+    var pendingFormat by remember { mutableStateOf(DrawingFormat.PNG) }
+    var exporting by remember { mutableStateOf(false) }
+    var exportMessage by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(Unit) { onDispose { pendingExport?.recycle(); pendingExport = null } }
+    val saveDrawing = rememberLauncherForActivityResult(DrawingSaveContract()) { uri ->
+        val image = pendingExport
+        pendingExport = null
+        if (image != null) {
+            if (uri == null) image.recycle() else importScope.launch {
+                exporting = true
+                try { withContext(Dispatchers.IO) { writeDrawing(context, uri, image, pendingFormat) }; exportMessage = "Drawing exported." }
+                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Exception) { exportMessage = e.message ?: "Export failed. Try another destination." }
+                finally { image.recycle(); exporting = false }
+            }
+        }
+    }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) importScope.launch {
             importing = true
@@ -221,7 +243,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                     val src = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
                     android.graphics.ImageDecoder.decodeBitmap(src) { decoder, info, _ ->
                         decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
-                        val ratio = minOf(1f, 1536f / maxOf(info.size.width, info.size.height))
+                        val ratio = minOf(1f, view.canvasW.toFloat() / info.size.width, view.canvasH.toFloat() / info.size.height)
                         decoder.setTargetSize((info.size.width * ratio).toInt().coerceAtLeast(1), (info.size.height * ratio).toInt().coerceAtLeast(1))
                     }
                 }
@@ -246,7 +268,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
             })
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = close) { Text("Cancel") }
-                TextButton(onClick = { view.commitShapeDraft(); ed.importDrawing(view.bitmap()) }, enabled = ed.busy == null && !importing && view.transformMode == null) { Text("Done") }
+                EditorExportButton({ exportMessage = null; menu = "Export" }, enabled = ed.busy == null && !importing && !exporting && view.transformMode == null)
             }
             DrawingGlass(view, Modifier.align(Alignment.CenterStart).padding(start = 8.dp, top = 60.dp, bottom = 110.dp).width(58.dp)) {
                 Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
@@ -277,6 +299,15 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                         DrawIcon(LucideIcons.Maximize.glyph(), "Transform selection", view.selection != null) { selectedOnly = true; menu = "Transform" }
                         DrawIcon(LucideIcons.CircleX.glyph(), "Clear selection", view.selection != null) { view.clearSelection(); revision++ }
                     }
+                    if (tool == "Lasso") Row {
+                        listOf("Add", "Subtract", "Replace").forEach { mode ->
+                            TextButton(onClick = { selectionMode = mode; view.selectionMode = mode }) { Text(if (selectionMode == mode) "• $mode" else mode) }
+                        }
+                    } else {
+                        Text("Tap touching same-color areas to add them. Tolerance ${tolerance.toInt()}", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                        Slider(tolerance, { tolerance = it; view.wandTolerance = it.toInt() }, valueRange = 0f..96f, modifier = Modifier.height(30.dp))
+                    }
+                    Text(if (view.selection == null) "Draw a selection to enable copy, move and transform." else "Selection ready", color = Color.White, style = MaterialTheme.typography.labelSmall)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(currentOnly, { currentOnly = it; view.currentLayerOnly = it })
                         Text("Current layer only", color = Color.White, style = MaterialTheme.typography.labelSmall)
@@ -289,6 +320,21 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                     TextButton(onClick = { if (view.transformMode != null) view.finishTransform(false); menu = null }) { Text("Close") }
                 }
                 when (menu) {
+                    "Export" -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                        OutlinedTextField(exportName, { exportName = it.take(80) }, label = { Text("File name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        DrawingFormat.entries.forEach { format ->
+                            TextButton(onClick = { exportFormat = format }) { Text("${if (exportFormat == format) "●" else "○"} Export to ${format.label}") }
+                        }
+                        Text("PNG and JPEG XL keep transparency. JPEG/JPG use a white background.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        exportMessage?.let { Text(it, color = Color.White) }
+                        TextButton(onClick = {
+                            view.commitShapeDraft()
+                            pendingExport?.recycle(); pendingExport = view.bitmap(); pendingFormat = exportFormat
+                            val name = exportName.trim().map { if (it in "\\/:*?\"<>|") '_' else it }.joinToString("").removeSuffix(".${exportFormat.extension}")
+                            saveDrawing.launch("$name.${exportFormat.extension}" to exportFormat.mime)
+                        }, enabled = exportName.isNotBlank() && !exporting && pendingExport == null) { Text(if (exporting) "Exporting…" else "Save file") }
+                        TextButton(onClick = { view.commitShapeDraft(); ed.importDrawing(view.bitmap()) }, enabled = !exporting && ed.busy == null) { Text("Add to timeline") }
+                    }
                     "Colors" -> WheelPicker(color) { color = it; view.inkColor = it }
                     "Shapes" -> {
                         Text("Drag circles, triangles and squares from their center. Rectangles: corner to corner.", color = Color.White, style = MaterialTheme.typography.bodySmall)

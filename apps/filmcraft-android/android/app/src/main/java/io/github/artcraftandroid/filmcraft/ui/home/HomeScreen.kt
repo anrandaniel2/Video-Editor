@@ -79,6 +79,8 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(vm: AppViewModel) {
+    var drawingSetup by remember { mutableStateOf(false) }
+    if (drawingSetup) DrawingCanvasDialog({ drawingSetup = false }) { w, h -> drawingSetup = false; vm.createDrawing(w, h) }
     Box(Modifier.fillMaxSize().background(Fc.Black).windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal)).testTag("screen_home")) {
         Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState())) {
             HomeTopBar(vm)
@@ -90,7 +92,7 @@ fun HomeScreen(vm: AppViewModel) {
             ) {
                 QuickTile(LucideIcons.Images.glyph(), "From your photo library", "from_your_photo_library") { vm.newProject(NewProject.PhotoLibrary) }
                 QuickTile(LucideIcons.FilePlus.glyph(), "New from files", "new_from_files") { vm.newProject(NewProject.Files) }
-                QuickTile(LucideIcons.Paintbrush.glyph(), "Create drawing", "create_drawing") { vm.newProject(NewProject.Drawing) }
+                QuickTile(LucideIcons.Paintbrush.glyph(), "Create drawing", "create_drawing") { drawingSetup = true }
                 QuickTile(LucideIcons.SquarePlus.glyph(), "New blank project", "new_blank_project") { vm.newProject(NewProject.Blank) }
                 QuickTile(LucideIcons.AudioLines.glyph(), "Extract audio", "extract_audio_button") { vm.newProject(NewProject.ExtractAudio) }
             }

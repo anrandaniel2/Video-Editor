@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.dp
 import io.github.artcraftandroid.filmcraft.core.ClipKind
 import io.github.artcraftandroid.filmcraft.core.Placement
 import io.github.artcraftandroid.filmcraft.ui.Fc
+import io.github.artcraftandroid.filmcraft.ui.EditorExportButton
 import io.github.artcraftandroid.filmcraft.ui.FcIconButton
 import io.github.artcraftandroid.filmcraft.ui.FcSize
 import io.github.artcraftandroid.filmcraft.ui.FcType
@@ -268,17 +269,7 @@ private fun TopBar(ed: EditorController, sideBySide: Boolean) {
             FcIconButton(LucideIcons.Redo2.glyph(), "Redo", { ed.redo() }, enabled = st?.canRedo == true, modifier = Modifier.testTag("editor_top_bar_redo_button"))
             Spacer(Modifier.width(8.dp))
         }
-        Box(
-            Modifier
-                .padding(end = 12.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(if ((ed.timeline?.duration ?: 0L) > 0L) Color.White else Color.White.copy(alpha = 0.4f))
-                .clickable(role = Role.Button) { ed.export() }
-                .padding(horizontal = 14.dp, vertical = 6.dp)
-                .testTag("editor_export_button"),
-        ) {
-            Text("Export", style = FcType.Button, color = Color.Black)
-        }
+        EditorExportButton({ ed.export() }, enabled = (ed.timeline?.duration ?: 0L) > 0L, modifier = Modifier.testTag("editor_export_button"))
     }
 }
 

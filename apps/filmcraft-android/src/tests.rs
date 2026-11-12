@@ -1490,3 +1490,13 @@ fn photo_and_video_overlays_stack_at_playhead_without_rippling_main() {
     let undone = m.timeline().unwrap();
     assert!(!undone.lanes.iter().any(|l| l.clips.iter().any(|c| overlays.contains(&c.id))));
 }
+
+#[test]
+fn drawing_jpeg_xl_has_a_real_codestream_and_validates_pixel_dimensions() {
+    let rgba = vec![127u8; 4 * 4 * 4];
+    let encoded = encode_drawing_jxl(rgba, 4, 4).unwrap();
+    assert!(encoded.starts_with(&[0xff, 0x0a]), "expected a JPEG XL codestream, not a renamed image");
+    assert!(encode_drawing_jxl(vec![0; 3], 4, 4).is_err());
+    assert!(encode_drawing_jxl(Vec::new(), 0, 4).is_err());
+    assert!(encode_drawing_jxl(Vec::new(), u32::MAX, u32::MAX).is_err());
+}

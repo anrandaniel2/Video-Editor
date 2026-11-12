@@ -458,3 +458,14 @@ fun SliderRow(label: String, value: String, content: @Composable () -> Unit) {
         content()
     }
 }
+
+/** Shared by the video editor and drawing workspace so export controls remain identical. */
+@Composable
+fun EditorExportButton(onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier) {
+    Box(modifier.padding(end = 12.dp).clip(RoundedCornerShape(15.dp))
+        .background(if (enabled) Color.White else Color.White.copy(alpha = .4f))
+        .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .padding(horizontal = 14.dp, vertical = 6.dp)) {
+        Text("Export", style = FcType.Button, color = Color.Black)
+    }
+}

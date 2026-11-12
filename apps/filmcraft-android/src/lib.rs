@@ -128,6 +128,20 @@ pub struct SessionStatus {
     pub messages: Vec<String>,
 }
 
+/// Encode an RGBA drawing as a real, lossless JPEG XL codestream, including alpha.
+#[uniffi::export]
+pub fn encode_drawing_jxl(rgba: Vec<u8>, width: u32, height: u32) -> Result<Vec<u8>, MobileError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width < 2 || height < 2 || pixels > 4_194_304 || rgba.len() as u64 != pixels * 4 {
+        return Err(MobileError::Command("Invalid drawing dimensions or pixel data.".into()));
+    }
+    let options = zune_core::options::EncoderOptions::new(width as usize, height as usize, zune_core::colorspace::ColorSpace::RGBA, zune_core::bit_depth::BitDepth::Eight);
+    let encoder = zune_jpegxl::JxlSimpleEncoder::new(&rgba, options);
+    let mut output = Vec::new();
+    encoder.encode(&mut output).map_err(|e| MobileError::Command(format!("JPEG XL: {e:?}")))?;
+    Ok(output)
+}
+
 /// Ticks per second, for the UI's clock and labels.
 #[uniffi::export]
 pub fn ticks_per_second() -> i64 {

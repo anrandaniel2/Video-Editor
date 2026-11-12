@@ -144,6 +144,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
 
     // ---- projects ----
 
+    fun createDrawing(width: Int, height: Int) {
+        if (width !in 64..4096 || height !in 64..4096 || width.toLong() * height > 4_194_304) { tell("Choose a canvas up to 4 megapixels."); return }
+        val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
+        viewModelScope.launch {
+            val p = withContext(Dispatchers.IO) { projects.create("Drawing", width, height) }
+            open(e, p, fresh = true)
+            editor?.let { it.blankDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
+        }
+    }
+
     /** Start a project the way a Home tile (or the + button) says. */
     fun newProject(how: NewProject) {
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
