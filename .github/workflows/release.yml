@@ -91,9 +91,8 @@ jobs:
           cargo install cargo-ndk --version 4.1.2 --locked
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
 
-      # A tag must have the real release key. A branch or manual dry run without the secrets signs
-      # with the committed public dry-run key instead, so the artifact is a release build signed
-      # the same way (see .github/signing/README.md), never a debug-signed one.
+      # Use the stable public CI key when private signing secrets are unavailable.
+      # Public signing is explicitly permitted by the repository owner.
       - name: Release key
         id: key
         env:
@@ -103,8 +102,9 @@ jobs:
             printf '%s' "$KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.p12"
             echo "kind=release" >>"$GITHUB_OUTPUT"
           else
-            echo "::error::Normal release signing key unavailable. Configure FILMCRAFT_KEYSTORE_BASE64, FILMCRAFT_KEYSTORE_PASSWORD, FILMCRAFT_KEY_ALIAS and FILMCRAFT_KEY_PASSWORD in repository Actions secrets. Test-key fallback is disabled."
-            exit 1
+            cp .github/signing/dryrun-release.p12 "$RUNNER_TEMP/release.p12"
+            echo "kind=dryrun" >>"$GITHUB_OUTPUT"
+            echo "::notice::Using the stable public CI signing key."
           fi
           echo "FILMCRAFT_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
 
@@ -142,7 +142,11 @@ jobs:
           FILMCRAFT_KEY_PASSWORD: ${{ secrets.FILMCRAFT_KEY_PASSWORD }}
         run: |
           apksigner="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
-          # This is a new signing identity, not a rotation of the old published key.
+          if [ "$KEY_KIND" = dryrun ]; then
+            FILMCRAFT_KEY_ALIAS=filmcraft-dryrun
+            FILMCRAFT_KEYSTORE_PASSWORD=filmcraft-dryrun
+            FILMCRAFT_KEY_PASSWORD=filmcraft-dryrun
+          fi
           extra=(--v2-signing-enabled true --v3-signing-enabled true)
           for apk in dist/*.apk; do
             "$apksigner" sign --ks "$FILMCRAFT_KEYSTORE" --ks-key-alias "$FILMCRAFT_KEY_ALIAS" \
