@@ -1,6 +1,7 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.compose.foundation.Image
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -447,7 +448,7 @@ private fun AspectPanel(ed: EditorController, close: () -> Unit, modifier: Modif
                         Modifier
                             .size(w, h)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(Fc.Raised)
+                            .editorGlass(10.dp, layer = 3f)
                             .then(if (selected) Modifier.border(2.dp, androidx.compose.ui.graphics.Color.White, RoundedCornerShape(10.dp)) else Modifier),
                     )
                     Spacer(Modifier.height(8.dp))

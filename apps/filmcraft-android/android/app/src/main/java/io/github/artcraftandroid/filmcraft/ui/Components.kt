@@ -176,7 +176,7 @@ fun ToolPanel(
             .fillMaxWidth()
             .padding(horizontal = FcSize.PanelInset)
             .clip(RoundedCornerShape(topStart = FcSize.PanelCorner, topEnd = FcSize.PanelCorner))
-            .editorGlass(FcSize.PanelCorner)
+            .editorGlass(FcSize.PanelCorner, layer = 2f)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier),
     ) {
         // the handle and the title row drag the panel down to close it

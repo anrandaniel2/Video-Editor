@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -176,7 +177,7 @@ private fun KeyframeGraph(lane: AnimationLane, selected: Long?, start: Long, dur
     val span = duration.coerceAtLeast(1).toDouble()
     val lineColor = Fc.Detail
     val accent = Fc.Icon
-    Canvas(Modifier.fillMaxWidth().height(160.dp).padding(horizontal = 16.dp, vertical = 12.dp).background(Fc.Raised)
+    Canvas(Modifier.fillMaxWidth().height(160.dp).padding(horizontal = 16.dp, vertical = 12.dp).editorGlass(12.dp, layer = 3f)
         .testTag("keyframes_graph")
         .pointerInput(lane.id, keys.map { it.time to it.timeline }, start, duration) {
             detectTapGestures { point ->

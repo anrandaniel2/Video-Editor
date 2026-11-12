@@ -294,7 +294,8 @@ private fun FontTab(ed: EditorController, st: TextStyle, apply: (TextStyle) -> U
                         .fillMaxWidth()
                         .height(52.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (selected) Fc.PillButton else Fc.Raised)
+                        .editorGlass(10.dp, layer = 3f)
+                        .then(if (selected) Modifier.background(Color.White.copy(alpha = .12f)) else Modifier)
                         .clickable(role = Role.RadioButton) { apply(st.copy(font = f, fontStyle = "Regular")) }
                         .padding(horizontal = 16.dp),
                     contentAlignment = Alignment.CenterStart,
@@ -454,7 +455,8 @@ private fun LayoutTab(st: TextStyle, apply: (TextStyle, Boolean) -> Unit) {
                         .weight(1f)
                         .height(48.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (selected) Fc.PillButton else Fc.Raised)
+                        .editorGlass(10.dp, layer = 3f)
+                        .then(if (selected) Modifier.background(Color.White.copy(alpha = .12f)) else Modifier)
                         // the chosen one gets a white ring
                         .then(if (selected) Modifier.border(2.dp, Color.White, RoundedCornerShape(12.dp)) else Modifier)
                         .clickable(role = Role.RadioButton) { apply(st.copy(align = align), false) }

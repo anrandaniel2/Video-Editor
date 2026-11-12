@@ -300,7 +300,7 @@ internal fun PickerRow(label: String, value: String, options: List<String>, tag:
         Spacer(Modifier.height(4.dp))
         Box {
             Row(
-                Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp)).background(Fc.Raised)
+                Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp)).editorGlass(10.dp, layer = 3f)
                     .clickable(onClick = { showList = true })
                     .padding(horizontal = 12.dp)
                     .testTag(tag),
@@ -319,7 +319,10 @@ internal fun PickerRow(label: String, value: String, options: List<String>, tag:
             DropdownMenu(
                 expanded = showList,
                 onDismissRequest = { showList = false; query = "" },
-                modifier = Modifier.heightIn(max = 360.dp).testTag("${tag}_menu"),
+                modifier = Modifier.heightIn(max = 360.dp).editorGlass(12.dp, layer = 4f).testTag("${tag}_menu"),
+                containerColor = Color.Transparent,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
             ) {
                 if (options.size > 10) {
                     OutlinedTextField(
