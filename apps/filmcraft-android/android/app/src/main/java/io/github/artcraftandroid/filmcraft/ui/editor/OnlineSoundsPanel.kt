@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -99,6 +100,7 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
     val scope = rememberCoroutineScope()
     var pageJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     fun stopPreview() { player.reset(); playing = null; preparing = false }
     DisposableEffect(player) { onDispose { player.release() } }
     LaunchedEffect(query, retry) {
@@ -141,7 +143,7 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
                                                 player.setOnPreparedListener { preparing = false; it.start() }
                                                 player.setOnCompletionListener { playing = null; preparing = false }
                                                 player.setOnErrorListener { _, what, extra -> previewError = "Audio preview failed (player $what/$extra). This may be a network or file-format error, not a device streaming limitation."; stopPreview(); true }
-                                                player.setDataSource(java.net.URI(sound.url).toASCIIString(), onlineMediaHeaders); player.prepareAsync()
+                                                player.setDataSource(context, android.net.Uri.parse(java.net.URI(sound.url).toASCIIString()), onlineMediaHeaders); player.prepareAsync()
                                             } catch (_: Exception) { previewError = "Could not play this preview."; stopPreview() }
                                         }
                                     }) { Text(if (playing == sound.id) { if (preparing) "Cancel preview" else "Stop" } else "Preview") }

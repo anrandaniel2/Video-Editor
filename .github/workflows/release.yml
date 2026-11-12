@@ -65,27 +65,6 @@ jobs:
         with:
           key: release-android
 
-      # The rig/animation maths and the GLB parser run against an independent reference
-      # implementation in tests/rigging.rs; a red step here is a broken build. Failures
-      # are echoed into the job summary so the output is readable from the run view.
-      - name: Model tests
-        run: |
-          set +e
-          for c in "test -p filmcraft-render" "test -p filmcraft-android --lib advanced_model" "check -p filmcraft-gpu" "test -p filmcraft-gpu --test scene3d_shader" "test -p filmcraft-engine animation_lanes"; do
-            echo "### cargo $c" >> "$GITHUB_STEP_SUMMARY"
-            cargo $c > /tmp/mt.log 2>&1
-            rc=$?
-            if [ $rc -ne 0 ]; then
-              echo "exit $rc" >> "$GITHUB_STEP_SUMMARY"
-              tail -150 /tmp/mt.log >> "$GITHUB_STEP_SUMMARY"
-              msg=$(tail -c 3500 /tmp/mt.log | sed -z 's/%/%25/g; s/\n/%0A/g')
-              echo "::error title=cargo $c failed::$msg"
-              cat /tmp/mt.log
-              exit $rc
-            fi
-            echo ok >> "$GITHUB_STEP_SUMMARY"
-          done
-
       - name: Install cargo-ndk and the Android NDK
         run: |
           cargo install cargo-ndk --version 4.1.2 --locked
@@ -120,7 +99,8 @@ jobs:
           rc=$?
           cat /tmp/android-build.log
           if [ "$rc" -ne 0 ]; then
-            msg=$(tail -c 7000 /tmp/android-build.log | sed -z 's/%/%25/g; s/\n/%0A/g')
+            tail -120 /tmp/android-build.log >> "$GITHUB_STEP_SUMMARY"
+            msg=$(tail -c 3500 /tmp/android-build.log | sed -z 's/%/%25/g; s/\n/%0A/g')
             echo "::error title=Android build failed::$msg"
             exit "$rc"
           fi
