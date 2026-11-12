@@ -26,6 +26,7 @@ use serde_json::{Value, json};
 
 pub mod advanced;
 pub mod edits;
+pub mod drawing;
 pub mod export;
 mod gpu_export;
 pub mod masks;

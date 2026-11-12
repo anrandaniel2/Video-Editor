@@ -3,6 +3,8 @@ package io.github.artcraftandroid.filmcraft.ui.editor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import io.github.artcraftandroid.filmcraft.core.DrawingInput
+import io.github.artcraftandroid.filmcraft.core.drawingStrokeSamples
 import android.content.Context
 import android.graphics.*
 import android.view.MotionEvent
@@ -22,6 +24,8 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     var inkColor = Color.BLACK
     var brushSize = 12f
     var usePressure = true
+    var stabilization = 0f
+    var pressureCurve = 1f
     private data class PressureSegment(val path: Path, val pressure: Float)
     private val pressureSegments = mutableListOf<PressureSegment>()
     private var pressureStroke = false
@@ -346,13 +350,20 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                 val pen = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
                 pressureStroke = usePressure && pen && (tool == "Brush" || tool == "Eraser")
                 eraserStroke = tool == "Eraser" || e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
-                pressureSegments.clear(); lastPressure = if (pressureStroke) penPressure(e) else 1f; midX = x; midY = y
+                pressureSegments.clear()
+                lastPressure = if (pressureStroke) drawingStrokeSamples(x, y, listOf(DrawingInput(x, y, penPressure(e))), 0f, pressureCurve).firstOrNull()?.pressure ?: 1f else 1f
+                midX = x; midY = y
                 if (pressureStroke) pressureSegments.add(PressureSegment(Path().apply { moveTo(x, y); lineTo(x + .01f, y) }, lastPressure))
                 stroke = Path().apply { moveTo(x, y); lineTo(x + .01f, y) }
             }
             MotionEvent.ACTION_MOVE -> if (stroke != null) {
                 for (i in 0..e.historySize) {
-                    val q = if (i == e.historySize) p else point(e.getHistoricalX(i), e.getHistoricalY(i))
+                    val raw = if (i == e.historySize) p else point(e.getHistoricalX(i), e.getHistoricalY(i))
+                    val rawPressure = if (pressureStroke) penPressure(e, if (i == e.historySize) null else i) else 1f
+                    val sample = if (tool == "Brush" || tool == "Eraser") drawingStrokeSamples(
+                        lastX, lastY, listOf(DrawingInput(raw[0], raw[1], rawPressure)), stabilization, pressureCurve,
+                    ).firstOrNull() else null
+                    val q = if (sample == null) raw else floatArrayOf(sample.x, sample.y)
                     if (tool == "Smudge" || tool == "Blur") {
                         val distance = hypot(q[0] - lastX, q[1] - lastY)
                         val count = ceil(distance / (brushSize / 4).coerceAtLeast(1f)).toInt().coerceIn(1, 256)
@@ -363,7 +374,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                         }
                     }
                     if (pressureStroke) {
-                        val pressure = penPressure(e, if (i == e.historySize) null else i)
+                        val pressure = sample?.pressure ?: rawPressure
                         val mx = (lastX + q[0]) / 2; val my = (lastY + q[1]) / 2
                         pressureSegments.add(PressureSegment(Path().apply { moveTo(midX, midY); quadTo(lastX, lastY, mx, my) }, (lastPressure + pressure) / 2))
                         midX = mx; midY = my; lastPressure = pressure

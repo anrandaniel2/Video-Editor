@@ -202,6 +202,14 @@ private fun WheelPicker(color: Int, change: (Int) -> Unit) {
 
 @Composable
 internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
+    MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
+        primary = Color.White, onPrimary = Color.Black, secondary = Color.White,
+        onSurface = Color.White, onSurfaceVariant = Color.White.copy(alpha = .75f),
+    )) { DrawingPanelContent(ed, close) }
+}
+
+@Composable
+private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val frame = remember { ed.stop(); (if (ed.blankDrawing) null else ed.picture)?.asAndroidBitmap()?.copy(Bitmap.Config.ARGB_8888, false) }
     val view = remember {
@@ -267,6 +275,8 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     var brushQuery by remember { mutableStateOf("") }
     var brushFamily by remember { mutableStateOf("All") }
     var penPressure by remember { mutableStateOf(true) }
+    var stabilizer by remember { mutableFloatStateOf(0f) }
+    var pressureResponse by remember { mutableFloatStateOf(1f) }
     var shape by remember { mutableStateOf("Circle") }
     var revision by remember { mutableIntStateOf(0) }
     val entrance = remember { Animatable(0f) }
@@ -285,7 +295,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                 Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
                     listOf("Brush" to LucideIcons.Paintbrush.glyph(), "Eraser" to LucideIcons.DrawEraser.glyph(), "Smudge" to LucideIcons.DrawSmudge.glyph(), "Blur" to LucideIcons.DrawBlur.glyph(), "Lasso" to LucideIcons.DrawLasso.glyph(), "Magic wand" to LucideIcons.WandSparkles.glyph(), "Shapes" to LucideIcons.Shapes.glyph()).forEach { (name, icon) ->
                         Box(Modifier.background(if (tool == name) Color.White.copy(alpha = .18f) else Color.Transparent, RoundedCornerShape(10.dp))) {
-                            DrawIcon(icon, name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes"; if (name == "Shapes") menu = "Shapes" }
+                            DrawIcon(icon, if (name == "Brush") "Draw" else name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes"; if (name == "Shapes") menu = "Shapes" }
                         }
                     }
                     DrawIcon(LucideIcons.Maximize.glyph(), "Transform current layer", view.transformMode == null) { selectedOnly = false; menu = "Transform" }
@@ -327,7 +337,10 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
             }
             if (menu != null) DrawingGlass(view, Modifier.align(Alignment.BottomCenter).padding(bottom = 108.dp, start = 16.dp, end = 16.dp).widthIn(max = 380.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(menu!!, color = Color.White)
+                    Column(Modifier.weight(1f).padding(start = 8.dp, top = 8.dp)) {
+                        Text(if (menu == "Brushes") "Draw" else menu!!, color = Color.White, style = MaterialTheme.typography.titleMedium)
+                        if (menu == "Brushes") Text(brush, color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.labelSmall)
+                    }
                     FcIconButton(LucideIcons.X.glyph(), "Close drawing menu", { if (view.transformMode != null) view.finishTransform(false); menu = null })
                 }
                 when (menu) {
@@ -353,10 +366,19 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                             view.shapes.names.forEach { name -> TextButton(onClick = { shape = name; tool = "Shapes"; view.tool = tool; view.changeShape(name); menu = null }) { Text(if (shape == name) "• $name" else name) } }
                         }
                     }
-                    "Brushes" -> {
+                    "Brushes" -> Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(penPressure, { penPressure = it; view.usePressure = it })
                             Text("Pen pressure · size & opacity", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                        }
+                        Text("Stroke control", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Stabilizer", color = Color.White, modifier = Modifier.width(100.dp), style = MaterialTheme.typography.labelSmall)
+                            Slider(stabilizer, { stabilizer = it; view.stabilization = it }, valueRange = 0f..100f, modifier = Modifier.weight(1f))
+                        }
+                        if (penPressure) Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Pressure curve", color = Color.White, modifier = Modifier.width(100.dp), style = MaterialTheme.typography.labelSmall)
+                            Slider(pressureResponse, { pressureResponse = it; view.pressureCurve = it }, valueRange = .25f..4f, modifier = Modifier.weight(1f))
                         }
                         OutlinedTextField(brushQuery, { brushQuery = it }, label = { Text("Search 150 brushes") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
@@ -365,7 +387,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
                         val shown = DrawingBrushes.all.filter { (brushFamily == "All" || it.family == brushFamily) && it.name.contains(brushQuery, true) }
                         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
                             items(shown, key = { it.name }) { preset ->
-                                Row(Modifier.fillMaxWidth().clickable { brush = preset.name; view.brush = preset.name; tool = "Brush"; view.tool = tool; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (brush == preset.name) Color.White.copy(alpha = .12f) else Color.Transparent).clickable { brush = preset.name; view.brush = preset.name; tool = "Brush"; view.tool = tool; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(if (brush == preset.name) "• ${preset.name}" else preset.name, color = Color.White, modifier = Modifier.width(130.dp), style = MaterialTheme.typography.labelSmall)
                                     ComposeCanvas(Modifier.weight(1f).height(36.dp)) {
                                         drawIntoCanvas { canvas ->
