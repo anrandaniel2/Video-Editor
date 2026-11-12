@@ -333,7 +333,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                 .size(boxW, boxH)
                 .border(1.dp, Fc.Raised)
                 .pointerInput(sel?.id, movable, object3d, ed.panel, t?.width, t?.height) {
-                    if (masking || advanced || ed.panel is Panel.TextInput) return@pointerInput
+                    if (masking || advanced || ed.panel == Panel.Lights || ed.panel is Panel.TextInput) return@pointerInput
                     val frameW = t?.width?.toFloat() ?: return@pointerInput
                     val k = size.width / frameW
                     awaitEachGesture {
@@ -432,6 +432,9 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
             }
             if (object3d && !masking && !advanced && ed.panel !is Panel.TextInput && t != null) {
                 ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
+            }
+            if (ed.panel == Panel.Lights && t != null) {
+                LightGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat())
             }
             val maskState = ed.maskState
             if (masking && maskState != null && t != null) {

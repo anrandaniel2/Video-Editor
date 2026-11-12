@@ -1174,6 +1174,8 @@ class EditorController(
 
     // ---- scene lights ----
 
+    var selectedLightId by mutableStateOf(0L)
+
     var sceneLights by mutableStateOf(SceneLightingState())
         private set
 
@@ -1188,10 +1190,12 @@ class EditorController(
         stop()
         scope.launch {
             try {
-                val light = SceneLight(name = "Light ${sceneLights.lights.size + 1}", kind = kind)
+                val light = SceneLight(name = "Light ${sceneLights.lights.size + 1}", kind = kind,
+                    position = listOf((timeline?.width?.toDouble() ?: 1080.0) / 2, (timeline?.height?.toDouble() ?: 1920.0) / 2, 1500.0))
                 val out = engine.command { execute("lights.set", light.toJson()) }
                 sceneLights = SceneLightingState.from(out)
-                onAdded(JSONObject(out).optLong("id"))
+                selectedLightId = JSONObject(out).optLong("id")
+                onAdded(selectedLightId)
                 refreshSoon()
             } catch (e: Exception) { host.tell(e.userMessage) }
         }

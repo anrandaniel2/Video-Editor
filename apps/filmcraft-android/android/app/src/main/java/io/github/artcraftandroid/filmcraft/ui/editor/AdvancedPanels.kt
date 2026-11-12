@@ -625,14 +625,13 @@ fun AnimationFrameBar(ed: EditorController, modifier: Modifier = Modifier) {
 @Composable
 fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
     val lighting = ed.sceneLights
-    var selected by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) { ed.loadLights() }
-    val light = lighting.lights.firstOrNull { it.id == selected } ?: lighting.lights.firstOrNull()
+    val light = lighting.lights.firstOrNull { it.id == ed.selectedLightId } ?: lighting.lights.firstOrNull()
     ToolPanel(
         "Lights", close, modifier, tag = "lights_panel",
         actions = {
             if (light != null) {
-                PanelAction(LucideIcons.Trash2.glyph(), "Delete light", { ed.removeLight(light.id); selected = 0L }, tag = "lights_delete")
+                PanelAction(LucideIcons.Trash2.glyph(), "Delete light", { ed.removeLight(light.id); ed.selectedLightId = 0L }, tag = "lights_delete")
             }
         },
     ) {
@@ -655,9 +654,9 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            SelectChip("+ Directional", false, { ed.addLight("directional") { selected = it } }, tag = "lights_add_directional")
-            SelectChip("+ Point", false, { ed.addLight("point") { selected = it } }, tag = "lights_add_point")
-            SelectChip("+ Spot", false, { ed.addLight("spot") { selected = it } }, tag = "lights_add_spot")
+            SelectChip("+ Directional", false, { ed.addLight("directional") { ed.selectedLightId = it } }, tag = "lights_add_directional")
+            SelectChip("+ Point", false, { ed.addLight("point") { ed.selectedLightId = it } }, tag = "lights_add_point")
+            SelectChip("+ Spot", false, { ed.addLight("spot") { ed.selectedLightId = it } }, tag = "lights_add_spot")
         }
         if (lighting.lights.isEmpty()) {
             Text(
@@ -673,7 +672,7 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
                     .padding(horizontal = FcSize.PanelPadding, vertical = 2.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (l.id == light?.id) Fc.Accent.copy(alpha = 0.18f) else Color.Transparent)
-                    .clickable { selected = l.id }
+                    .clickable { ed.selectedLightId = l.id }
                     .testTag("lights_row_${l.id}"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

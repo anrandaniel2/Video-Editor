@@ -75,8 +75,8 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
     val clip = ed.selectedClip
     val close = { ed.panel = null }
     when (panel) {
-        Panel.OnlineVideos -> OnlineVideosPanel(ed, close)
-        Panel.OnlineSounds -> OnlineSoundsPanel(ed, close)
+        Panel.OnlineVideos -> MixkitPanel(ed, video = true, close = close)
+        Panel.OnlineSounds -> MixkitPanel(ed, video = false, close = close)
         Panel.Drawing -> DrawingPanel(ed, close)
         Panel.Speed -> clip?.let { SpeedPanel(ed, it, close, modifier) }
         Panel.Volume -> clip?.let { VolumePanel(ed, it, close, modifier) }

@@ -69,6 +69,7 @@ internal fun downloadSound(address: String, dir: File, video: Boolean = false): 
             connection.instanceFollowRedirects = false
             connection.setRequestProperty("User-Agent", ONLINE_MEDIA_AGENT)
             connection.setRequestProperty("Accept", "*/*")
+            if (url.host == "mixkit.co" || url.host.endsWith(".mixkit.co")) connection.setRequestProperty("Referer", "https://mixkit.co/")
             try {
                 val code = connection.responseCode
                 if (code in 300..399) {
