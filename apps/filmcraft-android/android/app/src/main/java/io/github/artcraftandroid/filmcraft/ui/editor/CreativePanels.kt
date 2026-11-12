@@ -115,7 +115,8 @@ internal fun ColorPicker(label: String, color: Int, change: (Int) -> Unit) {
             .semantics { contentDescription = label }
             .clickable { expanded = true })
     }
-    if (expanded) Dialog(onDismissRequest = { expanded = false }) {
+    if (expanded) Dialog(onDismissRequest = { expanded = false }, properties = DialogProperties(decorFitsSystemWindows = false)) {
+        ImmersiveDialog()
         Column(Modifier.widthIn(max = 340.dp).editorGlass(24.dp, layer = 2f).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, color = Color.White)
             Spacer(Modifier.height(12.dp))
@@ -148,9 +149,8 @@ private class DrawingBackdrop(context: android.content.Context, private val draw
 
 @Composable
 private fun DrawingGlass(view: DrawingView, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Box(modifier.clip(RoundedCornerShape(20.dp)).border(1.dp, Color.White.copy(alpha = .22f), RoundedCornerShape(20.dp))) {
+    Box(modifier.clip(RoundedCornerShape(20.dp))) {
         AndroidView(factory = { DrawingBackdrop(it, view) }, modifier = Modifier.matchParentSize().blur(20.dp))
-        Box(Modifier.matchParentSize().background(Color(0x99232835)))
         Column(Modifier.padding(horizontal = 8.dp, vertical = 2.dp), content = content)
     }
 }
@@ -261,7 +261,8 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     var revision by remember { mutableIntStateOf(0) }
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(420, easing = FastOutSlowInEasing)) }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        ImmersiveDialog()
         Box(Modifier.fillMaxSize().background(Color(0xFF0F1118)).systemBarsPadding()) {
             AndroidView(factory = { view }, modifier = Modifier.fillMaxSize().padding(top = 56.dp).graphicsLayer {
                 scaleX = .65f + .35f * entrance.value; scaleY = scaleX; alpha = entrance.value

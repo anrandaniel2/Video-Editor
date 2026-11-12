@@ -573,7 +573,6 @@ fun AnimationFrameBar(ed: EditorController, modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .editorGlass(18.dp, layer = 2f)
-            .border(1.dp, Fc.Divider, RoundedCornerShape(18.dp))
             .padding(horizontal = 8.dp, vertical = 8.dp)
             .testTag("frame_bar"),
         verticalAlignment = Alignment.CenterVertically,

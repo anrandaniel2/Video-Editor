@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog
 import android.media.MediaPlayer
 import android.text.Html
 import androidx.compose.foundation.layout.*
@@ -104,7 +105,8 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
         catch (e: Exception) { error = e.message ?: "Could not load sounds. Check your connection." }
         finally { loading = false }
     }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        ImmersiveDialog()
         Surface(Modifier.fillMaxSize().systemBarsPadding()) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

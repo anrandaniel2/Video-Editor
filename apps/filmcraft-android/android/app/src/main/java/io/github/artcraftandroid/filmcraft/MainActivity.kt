@@ -17,6 +17,7 @@ import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
+import io.github.artcraftandroid.filmcraft.ui.immersiveFullscreen
 import io.github.artcraftandroid.filmcraft.ui.AppRoot
 import io.github.artcraftandroid.filmcraft.ui.AppViewModel
 import io.github.artcraftandroid.filmcraft.ui.FilmcraftTheme
@@ -45,6 +46,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge(SystemBarStyle.dark(Color.TRANSPARENT), SystemBarStyle.dark(Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
         window.isNavigationBarContrastEnforced = false
+        immersiveFullscreen(window)
         setContent { FilmcraftTheme { AppRoot(vm) } }
         lifecycleScope.launch { for (r in vm.pickRequests) launchPicker(r) }
         lifecycleScope.launch { for (r in vm.micRequests) askMicrophone(r) }
@@ -55,6 +57,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (savedInstanceState == null) handle(intent)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) immersiveFullscreen(window)
     }
 
     override fun onNewIntent(intent: Intent) {

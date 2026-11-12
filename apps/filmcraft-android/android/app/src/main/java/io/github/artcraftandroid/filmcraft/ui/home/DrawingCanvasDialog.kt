@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import io.github.artcraftandroid.filmcraft.ui.*
 
 @Composable
@@ -33,7 +34,8 @@ internal fun DrawingCanvasDialog(close: () -> Unit, create: (Int, Int) -> Unit) 
     var height by remember { mutableStateOf("1080") }
     val w = width.toIntOrNull() ?: 0; val h = height.toIntOrNull() ?: 0
     val valid = w in 64..4096 && h in 64..4096 && w.toLong() * h <= 4_194_304
-    Dialog(onDismissRequest = close) {
+    Dialog(onDismissRequest = close, properties = DialogProperties(decorFitsSystemWindows = false)) {
+        ImmersiveDialog()
         CompositionLocalProvider(LocalEditorGlass provides glass) {
             Column(Modifier.fillMaxWidth().editorGlass(24.dp).padding(20.dp).verticalScroll(rememberScrollState())) {
                 Text("Create drawing", style = MaterialTheme.typography.titleLarge)

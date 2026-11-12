@@ -385,7 +385,8 @@ fun FcDialog(
     confirmEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        ImmersiveDialog()
         Column(
             Modifier
                 .padding(horizontal = 32.dp)

@@ -17,13 +17,11 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -81,21 +79,13 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f): Modifier {
     val state = LocalEditorBackdrop.current
     if (state != null) {
         val style = remember {
-            HazeStyle(backgroundColor = Color(0xFF0F1118), tint = HazeTint(Color(0x99232835)),
-                blurRadius = 20.dp, noiseFactor = .025f, fallbackTint = HazeTint(Color(0xDD232835)))
+            HazeStyle(backgroundColor = Color.Transparent, tints = emptyList(), blurRadius = 20.dp,
+                noiseFactor = 0f, fallbackTint = HazeTint(Color.Transparent))
         }
-        // Capture this panel for higher layers, but only sample sources below this one.
-        // This prevents its own labels and glass from feeding back into its backdrop.
+        // Blur only the sources below this surface; never blur its own controls.
         return clip(RoundedCornerShape(corner))
             .hazeSource(state, zIndex = layer)
             .hazeEffect(state, style = style)
-            .drawWithCache {
-                val sheen = Brush.verticalGradient(listOf(Color.White.copy(alpha = .08f), Color.Transparent))
-                onDrawBehind {
-                    drawRect(sheen)
-                    drawRoundRect(Color.White.copy(alpha = .18f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner.toPx()), style = Stroke(1.dp.toPx()))
-                }
-            }
     }
     val backdrop = LocalEditorGlass.current
     var origin by remember { mutableStateOf(Offset.Zero) }
@@ -104,9 +94,7 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f): Modifier {
         origin = coordinates.positionInRoot()
         rootSize = coordinates.findRootCoordinates().size
     }.clip(RoundedCornerShape(corner)).drawWithCache {
-        val sheen = Brush.verticalGradient(listOf(Color.White.copy(alpha = .12f), Color.Transparent, Color.Black.copy(alpha = .08f)))
         onDrawBehind {
-            drawRect(Color(0xFF171C28))
             backdrop?.let {
                 // Every pane samples the same screen-aligned backdrop, never a repeated thumbnail.
                 val rw = rootSize.width.coerceAtLeast(size.width.toInt())
@@ -117,9 +105,6 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f): Modifier {
                 drawImage(it, dstOffset = IntOffset(((rw - w) / 2f - origin.x).toInt(), ((rh - h) / 2f - origin.y).toInt()),
                     dstSize = IntSize(w, h), filterQuality = FilterQuality.Medium)
             }
-            drawRect(Color(0x99232835))
-            drawRect(sheen)
-            drawRoundRect(Color.White.copy(alpha = .18f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(corner.toPx()), style = Stroke(1.dp.toPx()))
         }
     }
 }
