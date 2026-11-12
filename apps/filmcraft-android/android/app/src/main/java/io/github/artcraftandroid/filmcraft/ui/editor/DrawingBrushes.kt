@@ -9,6 +9,11 @@ internal object DrawingBrushes {
     private val styles = listOf("Fine", "Soft", "Bold", "Wide", "Dense", "Loose", "Ribbon", "Delicate", "Expressive", "Heavy")
     val all = families.flatMap { family -> styles.mapIndexed { i, style -> DrawingBrush("$family · $style", family, i) } }
     private val byName = all.associateBy { it.name }
+    fun footprint(name: String, size: Float): Float {
+        val b = byName[name] ?: DrawingBrush(name, if (name == "Pen") "Ink" else name, 0)
+        val width = size.coerceAtLeast(1f) * (.5f + b.variant * .12f)
+        return if (b.family == "Ink" || b.family == "Pen") width * .45f else width
+    }
     fun draw(canvas: Canvas, path: Path, name: String, color: Int, size: Float, opacity: Float) {
         val b = byName[name] ?: DrawingBrush(name, when (name) { "Pen" -> "Ink"; else -> name }, 0)
         val v = b.variant

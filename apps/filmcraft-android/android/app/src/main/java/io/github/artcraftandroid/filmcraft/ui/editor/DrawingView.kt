@@ -3,6 +3,8 @@ package io.github.artcraftandroid.filmcraft.ui.editor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import io.github.artcraftandroid.filmcraft.core.DrawingStrokePoint
+import io.github.artcraftandroid.filmcraft.core.drawingStrokeCoverage
 import io.github.artcraftandroid.filmcraft.core.DrawingInput
 import io.github.artcraftandroid.filmcraft.core.drawingStrokeSamples
 import android.content.Context
@@ -82,6 +84,37 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     private var strokeBefore: Bitmap? = null
     private var lastX = 0f
     private var lastY = 0f
+    private var penCursor: PointF? = null
+    private var penEraser = false
+    var showPenCursor = true
+    private fun updatePenCursor(e: MotionEvent) {
+        val pen = e.pointerCount == 1 && (e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER)
+        penEraser = pen && e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+        penCursor = if (pen && showPenCursor && tool in listOf("Brush", "Eraser", "Smudge", "Blur")) PointF(e.x, e.y) else null
+    }
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> updatePenCursor(event)
+            MotionEvent.ACTION_HOVER_EXIT -> penCursor = null
+        }
+        invalidate()
+        return if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) true else super.onHoverEvent(event)
+    }
+    private fun drawPenCursor(c: Canvas) {
+        val cursor = penCursor ?: return
+        if (!showPenCursor || transformMode != null || tool !in listOf("Brush", "Eraser", "Smudge", "Blur")) return
+        val position = point(cursor.x, cursor.y)
+        if (position[0] !in 0f..canvasW.toFloat() || position[1] !in 0f..canvasH.toFloat()) return
+        val width = if (tool == "Eraser" || penEraser) brushSize else DrawingBrushes.footprint(brush, brushSize)
+        val radius = (width * fit() * zoom / 2).coerceAtLeast(3f)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        p.color = Color.BLACK; p.strokeWidth = 3f * resources.displayMetrics.density
+        c.drawCircle(cursor.x, cursor.y, radius, p)
+        p.color = Color.WHITE; p.strokeWidth = resources.displayMetrics.density
+        c.drawCircle(cursor.x, cursor.y, radius, p)
+        p.style = Paint.Style.FILL
+        c.drawCircle(cursor.x, cursor.y, 1.5f * resources.displayMetrics.density, p)
+    }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     init { setLayerType(LAYER_TYPE_SOFTWARE, null) }
     private fun blank() = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888)
@@ -257,12 +290,44 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         }
         c.restore()
     }
-    override fun onDraw(canvas: Canvas) { drawScene(canvas); backdropObservers.forEach { it.postInvalidateOnAnimation() } }
+    override fun onDraw(canvas: Canvas) { drawScene(canvas); drawPenCursor(canvas); backdropObservers.forEach { it.postInvalidateOnAnimation() } }
+    /** Android flattens its UI path; coverage generation and multisample resolve are Rust. */
+    private fun drawNativeCoverage(c: Canvas, path: Path, width: Float, strength: Float): Boolean {
+        val measure = PathMeasure(path, false)
+        val points = ArrayList<DrawingStrokePoint>()
+        val position = FloatArray(2)
+        val step = (width / 3f).coerceAtLeast(.5f)
+        do {
+            if (measure.length / step > 4096) return false
+            var distance = 0f
+            while (distance < measure.length) {
+                measure.getPosTan(distance, position, null)
+                points.add(DrawingStrokePoint(position[0], position[1], width / 2f)); distance += step
+            }
+            measure.getPosTan(measure.length, position, null)
+            points.add(DrawingStrokePoint(position[0], position[1], width / 2f))
+        } while (measure.nextContour())
+        val tile = drawingStrokeCoverage(points, canvasW.toUInt(), canvasH.toUInt()) ?: return false
+        val mask = Bitmap.createBitmap(tile.width.toInt(), tile.height.toInt(), Bitmap.Config.ALPHA_8)
+        try {
+            val data = java.nio.ByteBuffer.allocate(mask.rowBytes * mask.height)
+            for (row in 0 until mask.height) { data.position(row * mask.rowBytes); data.put(tile.alpha, row * mask.width, mask.width) }
+            data.rewind(); mask.copyPixelsFromBuffer(data)
+            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = inkColor; alpha = (strength * Color.alpha(inkColor)).toInt().coerceIn(0, 255)
+                if (eraserStroke) { alpha = (strength * 255).toInt().coerceIn(0, 255); xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
+            }
+            c.drawBitmap(mask, tile.left.toFloat(), tile.top.toFloat(), p)
+        } finally { mask.recycle() }
+        return true
+    }
+
     private fun drawStroke(c: Canvas, path: Path) {
         c.save(); selection?.let { c.clipPath(it) }
         fun draw(path: Path, pressure: Float) {
             val width = brushSize * if (pressureStroke) .1f + .9f * sqrt(pressure) else 1f
             val strength = opacity * if (pressureStroke) .45f + .55f * pressure else 1f
+            if ((eraserStroke || brush == "Pen") && drawNativeCoverage(c, path, if (eraserStroke) width else width * .225f, strength)) return
             if (eraserStroke) {
                 paint.reset(); paint.isAntiAlias = true; paint.style = Paint.Style.STROKE; paint.strokeCap = Paint.Cap.ROUND; paint.strokeJoin = Paint.Join.ROUND
                 paint.strokeWidth = width; paint.alpha = (strength * 255).toInt(); paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
@@ -303,6 +368,8 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         mergeSelection(added, "Add")
     }
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        updatePenCursor(e)
+        if (e.actionMasked == MotionEvent.ACTION_CANCEL) penCursor = null
         parent?.requestDisallowInterceptTouchEvent(true)
         if (e.pointerCount > 1) {
             shapeTouchActive = false
@@ -397,6 +464,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         invalidate(); return true
     }
     fun dispose() {
+        penCursor = null
         images.forEach { it.recycle() }; disposeEdits(history); disposeEdits(future); clipboard?.recycle(); source?.recycle(); original?.recycle(); meshSource?.recycle(); strokeBefore?.recycle()
     }
 }

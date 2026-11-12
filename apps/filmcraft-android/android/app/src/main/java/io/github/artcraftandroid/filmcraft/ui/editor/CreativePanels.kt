@@ -275,6 +275,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
     var brushQuery by remember { mutableStateOf("") }
     var brushFamily by remember { mutableStateOf("All") }
     var penPressure by remember { mutableStateOf(true) }
+    var penCursor by remember { mutableStateOf(true) }
     var stabilizer by remember { mutableFloatStateOf(0f) }
     var pressureResponse by remember { mutableFloatStateOf(1f) }
     var shape by remember { mutableStateOf("Circle") }
@@ -370,6 +371,10 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(penPressure, { penPressure = it; view.usePressure = it })
                             Text("Pen pressure · size & opacity", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(penCursor, { penCursor = it; view.showPenCursor = it; view.invalidate() })
+                            Text("Pen hover cursor", color = Color.White, style = MaterialTheme.typography.labelSmall)
                         }
                         Text("Stroke control", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         Row(verticalAlignment = Alignment.CenterVertically) {
