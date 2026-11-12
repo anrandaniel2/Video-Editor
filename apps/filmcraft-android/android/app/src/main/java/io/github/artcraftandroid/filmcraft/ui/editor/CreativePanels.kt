@@ -57,7 +57,7 @@ import java.net.URI
 
 /** Downloads only on explicit request, to project-local storage, with a bounded streaming copy. */
 internal fun downloadSound(address: String, dir: File, video: Boolean = false): File {
-    var url = URI(address.trim()).toURL()
+    var url = URI(URI(address.trim()).toASCIIString()).toURL()
     dir.mkdirs()
     val temporary = File(dir, "${if (video) "video" else "sound"}-${java.util.UUID.randomUUID()}.part")
     try {
@@ -67,12 +67,14 @@ internal fun downloadSound(address: String, dir: File, video: Boolean = false): 
             connection.connectTimeout = 15000
             connection.readTimeout = 30000
             connection.instanceFollowRedirects = false
+            connection.setRequestProperty("User-Agent", ONLINE_MEDIA_AGENT)
+            connection.setRequestProperty("Accept", "*/*")
             try {
                 val code = connection.responseCode
                 if (code in 300..399) {
                     url = java.net.URL(url, connection.getHeaderField("Location") ?: error("Missing redirect location"))
                 } else {
-                    require(code in 200..299) { "Download failed (HTTP $code)." }
+                    require(code in 200..299) { "Download failed (HTTP $code). ${if (code == 429) "The server is rate limiting requests; try again shortly." else "The media server refused the request. Try another result."}" }
                     val type = connection.contentType.orEmpty().substringBefore(';').lowercase()
                     val ext = if (video) when {
                         type.contains("webm") -> "webm"

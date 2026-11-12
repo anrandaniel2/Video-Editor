@@ -55,6 +55,7 @@ internal fun OnlineVideosPanel(ed: EditorController, close: () -> Unit) {
                 Row { Checkbox(overlay, { overlay = it }); Text("Import as overlay", modifier = Modifier.padding(top = 12.dp)) }
                 Text("Wikimedia Commons · up to 250 MB per video. Check the source license; credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 previewError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(results, key = { it.id }) { video ->
@@ -65,8 +66,8 @@ internal fun OnlineVideosPanel(ed: EditorController, close: () -> Unit) {
                                 Text("${video.license} · ${video.bytes / (1024 * 1024)} MB", style = MaterialTheme.typography.bodySmall)
                                 if (preview == video.id) AndroidView(factory = { context -> VideoView(context).apply {
                                     setOnPreparedListener { it.isLooping = true; start() }
-                                    setOnErrorListener { _, _, _ -> previewError = "This device cannot stream this preview. You can still try importing it."; preview = null; true }
-                                    setVideoURI(Uri.parse(video.url))
+                                    setOnErrorListener { _, what, extra -> previewError = "Video preview failed (player $what/$extra). The server or this file’s encoding may be responsible; this does not mean your device cannot stream."; preview = null; true }
+                                    setVideoURI(Uri.parse(java.net.URI(video.url).toASCIIString()), onlineMediaHeaders)
                                 } }, modifier = Modifier.fillMaxWidth().height(180.dp), onReset = null, onRelease = { it.stopPlayback() })
                                 Row {
                                     TextButton(onClick = { previewError = null; preview = if (preview == video.id) null else video.id }) { Text(if (preview == video.id) "Stop" else "Preview") }

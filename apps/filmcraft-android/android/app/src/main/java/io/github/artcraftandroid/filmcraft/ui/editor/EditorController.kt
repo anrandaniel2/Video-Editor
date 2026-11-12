@@ -584,9 +584,12 @@ class EditorController(
         }
     }
 
+    var onlineImportError by mutableStateOf<String?>(null)
+
     fun importOnlineVideo(url: String, attribution: String, overlay: Boolean) {
         if (busy != null) return
         stop()
+        onlineImportError = null
         scope.launch {
             busy = "Downloading video…"
             try {
@@ -598,7 +601,8 @@ class EditorController(
                 }
                 engine.command { if (overlay) addOverlays(listOf(path)) else addMedia(listOf(path)) }
                 panel = null
-            } catch (e: Exception) { host.tell(e.userMessage) }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { onlineImportError = "Import failed: ${e.userMessage}"; host.tell(e.userMessage) }
             finally { busy = null; refresh() }
         }
     }
@@ -606,6 +610,7 @@ class EditorController(
     fun importOnlineSound(url: String, attribution: String = "") {
         if (busy != null) return
         stop()
+        onlineImportError = null
         scope.launch {
             busy = "Downloading sound…"
             try {
@@ -619,7 +624,8 @@ class EditorController(
                 }
                 engine.command { addAudio(listOf(path)) }
                 panel = null
-            } catch (e: Exception) { host.tell(e.userMessage) }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { onlineImportError = "Import failed: ${e.userMessage}"; host.tell(e.userMessage) }
             finally { busy = null; refresh() }
         }
     }

@@ -23,6 +23,9 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
 
+internal const val ONLINE_MEDIA_AGENT = "FilmCraft/0.0.28 (https://github.com/anrandaniel2/Video-Editor; Android media editor)"
+internal val onlineMediaHeaders: Map<String, String> get() = mapOf("User-Agent" to ONLINE_MEDIA_AGENT)
+
 internal data class OnlineSound(val id: Long, val title: String, val url: String, val page: String, val artist: String, val license: String, val licenseUrl: String, val bytes: Long) {
     val credits: String get() = "$title\nCreator: $artist\nLicense: $license\n$licenseUrl\nSource: $page\nMedia: $url\n"
 }
@@ -61,7 +64,7 @@ internal object CommonsSounds {
         val url = "https://commons.wikimedia.org/w/api.php?action=query&format=json&formatversion=2&generator=search&gsrnamespace=6&gsrlimit=20&gsroffset=$offset&gsrsearch=$encoded&prop=imageinfo&iiprop=url%7Cmime%7Csize%7Cextmetadata&iiextmetadatafilter=Artist%7CLicenseShortName%7CLicenseUrl&maxlag=5"
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = 15000; connection.readTimeout = 20000
-        connection.setRequestProperty("User-Agent", "FilmCraft-Android/0.0.16 (https://github.com/anrandaniel2/Video-Editor)")
+        connection.setRequestProperty("User-Agent", ONLINE_MEDIA_AGENT)
         try {
             require(connection.responseCode == 200) { "Sound service unavailable (HTTP ${connection.responseCode}). Try again." }
             val body = connection.inputStream.use { input ->
@@ -120,6 +123,7 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
                 }
                 Text("Wikimedia Commons • Check the license for your intended use. Credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 previewError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(results, key = { it.id }) { sound ->
@@ -136,8 +140,8 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
                                             try {
                                                 player.setOnPreparedListener { preparing = false; it.start() }
                                                 player.setOnCompletionListener { playing = null; preparing = false }
-                                                player.setOnErrorListener { _, _, _ -> previewError = "Preview unavailable. You can still try importing."; stopPreview(); true }
-                                                player.setDataSource(sound.url); player.prepareAsync()
+                                                player.setOnErrorListener { _, what, extra -> previewError = "Audio preview failed (player $what/$extra). This may be a network or file-format error, not a device streaming limitation."; stopPreview(); true }
+                                                player.setDataSource(java.net.URI(sound.url).toASCIIString(), onlineMediaHeaders); player.prepareAsync()
                                             } catch (_: Exception) { previewError = "Could not play this preview."; stopPreview() }
                                         }
                                     }) { Text(if (playing == sound.id) { if (preparing) "Cancel preview" else "Stop" } else "Preview") }
