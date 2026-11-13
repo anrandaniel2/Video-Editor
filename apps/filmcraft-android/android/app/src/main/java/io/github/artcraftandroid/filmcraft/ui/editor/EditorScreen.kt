@@ -184,7 +184,7 @@ private fun EditorWorkspace(ed: EditorController) {
             if (input != null) TextInputStrip(ed, input) else EditorToolbar(ed)
         }
         if (panel != null) {
-            Box(Modifier.align(Alignment.BottomEnd).padding(end = if (wide) 12.dp else 0.dp, bottom = FcSize.ToolTile + 8.dp)
+            Box(Modifier.align(Alignment.BottomEnd).padding(end = if (wide) 12.dp else 0.dp, bottom = FcSize.ToolTile + 20.dp)
                 .width(inspectorWidth).heightIn(max = inspectorHeight)) {
                 EditorPanel(ed, panel, Modifier.fillMaxWidth())
             }
@@ -194,11 +194,11 @@ private fun EditorWorkspace(ed: EditorController) {
 
 @Composable
 private fun WorkspaceMonitor(ed: EditorController, modifier: Modifier) {
-    Box(modifier.padding(horizontal = 12.dp, vertical = 8.dp).clip(RoundedCornerShape(16.dp)).background(Fc.Lane)) {
+    Box(modifier.padding(horizontal = 12.dp, vertical = 8.dp).clip(RoundedCornerShape(20.dp)).background(Fc.Lane)) {
         Preview(ed, Modifier.fillMaxSize())
-        Column(Modifier.align(Alignment.CenterStart).padding(6.dp).clip(RoundedCornerShape(14.dp)).background(Fc.Black)) {
-            NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Undo, "Undo", false) { ed.undo() }
-            NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Redo, "Redo", false) { ed.redo() }
+        Column(Modifier.align(Alignment.CenterStart).padding(6.dp).clip(RoundedCornerShape(20.dp)).background(Fc.Black)) {
+            NativeAction(LucideIcons.Undo2.glyph(), "Undo", false) { ed.undo() }
+            NativeAction(LucideIcons.Redo2.glyph(), "Redo", false) { ed.redo() }
         }
     }
 }
@@ -206,21 +206,21 @@ private fun WorkspaceMonitor(ed: EditorController, modifier: Modifier) {
 @Composable
 private fun WorkspaceBar(ed: EditorController) {
     Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Cross, "Save and return to Projects", false) { ed.closeEditor() }
-        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Actions, "Keyframes", ed.panel == Panel.Keyframes) { if (ed.selectedClip != null) ed.panel = Panel.Keyframes }
-        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Adjustments, "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) ed.panel = Panel.Effects }
-        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Transform, "3D", ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D }
+        NativeAction(LucideIcons.X.glyph(), "Save and return to Projects", false) { ed.closeEditor() }
+        NativeAction(LucideIcons.ChartSpline.glyph(), "Keyframes", ed.panel == Panel.Keyframes) { if (ed.selectedClip != null) ed.panel = Panel.Keyframes }
+        NativeAction(LucideIcons.WandSparkles.glyph(), "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) ed.panel = Panel.Effects }
+        NativeAction(LucideIcons.Layers.glyph(), "3D", ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D }
         Spacer(Modifier.weight(1f))
-        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Brush, "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
-        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.MenuShare, "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
+        NativeAction(LucideIcons.Paintbrush.glyph(), "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
+        NativeAction(LucideIcons.Share2.glyph(), "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
     }
 }
 
 @Composable
-private fun NativeAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, click: () -> Unit) {
+private fun NativeAction(icon: io.github.artcraftandroid.filmcraft.ui.Glyph, label: String, selected: Boolean, click: () -> Unit) {
     Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(if (selected) Fc.Accent else Color.Transparent)
         .clickable(onClick = click).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-        androidx.compose.material3.Icon(icon, label, tint = Color.White, modifier = Modifier.size(42.dp))
+        io.github.artcraftandroid.filmcraft.ui.GlyphIcon(icon, Color.White, size = 24.dp, description = label)
     }
 }
 

@@ -122,10 +122,10 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
     }
     BackHandler { if (selected != null) selected = null else close() }
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxSize().editorGlass(0.dp, layer = 4f, blurRadius = 8.dp, captureSurface = false)
+        Box(Modifier.fillMaxSize().editorGlass(0.dp, layer = 4f, blurRadius = 4.dp, captureSurface = false)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = close))
         Column(Modifier.padding(16.dp).widthIn(max = 720.dp).fillMaxWidth().height(maxHeight * .88f)
-            .editorGlass(28.dp, layer = 5f, blurRadius = 18.dp, captureSurface = false)
+            .editorGlass(28.dp, layer = 5f, blurRadius = 6.dp, captureSurface = false)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
             .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -144,7 +144,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
                 if (resolving) { Text("Loading published download options…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(results, key = { it.id }) { asset ->
-                        Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 38.dp, captureSurface = false).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 10.dp, captureSurface = false).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (video && preview != asset.id) MixkitThumbnail(asset)
                                 Text(asset.title, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 if (video && preview == asset.id && previewUrl.isNotBlank()) AndroidView(factory = { ctx ->
@@ -197,7 +197,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
     val asset = selected
     val options = offer
     if (asset != null && options != null) AlertDialog(
-        modifier = Modifier.editorGlass(24.dp, layer = 8f, blurRadius = 38.dp, captureSurface = false),
+        modifier = Modifier.editorGlass(24.dp, layer = 8f, blurRadius = 10.dp, captureSurface = false),
         containerColor = Color.Transparent,
         onDismissRequest = { if (!resolving) selected = null },
         title = { Text(if (video) "Import video" else "Import sound effect") },

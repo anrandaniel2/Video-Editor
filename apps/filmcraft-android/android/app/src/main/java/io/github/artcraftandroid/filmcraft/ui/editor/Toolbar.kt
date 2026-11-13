@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -65,43 +66,24 @@ fun EditorToolbar(ed: EditorController, modifier: Modifier = Modifier) {
 
 @Composable
 private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modifier: Modifier) {
-    BoxWithConstraints(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).height(FcSize.ToolTile).clip(RoundedCornerShape(22.dp)).background(Fc.Panel)) {
-        // with a back button the tools start clear of it and centre in what is left
-        val start = if (back != null) 43.5.dp else 0.dp
-        val end = if (back != null) 15.dp else 0.dp
-        val fits = FcSize.ToolTile * tools.size <= maxWidth - start - end
+    BoxWithConstraints(modifier.fillMaxWidth().padding(horizontal = 12.dp).height(FcSize.ToolTile + 12.dp), contentAlignment = Alignment.Center) {
+        val backWidth = if (back != null) 44.dp else 0.dp
+        val wanted = FcSize.ToolTile * tools.size + backWidth + 24.dp
+        val fits = wanted <= maxWidth
         Row(
-            Modifier
-                .fillMaxWidth()
-                .then(if (fits) Modifier else Modifier.horizontalScroll(rememberScrollState()))
-                .padding(start = start, end = end),
+            Modifier.width(wanted.coerceAtMost(maxWidth)).height(FcSize.ToolTile + 12.dp)
+                .clip(CircleShape).background(Fc.Panel)
+                .horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
             horizontalArrangement = if (fits) Arrangement.Center else Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            for (t in tools) ToolTile(t.glyph, t.label, t.onClick, enabled = t.enabled, active = t.active, tag = t.tag)
-        }
-        if (back != null) {
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .width(48.dp)
-                    .height(FcSize.ToolTile)
-                    .background(Brush.horizontalGradient(0.7f to Fc.Black.copy(alpha = .35f), 1f to Color.Transparent)),
-            )
-            Box(
-                Modifier
-                    // level with the top of the tool row, not centred in it
-                    .align(Alignment.CenterStart)
-                    .padding(start = 8.dp)
-                    .size(width = 32.dp, height = 44.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Fc.Raised)
-                    .clickable(role = Role.Button, onClick = back)
-                    .testTag("editor_toolbar_back")
-                    .semantics { contentDescription = "Back" },
-                contentAlignment = Alignment.Center,
-            ) {
-                GlyphIcon((if (deep) LucideIcons.ChevronsLeft else LucideIcons.ChevronLeft).glyph(), Fc.Icon, size = 20.dp)
+            if (back != null) {
+                io.github.artcraftandroid.filmcraft.ui.FcIconButton(
+                    (if (deep) LucideIcons.ChevronsLeft else LucideIcons.ChevronLeft).glyph(),
+                    "Back", back, modifier = Modifier.testTag("editor_toolbar_back"), size = 44.dp,
+                )
             }
+            for (t in tools) ToolTile(t.glyph, t.label, t.onClick, enabled = t.enabled, active = t.active, tag = t.tag)
         }
     }
 }

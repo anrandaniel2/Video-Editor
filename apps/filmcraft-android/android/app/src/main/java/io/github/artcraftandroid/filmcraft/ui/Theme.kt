@@ -137,7 +137,7 @@ object FcSize {
     val FrameBar = 96.dp
     val ToolTile = 60.dp
     val ToolChip = 44.dp
-    val PanelCorner = 24.dp
+    val PanelCorner = io.github.artcraftandroid.procraft.ui.Pc.PopoverCorner
     val PanelInset = 12.dp
     val PanelPadding = 20.dp
     val MainTrack = 64.dp

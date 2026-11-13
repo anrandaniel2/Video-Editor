@@ -384,7 +384,7 @@ fun FcDialog(
                 .padding(horizontal = 32.dp)
                 .widthIn(max = 480.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(FcSize.PanelCorner))
                 .background(Fc.Panel)
                 .padding(24.dp),
         ) {

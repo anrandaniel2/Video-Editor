@@ -75,7 +75,7 @@ fun rememberEditorGlass(frame: ImageBitmap?): ImageBitmap? = remember(frame) {
 
 /** Paint the glass only: child text/icons and gesture targets are never blurred. */
 @Composable
-fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp = 20.dp, captureSurface: Boolean = true): Modifier {
+fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp = 6.dp, captureSurface: Boolean = true): Modifier {
     val state = LocalEditorBackdrop.current
     if (state != null) {
         val style = remember(blurRadius) {
