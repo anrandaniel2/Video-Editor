@@ -634,20 +634,27 @@ class EditorController(
     /** Home-created drawing, not an editing panel opened inside an existing project. */
     var standaloneDrawing = false
 
-    fun importDrawing(bitmap: android.graphics.Bitmap) {
-        scope.launch {
-            busy = "Adding drawing…"
-            try {
-                val path = withContext(Dispatchers.IO) {
-                    project.mediaDir.mkdirs()
-                    val file = java.io.File(project.mediaDir, "drawing-${java.util.UUID.randomUUID()}.png")
-                    file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
-                    file.absolutePath
-                }
-                engine.command { addDrawing(path) }
-                panel = null
-            } catch (e: Exception) { host.tell(e.userMessage) }
-            finally { bitmap.recycle(); busy = null; refresh() }
+    /** The caller keeps its save guard until both the file and timeline command succeed. */
+    suspend fun importDrawing(bitmap: android.graphics.Bitmap) {
+        busy = "Adding drawing…"
+        var output: java.io.File? = null
+        var imported = false
+        try {
+            val path = withContext(Dispatchers.IO) {
+                project.mediaDir.mkdirs()
+                val file = java.io.File(project.mediaDir, "drawing-${java.util.UUID.randomUUID()}.png")
+                output = file
+                file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+                file.absolutePath
+            }
+            engine.command { addDrawing(path) }
+            imported = true
+            panel = null
+        } finally {
+            if (!imported) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { output?.delete() }
+            bitmap.recycle()
+            busy = null
+            refresh()
         }
     }
 

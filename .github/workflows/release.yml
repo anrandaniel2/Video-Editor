@@ -97,7 +97,7 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           set +e
-          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
+          ./gradlew assembleRelease :procraft:testReleaseUnitTest "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
             -Pfilmcraft.unsigned=true --no-daemon > /tmp/android-build.log 2>&1
           rc=$?
           cat /tmp/android-build.log

@@ -18,3 +18,24 @@ FilmCraft's ProcraftIntegration.kt hosts AppRoot and CompactColors/HeldColor.
 Closing a standalone canvas exports PNG to Pictures/FilmCraft before leaving;
 closing a project canvas exports/imports a drawing clip into that project.
 Errors retain the open session. Native layered autosaves remain in artworks/.
+
+
+## Save/return regression checks
+
+The release workflow runs ProCraft's Android JVM regression suite against the
+embedded library (`:procraft:testReleaseUnitTest`) as well as building the APK.
+Hardware/device checks remain separate from JVM/build validation:
+
+- Home > new drawing > draw > X: PNG in Pictures/FilmCraft; returns Home.
+- Project > Draw > draw > X: one drawing clip; returns to the same timeline.
+- Deny/fail destination write: error shown; open canvas retained for retry.
+- Open artwork grid, immediately return to FilmCraft: pending layered saves finish.
+- Close during a transform/fill/opacity edit: commit before native save/export.
+- Rapid double-tap X: only one save/import operation.
+- Import image, cancel opening/close: no leftover procraft-input cache PNG.
+- Reopen drawing from the artwork grid: layers and latest stroke retained.
+
+Timeline insertion is awaited by the host rather than launched in a second scope.
+On failed insertion the partial project PNG is removed and the native canvas stays
+open; successful insertion transfers bitmap ownership to the controller. Export
+and input cache files are cleaned up on success, failure, and cancellation.

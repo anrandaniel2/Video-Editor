@@ -69,53 +69,68 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var initialised by remember { mutableStateOf(false) }
+    var completed by remember { mutableStateOf(false) }
     var openedOnce by remember { mutableStateOf(false) }
     LaunchedEffect(vm.session) { if (vm.session != null) openedOnce = true }
     LaunchedEffect(vm) {
+        var input: File? = null
         try {
             if (frame == null) {
                 vm.newArtwork(ed.timeline?.width?.toInt() ?: 1080, ed.timeline?.height?.toInt() ?: 1920)
             } else {
-                val file = withContext(Dispatchers.IO) {
-                    File(context.cacheDir, "procraft-input-${java.util.UUID.randomUUID()}.png").also { out ->
-                        out.outputStream().use { check(frame.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-                    }
+                input = File(context.cacheDir, "procraft-input-${java.util.UUID.randomUUID()}.png")
+                val file = requireNotNull(input)
+                withContext(Dispatchers.IO) {
+                    file.outputStream().use { check(frame.compress(Bitmap.CompressFormat.PNG, 100, it)) }
                 }
                 vm.newFromPicture(Uri.fromFile(file))
-                // Import is asynchronous; don't remove its input until the native session is ready.
-                while (vm.session == null && vm.message == null) kotlinx.coroutines.delay(25)
-                file.delete()
             }
+            // Both constructors open asynchronously. Keep the input alive until import finishes.
+            while (vm.session == null && vm.message == null) kotlinx.coroutines.delay(25)
             initialised = true
-        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-        catch (e: Exception) { error = e.message ?: "Could not open drawing." }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.message ?: "Could not open drawing."
+            initialised = true
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { input?.delete() }
+        }
     }
     DisposableEffect(Unit) { onDispose { frame?.recycle(); ed.blankDrawing = false; CanvasSpace.set(false) } }
     val requestClose: () -> Unit = {
-        if (!saving && vm.session != null) {
+        if (!saving && !completed && (vm.session != null || initialised)) {
             saving = true
             scope.launch {
                 try {
-                    // Apply active transforms before flattening; keep the native layered autosave.
-                    vm.endTransform(true)
-                    vm.endAdjustment(true)
                     vm.saveForHost()
-                    val file = vm.exportImage(false) ?: kotlin.error("Could not export the drawing. Please try again.")
-                    val image = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(file.path) ?: kotlin.error("Could not read exported drawing.") }
-                    if (standalone) {
-                        try { withContext(Dispatchers.IO) { saveDrawingPhoto(context, image) } }
-                        finally { image.recycle() }
-                        android.widget.Toast.makeText(context, "Saved to Pictures/FilmCraft", android.widget.Toast.LENGTH_LONG).show()
-                        ed.closeEditor()
-                    } else {
-                        ed.importDrawing(image) // Controller takes ownership and returns to the timeline.
+                    if (vm.session != null) {
+                        val file = vm.exportImage(false) ?: kotlin.error("Could not export the drawing. Please try again.")
+                        try {
+                            val image = withContext(Dispatchers.IO) {
+                                BitmapFactory.decodeFile(file.path) ?: kotlin.error("Could not read exported drawing.")
+                            }
+                            if (standalone) {
+                                try { withContext(Dispatchers.IO) { saveDrawingPhoto(context, image) } }
+                                finally { image.recycle() }
+                                android.widget.Toast.makeText(context, "Saved to Pictures/FilmCraft", android.widget.Toast.LENGTH_LONG).show()
+                            } else {
+                                ed.importDrawing(image) // Suspends until timeline insertion succeeds; owns the bitmap.
+                            }
+                        } finally {
+                            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { file.delete() }
+                        }
                     }
-                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-                catch (e: Exception) { error = e.message ?: "Could not save drawing." }
-                finally { saving = false }
+                    completed = true
+                    if (standalone) ed.closeEditor() else close()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    error = e.message ?: "Could not save drawing."
+                } finally {
+                    saving = false
+                }
             }
-        } else if (!saving && initialised && vm.session == null) {
-            if (standalone) ed.closeEditor() else close()
         }
     }
     SideEffect { vm.hostClose = requestClose }
@@ -127,31 +142,31 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
             if (context.resources.configuration.isScreenWideColorGamut) window?.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
         }
         CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
-        Box(Modifier.fillMaxSize().background(Color.Black).procraftKeys(vm, doubleTaps)) {
-            if (vm.session != null || (openedOnce && vm.screen == io.github.artcraftandroid.procraft.canvas.Screen.GALLERY)) {
-                AppRoot(vm)
-                if (vm.session == null) {
-                    BackHandler { requestClose() }
-                    IconButton(onClick = requestClose, modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp)) {
-                        Icon(PcIcons.Cross, contentDescription = "Return to FilmCraft", tint = Color.White)
+            Box(Modifier.fillMaxSize().background(Color.Black).procraftKeys(vm, doubleTaps)) {
+                if (vm.session != null || (openedOnce && vm.screen == io.github.artcraftandroid.procraft.canvas.Screen.GALLERY)) {
+                    AppRoot(vm)
+                    if (vm.session == null) {
+                        BackHandler { requestClose() }
+                        IconButton(onClick = requestClose, modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp)) {
+                            Icon(PcIcons.Cross, contentDescription = "Return to FilmCraft", tint = Color.White)
+                        }
                     }
                 }
-            }
-            else Column(Modifier.fillMaxSize().padding(24.dp)) {
-                Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
-                TextButton(onClick = { if (standalone) ed.closeEditor() else close() }) { Text("Close") }
-            }
-            if (saving) {
-                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .45f))) {
-                    // Intercept input while the export snapshot is being saved.
-                    BackHandler { }
-                    AlertDialog(onDismissRequest = {}, confirmButton = {}, text = { Text("Saving drawing…") })
+                else Column(Modifier.fillMaxSize().padding(24.dp)) {
+                    Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
+                    TextButton(onClick = { if (standalone) ed.closeEditor() else close() }) { Text("Close") }
+                }
+                if (saving) {
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .45f))) {
+                        // Intercept input while the export snapshot is being saved.
+                        BackHandler { }
+                        AlertDialog(onDismissRequest = {}, confirmButton = {}, text = { Text("Saving drawing…") })
+                    }
+                }
+                error?.let { message ->
+                    AlertDialog(onDismissRequest = { error = null }, title = { Text("Drawing") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } })
                 }
             }
-            error?.let { message ->
-                AlertDialog(onDismissRequest = { error = null }, title = { Text("Drawing") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } })
-            }
         }
-    }
     }
 }

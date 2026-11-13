@@ -2397,9 +2397,14 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Saves the open artwork and goes back to the gallery. */
     /** Complete the layered save before the host tears down this model's coroutine scope. */
     suspend fun saveForHost() {
+        // A gallery close saves asynchronously. Do not cancel those jobs by clearing the host.
+        while (closingSaves.get() > 0) kotlinx.coroutines.delay(25)
+        endFilling()
+        endLayerOpacity()
+        endTransform(true)
+        endAdjustment(true)
         val s = session ?: return
         val dir = artworkDir ?: return
         noteTime()
