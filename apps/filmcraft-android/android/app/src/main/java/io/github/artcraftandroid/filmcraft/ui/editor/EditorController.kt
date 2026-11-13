@@ -647,8 +647,12 @@ class EditorController(
                 file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
                 file.absolutePath
             }
-            engine.command { addDrawing(path) }
-            imported = true
+            // Cancellation after a native command commits must not delete a file the timeline
+            // already references. Keep command completion and ownership transfer indivisible.
+            withContext(kotlinx.coroutines.NonCancellable) {
+                engine.command { addDrawing(path) }
+                imported = true
+            }
             panel = null
         } finally {
             if (!imported) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { output?.delete() }
