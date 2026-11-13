@@ -90,9 +90,9 @@ private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modif
             Box(
                 Modifier
                     // level with the top of the tool row, not centred in it
-                    .align(Alignment.TopStart)
-                    .padding(start = 10.dp)
-                    .size(width = 28.dp, height = 58.dp)
+                    .align(Alignment.CenterStart)
+                    .padding(start = 8.dp)
+                    .size(width = 32.dp, height = 44.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(Fc.Raised)
                     .clickable(role = Role.Button, onClick = back)
@@ -108,7 +108,7 @@ private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modif
 
 private fun addTools(ed: EditorController) = listOf(
     Tool("editor_tool_overlay", "Overlay", LucideIcons.Layers.glyph()) { ed.addOverlay() },
-    Tool("editor_tool_drawing", "Draw", LucideIcons.Images.glyph()) { ed.panel = Panel.Drawing },
+    Tool("editor_tool_drawing", "Draw", LucideIcons.Paintbrush.glyph()) { ed.panel = Panel.Drawing },
     Tool("editor_tool_audio", "Audio", LucideIcons.Music.glyph()) { ed.submenu = Submenu.AddAudio },
     Tool("editor_tool_text", "Text", LucideIcons.Type.glyph()) { ed.panel = Panel.TextInput(null) },
     Tool("editor_tool_3d", "3D", LucideIcons.Layers.glyph()) { ed.panel = Panel.Object3D },

@@ -17,8 +17,8 @@ internal class SavedVisuals(private val context: Context) {
 
     fun list(): List<ProjectEntry> {
         val drawings = artworks()
-        val linked = drawings.mapNotNull { p -> runCatching { File(p.dir, ".filmcraft-photo").readText() }.getOrNull() }.toSet()
-        return drawings + runCatching { pictures().filterNot { it.sourceUri in linked } }.getOrElse {
+        val linked = drawings.mapNotNull { p -> runCatching { File(p.dir, ".filmcraft-photo").readText().trim().let { Uri.parse(it).lastPathSegment } }.getOrNull() }.toSet()
+        return drawings + runCatching { pictures().filterNot { it.sourceUri?.let { uri -> Uri.parse(uri).lastPathSegment } in linked } }.getOrElse {
         android.util.Log.w("FilmCraftLibrary", "Saved pictures could not be listed", it)
         emptyList()
         }

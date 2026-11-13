@@ -1636,8 +1636,13 @@ fun NewCanvasPanel(
     onScreenSize: (Int, Int) -> Unit,
 ) {
     // the screen as it is turned now (2560 x 1600 in landscape, 1600 x 2560 upright)
-    val root = LocalView.current.rootView
-    val (sw, sh) = root.width.coerceAtLeast(1) to root.height.coerceAtLeast(1)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.ui.platform.LocalConfiguration.current // refresh metrics when the device rotates
+    val metrics = context.resources.displayMetrics
+    val bounds = if (android.os.Build.VERSION.SDK_INT >= 30)
+        context.getSystemService(android.view.WindowManager::class.java).maximumWindowMetrics.bounds else null
+    val sw = (bounds?.width() ?: metrics.widthPixels).coerceAtLeast(1)
+    val sh = (bounds?.height() ?: metrics.heightPixels).coerceAtLeast(1)
     // the row swiped open, if one is
     var opened by remember { mutableStateOf<Int?>(null) }
     Popover(NewCanvasWidth, arrowX, modifier, fill = Pc.LightPanel, corner = 32.dp) {

@@ -137,6 +137,9 @@ fun EditorScreen(ed: EditorController) {
             if (ed.panel == Panel.OnlineVideos || ed.panel == Panel.OnlineSounds) {
                 MixkitPanel(ed, video = ed.panel == Panel.OnlineVideos, close = { ed.panel = null })
             }
+            // A single composition slot survives switching between portrait and landscape layouts.
+            // Putting Draw inside each layout destroyed its VM and created a new artwork on rotation.
+            if (ed.panel == Panel.Drawing) DrawingPanel(ed) { ed.panel = null }
             ed.busy?.let { BusyOverlay(it) }
         }
     }
@@ -156,7 +159,8 @@ private fun BusyOverlay(text: String) {
 @Composable
 private fun Stacked(ed: EditorController) {
     val density = LocalDensity.current
-    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds }
+    val screenHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
+    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds || it == Panel.Drawing }
     val textInput = panel as? Panel.TextInput
     val showPanel = panel != null && textInput == null
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -187,7 +191,7 @@ private fun Stacked(ed: EditorController) {
             }
         }
         when {
-            showPanel -> EditorPanel(ed, panel!!)
+            showPanel -> EditorPanel(ed, panel!!, Modifier.heightIn(max = screenHeight * 0.48f))
             textInput != null -> TextInputStrip(ed, textInput)
             else -> {
                 EditorToolbar(ed)
@@ -200,7 +204,7 @@ private fun Stacked(ed: EditorController) {
 @Composable
 private fun SideBySide(ed: EditorController) {
     val density = LocalDensity.current
-    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds }
+    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds || it == Panel.Drawing }
     val textInput = panel as? Panel.TextInput
     val showPanel = panel != null && textInput == null
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -265,7 +269,7 @@ private fun SideBySide(ed: EditorController) {
 @Composable
 private fun TopBar(ed: EditorController, sideBySide: Boolean) {
     Row(Modifier.fillMaxWidth().height(FcSize.TopBar).editorGlass(0.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        FcIconButton(LucideIcons.House.glyph(), "Home", { ed.closeEditor() }, modifier = Modifier.testTag("editor_home_button"))
+        FcIconButton(LucideIcons.X.glyph(), "Save project and return to Projects", { ed.closeEditor() }, modifier = Modifier.testTag("editor_home_button"))
         Spacer(Modifier.weight(1f))
         if (sideBySide) {
             val st = ed.status

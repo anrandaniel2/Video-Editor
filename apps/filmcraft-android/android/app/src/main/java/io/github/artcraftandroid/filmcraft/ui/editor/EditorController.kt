@@ -630,6 +630,7 @@ class EditorController(
         }
     }
 
+    var drawingPhotoDestination: Uri? = null
     var drawingPreset: io.github.artcraftandroid.procraft.gallery.CanvasPreset? = null
     var drawingArtwork: io.github.artcraftandroid.procraft.gallery.Artwork? = null
     var drawingPicture: android.net.Uri? = null

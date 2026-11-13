@@ -36,7 +36,7 @@ internal class GizmoGeometry(val pose:GizmoPose,private val layer:Placement?,pri
     val axes=gizmoBasis.map {rotate(it)}
     fun rotate(v:GizmoVec)=v.rotate(pose.rotationX,pose.rotationY,pose.rotationZ)
     fun project(world:GizmoVec):GizmoPoint? {
-        if(world.z<1.0)return null
+        if(world.z<1.0 || !world.x.isFinite() || !world.y.isFinite() || !world.z.isFinite() || width <= 0.0 || height <= 0.0 || fw <= 0.0 || fh <= 0.0)return null
         val lx=fw/2+fh*world.x/world.z
         val ly=fh/2+fh*world.y/world.z
         val a=Math.toRadians(layer?.rotation ?: 0.0);val scale=layer?.scale ?: 1.0

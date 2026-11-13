@@ -131,13 +131,13 @@ object FcType {
 
 /** Sizes shared by the screens. */
 object FcSize {
-    val TopBar = 48.dp
+    val TopBar = 44.dp
     val TopButton = 44.dp
     val Transport = 48.dp
     val FrameBar = 96.dp
-    val ToolTile = 80.dp
+    val ToolTile = 68.dp
     val ToolChip = 44.dp
-    val PanelCorner = 20.dp
+    val PanelCorner = 24.dp
     val PanelInset = 12.dp
     val PanelPadding = 20.dp
     val MainTrack = 64.dp

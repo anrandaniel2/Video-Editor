@@ -112,7 +112,7 @@ fun ToolTile(
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics { selected = active },
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Top,
+        verticalArrangement = Arrangement.Center,
     ) {
         Box(
             Modifier.size(FcSize.ToolChip).clip(RoundedCornerShape(4.dp)).background(
@@ -174,8 +174,8 @@ fun ToolPanel(
     Column(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = FcSize.PanelInset)
-            .clip(RoundedCornerShape(topStart = FcSize.PanelCorner, topEnd = FcSize.PanelCorner))
+            .padding(horizontal = FcSize.PanelInset, vertical = 8.dp)
+            .clip(RoundedCornerShape(FcSize.PanelCorner))
             .editorGlass(FcSize.PanelCorner, layer = 2f)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier),
     ) {
@@ -189,20 +189,9 @@ fun ToolPanel(
                 )
             },
         ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(28.dp)
-                    .semantics { contentDescription = "Close panel" }
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = { close() }),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                // 16 dp below the panel's top edge
-                Box(Modifier.padding(top = 16.dp).size(width = 32.dp, height = 4.dp).clip(CircleShape).background(Fc.Handle))
-            }
             if (title != null) {
                 Row(
-                    Modifier.fillMaxWidth().padding(start = FcSize.PanelPadding, end = FcSize.PanelPadding, bottom = 8.dp).height(48.dp),
+                    Modifier.fillMaxWidth().padding(start = FcSize.PanelPadding, end = FcSize.PanelPadding, top = 12.dp, bottom = 4.dp).height(44.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     // with no action pills beside it the title row is shorter, so the title sits higher
@@ -210,7 +199,7 @@ fun ToolPanel(
                         title,
                         style = FcType.PanelTitle,
                         color = Fc.Title,
-                        modifier = Modifier.weight(1f).offset(y = if (actions == null) (-4.5).dp else 0.dp),
+                        modifier = Modifier.weight(1f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -318,7 +307,7 @@ fun SelectChip(label: String, selected: Boolean, onClick: () -> Unit, tag: Strin
         Modifier
             .height(36.dp)
             .clip(RoundedCornerShape(12.dp))
-            .then(if (selected) Modifier.background(Fc.PillButton) else Modifier.border(1.dp, Fc.Divider, RoundedCornerShape(12.dp)))
+            .background(if (selected) Fc.Accent else Fc.Raised)
             .clickable(role = Role.RadioButton, onClick = onClick)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics { this.selected = selected }
@@ -465,9 +454,9 @@ fun SliderRow(label: String, value: String, content: @Composable () -> Unit) {
 @Composable
 fun EditorExportButton(onClick: () -> Unit, enabled: Boolean = true, modifier: Modifier = Modifier) {
     Box(modifier.padding(end = 12.dp).clip(RoundedCornerShape(15.dp))
-        .background(if (enabled) Color.White else Color.White.copy(alpha = .4f))
+        .background(if (enabled) Fc.Accent else Fc.Raised)
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
         .padding(horizontal = 14.dp, vertical = 6.dp)) {
-        Text("Export", style = FcType.Button, color = Color.Black)
+        Text("Export", style = FcType.Button, color = Color.White)
     }
 }

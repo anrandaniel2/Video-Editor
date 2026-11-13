@@ -69,7 +69,7 @@ import kotlin.math.round
 @Composable
 fun Object3DPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
     val clip = ed.selectedClip
-    val state = ed.object3DState
+    val state = ed.object3DState?.takeIf { it.clip == clip?.id }
     val settings = state?.settings
     val hasObject = state?.hasObject == true
     LaunchedEffect(clip?.id, ed.playhead) {
@@ -300,7 +300,7 @@ internal fun PickerRow(label: String, value: String, options: List<String>, tag:
         Spacer(Modifier.height(4.dp))
         Box {
             Row(
-                Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp)).editorGlass(10.dp, layer = 3f)
+                Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp)).editorGlass(10.dp, layer = 3f, captureSurface = false)
                     .clickable(onClick = { showList = true })
                     .padding(horizontal = 12.dp)
                     .testTag(tag),

@@ -42,7 +42,8 @@ internal fun writeDrawing(context: Context, uri: Uri, bitmap: Bitmap, format: Dr
 internal fun saveDrawingPhoto(context: Context, bitmap: Bitmap, existing: Uri? = null): Uri {
     val resolver = context.contentResolver
     if (existing != null) {
-        writeDrawing(context, existing, bitmap, DrawingFormat.PNG)
+        val format = if (resolver.getType(existing) == "image/jpeg") DrawingFormat.JPEG else DrawingFormat.PNG
+        writeDrawing(context, existing, bitmap, format)
         return existing
     }
     val values = android.content.ContentValues().apply {

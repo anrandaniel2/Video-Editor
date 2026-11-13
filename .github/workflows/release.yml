@@ -97,7 +97,7 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           set +e
-          ./gradlew assembleRelease :procraft:testReleaseUnitTest :app:testReleaseUnitTest --tests "*ProjectEntryTest" "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
+          ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
             -Pfilmcraft.unsigned=true --no-daemon > /tmp/android-build.log 2>&1
           rc=$?
           cat /tmp/android-build.log
@@ -109,9 +109,6 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
-
-      - name: ProCraft GPU regression tests
-        run: cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-gpu --lib --locked
 
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),

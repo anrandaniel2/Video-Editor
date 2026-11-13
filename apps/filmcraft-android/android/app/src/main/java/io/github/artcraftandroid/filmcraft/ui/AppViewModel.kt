@@ -252,7 +252,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
                     ed.blankDrawing = true
                     ed.standaloneDrawing = true
                     if (p.kind == "drawing") ed.drawingArtwork = io.github.artcraftandroid.procraft.gallery.Artwork(p.dir, p.name, p.width, p.height, p.opened)
-                    else ed.drawingPicture = Uri.parse(p.sourceUri)
+                    else {
+                        ed.drawingPicture = Uri.parse(p.sourceUri)
+                        ed.drawingPhotoDestination = ed.drawingPicture
+                    }
                     ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
                 }
             }

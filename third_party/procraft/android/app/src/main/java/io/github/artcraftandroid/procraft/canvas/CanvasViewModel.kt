@@ -5846,6 +5846,16 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Host save snapshot, not a user-requested export: no share/progress card or menu state. */
+    suspend fun imageForHost(): File? {
+        val s = session ?: return null
+        return withContext(Dispatchers.IO) {
+            val file = File.createTempFile("host-save-", ".png", getApplication<Application>().cacheDir)
+            try { s.exportPng(file.path); file }
+            catch (e: Exception) { file.delete(); throw e }
+        }
+    }
+
     /** The flattened picture as a JPEG or PNG in the cache, to share, with the export card. */
     suspend fun exportImage(jpeg: Boolean): File? = withExportCard("The picture couldn't be exported.") { s ->
         withContext(Dispatchers.IO) {

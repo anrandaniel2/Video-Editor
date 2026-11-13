@@ -82,10 +82,11 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                 active=-1
             }
         }) {
+            if (size.width <= 0f || size.height <= 0f || fw <= 0f || fh <= 0f) return@Canvas
             val geometry=GizmoGeometry(settings,placement,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble())
             for(face in geometry.faces(mode)) {
                 val base=axisColors[face.axis]
-                val brightness=if(face.axis==active)1f else face.brightness
+                val brightness=if(face.axis==active)1f else face.brightness.takeIf { it.isFinite() }?.coerceIn(0f,1f) ?: 0.4f
                 val color=Color(base.red*brightness,base.green*brightness,base.blue*brightness,if(mode==GizmoMode.Rotate && face.behind)0.4f else 1f)
                 val path=Path().apply {
                     moveTo(face.points[0].screen.x,face.points[0].screen.y)

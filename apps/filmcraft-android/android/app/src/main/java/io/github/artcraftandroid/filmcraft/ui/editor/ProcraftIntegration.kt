@@ -94,6 +94,10 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
             }
             // Await the real opening job, rather than polling a non-observable session field.
             check(vm.session != null) { vm.message ?: "The drawing couldn't be opened." }
+            vm.artworkFolder()?.let { dir ->
+                val (w, h) = vm.canvasSize()
+                ed.drawingArtwork = io.github.artcraftandroid.procraft.gallery.Artwork(dir, vm.artworkTitle(), w, h, System.currentTimeMillis())
+            }
             initialised = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -112,7 +116,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 try {
                     vm.saveForHost()
                     if (vm.session != null) {
-                        val file = vm.exportImage(false) ?: kotlin.error("Could not export the drawing. Please try again.")
+                        val file = vm.imageForHost() ?: kotlin.error("Could not export the drawing. Please try again.")
                         try {
                             val image = withContext(Dispatchers.IO) {
                                 BitmapFactory.decodeFile(file.path) ?: kotlin.error("Could not read exported drawing.")
@@ -122,7 +126,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                                     withContext(Dispatchers.IO) {
                                         val link = vm.artworkFolder()?.let { File(it, ".filmcraft-photo") }
                                         val previous = link?.takeIf { it.isFile }?.readText()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
-                                        val uri = saveDrawingPhoto(context, image, previous)
+                                        val uri = saveDrawingPhoto(context, image, previous ?: ed.drawingPhotoDestination)
                                         link?.writeText(uri.toString())
                                     }
                                 } finally { image.recycle() }
