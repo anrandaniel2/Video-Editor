@@ -2,7 +2,7 @@ import javax.inject.Inject
 import org.gradle.process.ExecOperations
 
 plugins {
-    id("com.android.library") version "9.2.1"
+    id("com.android.library")
     alias(libs.plugins.kotlin.compose)
 }
 
