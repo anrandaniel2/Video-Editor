@@ -5398,6 +5398,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (made != null && round == previewRound && session === s) {
             previewOrder.retainAll(previews.keys)
+            previewOrder.addAll(previews.keys) // Includes previews remapped by a set reorder.
             previewOrder.remove(key)
             previewOrder.add(key)
             while (previewOrder.size > previewCacheLimit) {
