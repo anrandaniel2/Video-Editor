@@ -61,6 +61,8 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     val context = LocalContext.current
     val vm = rememberProcraftModel()
     val scope = rememberCoroutineScope()
+    ProcraftHostServices(vm)
+    val doubleTaps = remember { io.github.artcraftandroid.procraft.canvas.PenDoubleTaps() }
     val standalone = remember { ed.standaloneDrawing }
     val blank = remember { ed.blankDrawing }
     val frame = remember { ed.stop(); if (blank) null else ed.picture?.asAndroidBitmap()?.copy(Bitmap.Config.ARGB_8888, false) }
@@ -119,7 +121,13 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     SideEffect { vm.hostClose = requestClose }
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog()
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
+        val dialogView = androidx.compose.ui.platform.LocalView.current
+        SideEffect {
+            val window = (dialogView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+            if (context.resources.configuration.isScreenWideColorGamut) window?.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+        }
+        CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+        Box(Modifier.fillMaxSize().background(Color.Black).procraftKeys(vm, doubleTaps)) {
             if (vm.session != null || (openedOnce && vm.screen == io.github.artcraftandroid.procraft.canvas.Screen.GALLERY)) {
                 AppRoot(vm)
                 if (vm.session == null) {
@@ -144,5 +152,6 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 AlertDialog(onDismissRequest = { error = null }, title = { Text("Drawing") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } })
             }
         }
+    }
     }
 }
