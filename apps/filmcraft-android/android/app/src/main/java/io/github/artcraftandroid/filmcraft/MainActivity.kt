@@ -89,6 +89,7 @@ class MainActivity : ComponentActivity() {
         pending = r
         launchSafely {
             when (r.kind) {
+                PickKind.Picture -> pickOneVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 PickKind.PhotosAndVideos -> pickVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
                 PickKind.ReplaceVisual -> pickOneVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
                 PickKind.ExtractAudioVideo -> pickOneVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))

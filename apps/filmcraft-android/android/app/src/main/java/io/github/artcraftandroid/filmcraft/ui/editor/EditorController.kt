@@ -104,7 +104,7 @@ interface EditorHost {
     fun requestMicrophone(onGranted: () -> Unit)
 }
 
-enum class PickKind { PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo, Model }
+enum class PickKind { Picture, PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo, Model }
 
 /** A scene light object: coloured, placeable in 3D, one of several (fields mirror the engine's `Light3D`). */
 data class SceneLight(
@@ -630,6 +630,8 @@ class EditorController(
         }
     }
 
+    var drawingArtwork: io.github.artcraftandroid.procraft.gallery.Artwork? = null
+    var drawingPicture: android.net.Uri? = null
     var blankDrawing = false
     /** Home-created drawing, not an editing panel opened inside an existing project. */
     var standaloneDrawing = false

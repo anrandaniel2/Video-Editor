@@ -5,6 +5,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +45,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -79,38 +91,54 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(vm: AppViewModel) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) vm.refreshProjects() }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     var drawingSetup by remember { mutableStateOf(false) }
+    var filter by remember { mutableStateOf("all") }
+    var newMenu by remember { mutableStateOf(false) }
     if (drawingSetup) DrawingCanvasDialog({ drawingSetup = false }) { w, h -> drawingSetup = false; vm.createDrawing(w, h) }
-    Box(Modifier.fillMaxSize().background(Fc.Black).windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal)).testTag("screen_home")) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState())) {
-            HomeTopBar(vm)
-            FlowRow(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                maxItemsInEachRow = 4,
-            ) {
-                QuickTile(LucideIcons.Images.glyph(), "From your photo library", "from_your_photo_library") { vm.newProject(NewProject.PhotoLibrary) }
-                QuickTile(LucideIcons.FilePlus.glyph(), "New from files", "new_from_files") { vm.newProject(NewProject.Files) }
-                QuickTile(LucideIcons.Paintbrush.glyph(), "Create drawing", "create_drawing") { drawingSetup = true }
-                QuickTile(LucideIcons.SquarePlus.glyph(), "New blank project", "new_blank_project") { vm.newProject(NewProject.Blank) }
-                QuickTile(LucideIcons.AudioLines.glyph(), "Extract audio", "extract_audio_button") { vm.newProject(NewProject.ExtractAudio) }
-            }
-            if (vm.projectList.isNotEmpty()) {
-                Text("Your projects", style = FcType.Header, color = Fc.Title, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp).testTag("home_your_projects_header"))
-                LazyRow(
-                    Modifier.fillMaxWidth().testTag("home_projects_list"),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    items(vm.projectList, key = { it.id }) { p -> ProjectCard(vm, p) }
+    Box(Modifier.fillMaxSize().background(Fc.Gallery).windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal)).testTag("screen_home")) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(160.dp),
+            modifier = Modifier.fillMaxSize().statusBarsPadding().testTag("home_projects_list"),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 120.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) { HomeTopBar(vm) }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    QuickTile(LucideIcons.Images.glyph(), "Import picture", "from_your_photo_library") { vm.importPicture() }
+                    QuickTile(LucideIcons.FilePlus.glyph(), "From files", "new_from_files") { vm.newProject(NewProject.Files) }
+                    QuickTile(LucideIcons.Paintbrush.glyph(), "New drawing", "create_drawing") { drawingSetup = true }
+                    QuickTile(LucideIcons.SquarePlus.glyph(), "New video", "new_blank_project") { vm.newProject(NewProject.Blank) }
+                    QuickTile(LucideIcons.AudioLines.glyph(), "Extract audio", "extract_audio_button") { vm.newProject(NewProject.ExtractAudio) }
                 }
-                Spacer(Modifier.height(32.dp))
             }
-            vm.engineProblem?.let {
-                Text("The editor couldn't start: $it", style = FcType.Body, color = Fc.Negative, modifier = Modifier.padding(16.dp))
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((kind, title) in listOf("all" to "All", "video" to "Videos", "drawing" to "Drawings", "picture" to "Pictures")) {
+                        FilterChip(selected = filter == kind, onClick = { filter = kind }, label = { Text(title) })
+                    }
+                }
             }
-            Spacer(Modifier.height(124.dp))
+            val entries = vm.projectList.filter { filter == "all" || it.kind == filter }
+            items(entries, key = { it.id }) { p -> ProjectCard(vm, p) }
+            if (entries.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    GlyphIcon(LucideIcons.Images.glyph(), Fc.Secondary, size = 40.dp)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Your creative library", style = FcType.Header, color = Fc.Title)
+                    Text("Videos, layered drawings and saved pictures appear here.", style = FcType.BodySmall, color = Fc.Secondary, textAlign = TextAlign.Center)
+                }
+            }
+            vm.engineProblem?.let { problem -> item(span = { GridItemSpan(maxLineSpan) }) {
+                Text("The editor couldn't start: $problem", style = FcType.Body, color = Fc.Negative)
+            } }
         }
         // the + button
         Box(
@@ -121,12 +149,19 @@ fun HomeScreen(vm: AppViewModel) {
                 .size(56.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(Fc.Accent)
-                .clickable(role = Role.Button) { vm.newProject(NewProject.PhotoLibrary) }
+                .clickable(role = Role.Button) { newMenu = true }
                 .testTag("new_project")
                 .semantics { contentDescription = "New project" },
             contentAlignment = Alignment.Center,
         ) {
             GlyphIcon(LucideIcons.Plus.glyph(), Color.White, size = 26.dp)
+            DropdownMenu(newMenu, { newMenu = false }, containerColor = Fc.Panel) {
+                DropdownMenuItem(text = { Text("New drawing") }, onClick = { newMenu = false; drawingSetup = true })
+                DropdownMenuItem(text = { Text("New video") }, onClick = { newMenu = false; vm.newProject(NewProject.Blank) })
+                DropdownMenuItem(text = { Text("Import picture") }, onClick = { newMenu = false; vm.importPicture() })
+                DropdownMenuItem(text = { Text("Import photos and videos") }, onClick = { newMenu = false; vm.newProject(NewProject.PhotoLibrary) })
+                DropdownMenuItem(text = { Text("Import files") }, onClick = { newMenu = false; vm.newProject(NewProject.Files) })
+            }
         }
         if (vm.opening) {
             Box(Modifier.fillMaxSize().background(Fc.Scrim), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Fc.Accent) }
@@ -135,7 +170,7 @@ fun HomeScreen(vm: AppViewModel) {
     vm.renaming?.let { RenameDialog(vm, it) }
     vm.deleting?.let { p ->
         FcDialog("“${p.name}”?", "Delete", { vm.delete(p) }, { vm.deleting = null }, destructive = true) {
-            Text("The project will be deleted from this phone.", style = FcType.Body, color = Fc.Body)
+            Text(if (p.kind == "picture") "The saved picture will be deleted from Photos and Projects." else if (p.kind == "drawing") "The layered drawing will be deleted. Exported photos are kept." else "The project will be deleted from this phone.", style = FcType.Body, color = Fc.Body)
         }
     }
 }
@@ -143,9 +178,10 @@ fun HomeScreen(vm: AppViewModel) {
 @Composable
 private fun HomeTopBar(vm: AppViewModel) {
     var menu by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 4.dp).testTag("home_screen_top_bar"), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-            Image(painterResource(R.drawable.ic_launcher_tile), contentDescription = "FilmCraft", modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)))
+    Row(Modifier.fillMaxWidth().height(88.dp).padding(horizontal = 4.dp).testTag("home_screen_top_bar"), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.padding(vertical = 8.dp)) {
+            Text("Projects", style = FcType.GalleryTitle, color = Fc.Title, modifier = Modifier.testTag("home_your_projects_header"))
+            Text("FilmCraft", style = FcType.Caption, color = Fc.Secondary)
         }
         Spacer(Modifier.weight(1f))
         Box {
@@ -193,17 +229,25 @@ fun cardDuration(ticks: Long): String {
 
 @Composable
 private fun ProjectCard(vm: AppViewModel, p: ProjectEntry) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var menu by remember { mutableStateOf(false) }
     val poster by produceState<ImageBitmap?>(null, p.id, p.opened) {
-        value = withContext(Dispatchers.IO) { runCatching { BitmapFactory.decodeFile(p.poster.absolutePath)?.asImageBitmap() }.getOrNull() }
+        value = withContext(Dispatchers.IO) { runCatching {
+            if (p.sourceUri != null) {
+                android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(context.contentResolver, android.net.Uri.parse(p.sourceUri))) { decoder, info, _ ->
+                    decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                    val scale = minOf(1f, 400f / maxOf(info.size.width, info.size.height))
+                    decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
+                }.asImageBitmap()
+            } else BitmapFactory.decodeFile(p.poster.absolutePath)?.asImageBitmap()
+        }.getOrNull() }
     }
-    Column(Modifier.width(100.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         Box(
             Modifier
-                .size(100.dp)
+                .fillMaxWidth().aspectRatio(1f)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Fc.Raised)
-                .border(1.dp, Fc.Hairline, RoundedCornerShape(12.dp))
                 .clickable(role = Role.Button) { vm.openProject(p) }
                 .testTag("home_project_${p.id}"),
         ) {
@@ -211,7 +255,7 @@ private fun ProjectCard(vm: AppViewModel, p: ProjectEntry) {
             Box(
                 Modifier.align(Alignment.TopEnd).padding(6.dp).clip(CircleShape).background(Fc.Layer1.copy(alpha = 0.7f)).padding(horizontal = 6.dp, vertical = 1.dp),
             ) {
-                Text(cardDuration(p.duration), style = FcType.Badge, color = Fc.Title)
+                Text(if (p.kind == "video") cardDuration(p.duration) else if (p.kind == "drawing") "Drawing" else "Picture", style = FcType.Badge, color = Fc.Title)
             }
             Box(Modifier.align(Alignment.BottomEnd).padding(4.dp)) {
                 Box(
@@ -233,7 +277,8 @@ private fun ProjectCard(vm: AppViewModel, p: ProjectEntry) {
             }
         }
         Spacer(Modifier.height(5.dp))
-        Text(p.name, style = FcType.Caption, color = Fc.Detail, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(p.name, style = FcType.Label, color = Fc.Title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("${p.width} × ${p.height}", style = FcType.Caption, color = Fc.Detail)
     }
 }
 
@@ -241,8 +286,8 @@ private fun ProjectCard(vm: AppViewModel, p: ProjectEntry) {
 private fun RenameDialog(vm: AppViewModel, p: ProjectEntry) {
     var name by remember(p.id) { mutableStateOf(p.name) }
     val ok = name.trim().isNotEmpty() && name.trim() != p.name
-    FcDialog("Rename project", "Save", { if (ok) vm.rename(p, name) }, { vm.renaming = null }, confirmEnabled = ok) {
-        Text("Project name", style = FcType.Caption, color = Fc.Detail)
+    FcDialog("Rename ${if (p.kind == "video") "project" else if (p.kind == "drawing") "drawing" else "picture"}", "Save", { if (ok) vm.rename(p, name) }, { vm.renaming = null }, confirmEnabled = ok) {
+        Text("Name", style = FcType.Caption, color = Fc.Detail)
         Spacer(Modifier.height(8.dp))
         androidx.compose.foundation.text.BasicTextField(
             value = name,

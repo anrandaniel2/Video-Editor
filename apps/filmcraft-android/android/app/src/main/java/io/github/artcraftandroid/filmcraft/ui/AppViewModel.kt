@@ -99,7 +99,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     }
 
     fun refreshProjects() {
-        viewModelScope.launch { projectList = withContext(Dispatchers.IO) { projects.list() } }
+        viewModelScope.launch { runCatching { withContext(Dispatchers.IO) { projects.list() } }.onSuccess { projectList = it }.onFailure { tell(it.userMessage) } }
     }
 
     // ---- EditorHost ----
@@ -148,7 +148,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         if (width !in 64..4096 || height !in 64..4096 || width.toLong() * height > 4_194_304) { tell("Choose a canvas up to 4 megapixels."); return }
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
         viewModelScope.launch {
-            val p = withContext(Dispatchers.IO) { projects.create("Drawing", width, height) }
+            val p = withContext(Dispatchers.IO) { projects.createTemporary("Drawing", width, height) }
             open(e, p, fresh = true)
             editor?.let { it.blankDrawing = true; it.standaloneDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
         }
@@ -160,7 +160,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         when (how) {
             NewProject.Blank, NewProject.Drawing -> viewModelScope.launch {
                 val (w, h) = if (how == NewProject.Drawing) 1080 to 1080 else 1080 to 1920
-                val p = withContext(Dispatchers.IO) { projects.create(projects.todaysName(), w, h) }
+                val p = withContext(Dispatchers.IO) { if (how == NewProject.Drawing) projects.createTemporary("Drawing", w, h) else projects.create(projects.todaysName(), w, h) }
                 open(e, p, fresh = true)
                 if (how == NewProject.Drawing) editor?.let { it.blankDrawing = true; it.standaloneDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
             }
@@ -222,9 +222,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         return size[0].toInt() to size[1].toInt()
     }
 
+    /** Import a photo into the layered drawing editor, not into a video timeline. */
+    fun importPicture() {
+        val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
+        pick(PickKind.Picture) { uris ->
+            val uri = uris.firstOrNull() ?: return@pick
+            viewModelScope.launch {
+                val (w, h) = withContext(Dispatchers.IO) { frameFor(uri) }
+                val temporary = withContext(Dispatchers.IO) { projects.createTemporary("Picture", w, h) }
+                open(e, temporary, fresh = true)
+                editor?.let { ed ->
+                    ed.blankDrawing = true
+                    ed.standaloneDrawing = true
+                    ed.drawingPicture = uri
+                    ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
+                }
+            }
+        }
+    }
+
     fun openProject(p: ProjectEntry) {
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
-        viewModelScope.launch { open(e, p, fresh = false) }
+        viewModelScope.launch {
+            if (p.kind == "video") open(e, p, fresh = false)
+            else {
+                val temporary = withContext(Dispatchers.IO) { projects.createTemporary(p.name, p.width, p.height) }
+                open(e, temporary, fresh = true)
+                editor?.let { ed ->
+                    ed.blankDrawing = true
+                    ed.standaloneDrawing = true
+                    if (p.kind == "drawing") ed.drawingArtwork = io.github.artcraftandroid.procraft.gallery.Artwork(p.dir, p.name, p.width, p.height, p.opened)
+                    else ed.drawingPicture = Uri.parse(p.sourceUri)
+                    ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
+                }
+            }
+        }
     }
 
     private suspend fun open(e: Engine, p: ProjectEntry, fresh: Boolean) {
@@ -257,7 +289,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     fun rename(p: ProjectEntry, name: String) {
         renaming = null
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { projects.rename(p, name) }
+            runCatching { withContext(Dispatchers.IO) { projects.rename(p, name) } }.onFailure { tell(it.userMessage) }
             refreshProjects()
         }
     }
@@ -272,7 +304,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     fun delete(p: ProjectEntry) {
         deleting = null
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { projects.delete(p) }
+            runCatching { withContext(Dispatchers.IO) { projects.delete(p) } }.onFailure { tell(it.userMessage) }
             refreshProjects()
         }
     }

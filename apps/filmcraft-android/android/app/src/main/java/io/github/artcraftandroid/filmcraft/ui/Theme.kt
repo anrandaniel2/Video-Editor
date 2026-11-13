@@ -26,18 +26,19 @@ val Inter = FontFamily(
  * the timeline's clips coloured by kind.
  */
 object Fc {
+    val Gallery = Color(0xFF212121)
     // surfaces
-    val Black = Color(0xFF000000)
+    val Black = Color(0xFF1C1C1C)
     /** Full-screen pages over the editor (export). */
-    val Layer1 = Color(0xFF1B1B1B)
+    val Layer1 = Color(0xFF212121)
     /** Bottom panels, dialogs, menus, the text strip. */
-    val Panel = Color(0xFF232323)
+    val Panel = Color(0xFF262626)
     /** Rows and cards on panels. */
-    val Raised = Color(0xFF2C2C2C)
+    val Raised = Color(0xFF303030)
     /** The band behind the navigation buttons under a panel. */
-    val PanelBand = Color(0xFF171717)
+    val PanelBand = Color(0xFF212121)
     /** Timeline lanes. */
-    val Lane = Color(0xFF111111)
+    val Lane = Color(0xFF191919)
     val Hover = Color(0x1CFFFFFF)
     val Hairline = Color(0x24FFFFFF)
     val Scrim = Color(0x99000000)
@@ -46,25 +47,25 @@ object Fc {
 
     // text and icons
     val Title = Color(0xFFF2F2F2)
-    val Body = Color(0xFFDBDBDB)
+    val Body = Color(0xFFFFFFFF)
     val Secondary = Color(0xFFAFAFAF)
     val Detail = Color(0xFF8A8A8A)
     val Disabled = Color(0xFF444444)
-    val Icon = Color(0xFFDBDBDB)
+    val Icon = Color(0xFFFFFFFF)
 
     // accent
-    val Accent = Color(0xFF4069FD)
-    val AccentLight = Color(0xFF5681FF)
+    val Accent = Color(0xFF0076FD)
+    val AccentLight = Color(0xFF3294FF)
     val Negative = Color(0xFFFC432E)
     val Recording = Color(0xFFF83A2B)
 
     // controls
     val SliderOn = Color(0xFFD0D0D0)
-    val SliderOff = Color(0xFF4B4B4B)
+    val SliderOff = Color(0xFF484848)
     val SliderDisabled = Color(0xFF323232)
     val ThumbFill = Color(0xFF0E0E0E)
     val ThumbRing = Color(0xFFEBEBEB)
-    val PillButton = Color(0xFF4B4B4B)
+    val PillButton = Color(0xFF484848)
     val Handle = Color(0x66CAC4D0)
     val Chip = Color(0xFF393939)
     val Divider = Color(0xFF444444)
@@ -109,7 +110,7 @@ object Fc {
 /** FilmCraft's text styles: Inter, no tracking, the sizes the screens use. */
 object FcType {
     private fun s(size: Int, weight: FontWeight, line: Float = 1.3f) =
-        TextStyle(fontFamily = Inter, fontSize = size.sp, lineHeight = (size * line).sp, fontWeight = weight, letterSpacing = 0.sp)
+        TextStyle(fontFamily = Inter, fontSize = size.sp, lineHeight = (size * line).sp, fontWeight = weight, letterSpacing = (-0.25).sp)
 
     val PanelTitle = s(20, FontWeight.Bold)
     val DialogTitle = s(20, FontWeight.Bold)
@@ -123,21 +124,22 @@ object FcType {
     val Badge = s(11, FontWeight.Normal)
     val Ruler = s(14, FontWeight.Normal)
     val ClipLabel = s(11, FontWeight.Normal)
-    val Header = s(18, FontWeight.Bold)
+    val Header = s(20, FontWeight.Bold)
+    val GalleryTitle = s(32, FontWeight.Bold, 1.15f)
     val Button = s(16, FontWeight.Bold)
 }
 
 /** Sizes shared by the screens. */
 object FcSize {
     val TopBar = 48.dp
-    val TopButton = 40.dp
+    val TopButton = 44.dp
     val Transport = 48.dp
     val FrameBar = 96.dp
     val ToolTile = 80.dp
-    val ToolChip = 40.dp
-    val PanelCorner = 28.dp
+    val ToolChip = 44.dp
+    val PanelCorner = 20.dp
     val PanelInset = 12.dp
-    val PanelPadding = 24.dp
+    val PanelPadding = 20.dp
     val MainTrack = 64.dp
     val Track = 48.dp
     val TrackGap = 2.dp
@@ -160,5 +162,16 @@ fun FilmcraftTheme(content: @Composable () -> Unit) {
         surfaceContainerHigh = Fc.Panel,
         error = Fc.Negative,
     )
-    MaterialTheme(colorScheme = colors, content = content)
+    io.github.artcraftandroid.procraft.ui.ProCraftTheme {
+        MaterialTheme(
+            colorScheme = colors,
+            shapes = androidx.compose.material3.Shapes(
+                small = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                medium = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                large = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+            ),
+            content = content,
+        )
+    }
 }

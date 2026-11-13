@@ -76,13 +76,8 @@ fun TopBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (vm.hostClose != null) {
-                Row(Modifier.size(Pc.GalleryWidth, Pc.BarButtonHeight), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f).height(Pc.BarButtonHeight).tap { vm.closeArtwork() }, contentAlignment = Alignment.Center) {
-                        Icon(PcIcons.Cross, contentDescription = "Save drawing and close", tint = Pc.BarText, modifier = Modifier.size(24.dp))
-                    }
-                    Box(Modifier.weight(1f).height(Pc.BarButtonHeight).tap { vm.closeArtworkToGallery() }, contentAlignment = Alignment.Center) {
-                        Icon(PcIcons.MenuGrid, contentDescription = "Artwork gallery", tint = Pc.BarText, modifier = Modifier.size(24.dp))
-                    }
+                Box(Modifier.size(Pc.GalleryWidth, Pc.BarButtonHeight).tap { vm.closeArtwork() }, contentAlignment = Alignment.CenterStart) {
+                    Icon(PcIcons.Cross, contentDescription = "Save drawing and return to Projects", tint = Pc.BarText, modifier = Modifier.size(28.dp))
                 }
             } else {
                 Box(Modifier.size(Pc.GalleryWidth, Pc.BarButtonHeight).tap { vm.closeArtwork() }, contentAlignment = Alignment.CenterStart) {

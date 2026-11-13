@@ -25,9 +25,12 @@ data class ProjectEntry(
     val width: Int,
     val height: Int,
     val dir: File,
+    val kind: String = "video",
+    val sourceUri: String? = null,
+    val temporary: Boolean = false,
 ) {
     val projectFile: File get() = File(dir, PROJECT_FILE)
-    val poster: File get() = File(dir, POSTER_FILE)
+    val poster: File get() = File(dir, if (kind == "drawing") "thumbnail.png" else POSTER_FILE)
     val mediaDir: File get() = File(dir, MEDIA_DIR)
 
     companion object {
@@ -46,10 +49,12 @@ data class ProjectEntry(
 class Projects(private val context: Context) {
     private val root = File(context.filesDir, "projects").apply { mkdirs() }
 
-    /** Every project, last opened first. */
+    private val savedVisuals = SavedVisuals(context)
+
+    /** Every project, drawing and owned picture, newest first. */
     @Synchronized
     fun list(): List<ProjectEntry> =
-        root.listFiles { f -> f.isDirectory }.orEmpty().mapNotNull { read(it) }.sortedByDescending { it.opened }
+        (root.listFiles { f -> f.isDirectory }.orEmpty().mapNotNull { read(it) }.filterNot { it.temporary } + savedVisuals.list()).sortedByDescending { it.opened }
 
     fun find(id: String): ProjectEntry? = read(File(root, id))
 
@@ -67,13 +72,16 @@ class Projects(private val context: Context) {
                 width = j.optInt("width", 1080),
                 height = j.optInt("height", 1920),
                 dir = dir,
+                temporary = j.optBoolean("temporary", false),
             )
         }.getOrNull()
     }
 
     @Synchronized
     fun write(p: ProjectEntry) {
+        if (p.kind != "video") return
         val j = JSONObject()
+            .put("temporary", p.temporary)
             .put("name", p.name)
             .put("opened", p.opened)
             .put("created", p.created)
@@ -101,6 +109,13 @@ class Projects(private val context: Context) {
         return p
     }
 
+    /** Hidden video-engine shell used only while the standalone drawing UI is open. */
+    fun createTemporary(name: String, width: Int, height: Int): ProjectEntry {
+        val p = create(name, width, height).copy(temporary = true)
+        write(p)
+        return p
+    }
+
     /** Today's date in the medium style ("Oct 13, 2026"): what a new project is called. */
     fun todaysName(): String = DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date())
 
@@ -114,6 +129,7 @@ class Projects(private val context: Context) {
     }
 
     fun rename(p: ProjectEntry, name: String): ProjectEntry {
+        if (p.kind != "video") { savedVisuals.rename(p, name.trim()); return p.copy(name = name.trim()) }
         val r = p.copy(name = name.trim())
         write(r)
         return r
@@ -122,6 +138,7 @@ class Projects(private val context: Context) {
     /** A copy of [p] named "<name> copy", with its own media. */
     @Synchronized
     fun duplicate(p: ProjectEntry): ProjectEntry {
+        if (p.kind != "video") { savedVisuals.duplicate(p); return p }
         val id = UUID.randomUUID().toString()
         val dir = File(root, id)
         p.dir.copyRecursively(dir, overwrite = true)
@@ -140,6 +157,7 @@ class Projects(private val context: Context) {
 
     @Synchronized
     fun delete(p: ProjectEntry) {
+        if (p.kind != "video") { savedVisuals.delete(p); return }
         p.dir.deleteRecursively()
     }
 

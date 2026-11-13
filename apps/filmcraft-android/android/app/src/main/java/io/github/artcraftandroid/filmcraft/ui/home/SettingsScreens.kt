@@ -63,12 +63,12 @@ private const val SOURCE_URL = "https://github.com/storytold/filmcraft"
 @Composable
 private fun Page(title: String, onClose: () -> Unit, tag: String, content: @Composable () -> Unit) {
     BackHandler(onBack = onClose)
-    Column(Modifier.fillMaxSize().background(Fc.Black).statusBarsPadding().navigationBarsPadding().testTag(tag)) {
+    Column(Modifier.fillMaxSize().background(Fc.Gallery).statusBarsPadding().navigationBarsPadding().testTag(tag)) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             FcIconButton(LucideIcons.X.glyph(), "Close", onClose)
         }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
-            Text(title, style = FcType.PanelTitle.copy(fontSize = FcType.PanelTitle.fontSize * 1.3f), color = Fc.Title)
+            Text(title, style = FcType.GalleryTitle, color = Fc.Title)
             Spacer(Modifier.height(24.dp))
             content()
             Spacer(Modifier.height(24.dp))
@@ -79,7 +79,7 @@ private fun Page(title: String, onClose: () -> Unit, tag: String, content: @Comp
 @Composable
 private fun Row48(label: String, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(12.dp)).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).heightIn(min = 52.dp).clip(RoundedCornerShape(14.dp)).background(Fc.Panel).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = FcType.Body, color = Fc.Body, modifier = Modifier.weight(1f))

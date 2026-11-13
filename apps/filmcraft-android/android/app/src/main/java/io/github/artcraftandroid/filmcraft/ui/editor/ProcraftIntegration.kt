@@ -22,6 +22,7 @@ import io.github.artcraftandroid.procraft.canvas.CanvasViewModel
 import io.github.artcraftandroid.procraft.canvas.TextRenderer
 import io.github.artcraftandroid.procraft.ui.*
 import java.io.File
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,12 +71,15 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var initialised by remember { mutableStateOf(false) }
     var completed by remember { mutableStateOf(false) }
-    var openedOnce by remember { mutableStateOf(false) }
-    LaunchedEffect(vm.session) { if (vm.session != null) openedOnce = true }
     LaunchedEffect(vm) {
         var input: File? = null
         try {
-            if (frame == null) {
+            if (ed.drawingArtwork != null) {
+                vm.openArtwork(requireNotNull(ed.drawingArtwork))
+                snapshotFlow { vm.opening }.first { !it }
+            } else if (ed.drawingPicture != null) {
+                vm.newFromPicture(requireNotNull(ed.drawingPicture))?.join()
+            } else if (frame == null) {
                 vm.newArtwork(ed.timeline?.width?.toInt() ?: 1080, ed.timeline?.height?.toInt() ?: 1920)?.join()
             } else {
                 input = File(context.cacheDir, "procraft-input-${java.util.UUID.randomUUID()}.png")
@@ -143,15 +147,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
         }
         CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
             Box(Modifier.fillMaxSize().background(Color.Black).procraftKeys(vm, doubleTaps)) {
-                if (vm.session != null || (openedOnce && vm.screen == io.github.artcraftandroid.procraft.canvas.Screen.GALLERY)) {
-                    AppRoot(vm)
-                    if (vm.session == null) {
-                        BackHandler { requestClose() }
-                        IconButton(onClick = requestClose, modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp)) {
-                            Icon(PcIcons.Cross, contentDescription = "Return to FilmCraft", tint = Color.White)
-                        }
-                    }
-                }
+                if (vm.session != null) AppRoot(vm)
                 else Column(Modifier.fillMaxSize().padding(24.dp)) {
                     Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
                     TextButton(onClick = { if (standalone) ed.closeEditor() else close() }) { Text("Close") }

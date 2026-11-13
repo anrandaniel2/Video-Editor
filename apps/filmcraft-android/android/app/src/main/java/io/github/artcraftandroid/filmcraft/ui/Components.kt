@@ -117,19 +117,19 @@ fun ToolTile(
         Box(
             Modifier.size(FcSize.ToolChip).clip(RoundedCornerShape(4.dp)).background(
                 when {
-                    active -> Color.White
+                    active -> Fc.Accent.copy(alpha = .15f)
                     else -> Color.Transparent
                 },
             ),
             contentAlignment = Alignment.Center,
         ) {
-            GlyphIcon(glyph, if (!enabled) Fc.Disabled else if (active) Fc.Panel else Fc.Icon)
+            GlyphIcon(glyph, if (!enabled) Fc.Disabled else if (active) Fc.Accent else Fc.Icon)
         }
         Spacer(Modifier.height(0.5.dp))
         Text(
             label,
             style = FcType.ToolLabel,
-            color = if (enabled) Fc.Body else Fc.Disabled,
+            color = if (!enabled) Fc.Disabled else if (active) Fc.Accent else Fc.Body,
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -393,7 +393,7 @@ fun FcDialog(
                 .padding(horizontal = 32.dp)
                 .widthIn(max = 480.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(28.dp))
+                .clip(RoundedCornerShape(20.dp))
                 .background(Fc.Panel)
                 .padding(24.dp),
         ) {
