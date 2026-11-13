@@ -276,6 +276,8 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
     var brushFamily by remember { mutableStateOf("All") }
     var penPressure by remember { mutableStateOf(true) }
     var penCursor by remember { mutableStateOf(true) }
+    var hardwareMsaa by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(Unit) { hardwareMsaa = withContext(Dispatchers.IO) { io.github.artcraftandroid.filmcraft.core.drawingHardwareMsaaAvailable() } }
     var stabilizer by remember { mutableFloatStateOf(0f) }
     var pressureResponse by remember { mutableFloatStateOf(1f) }
     var shape by remember { mutableStateOf("Circle") }
@@ -376,6 +378,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                             Checkbox(penCursor, { penCursor = it; view.showPenCursor = it; view.invalidate() })
                             Text("Pen hover cursor", color = Color.White, style = MaterialTheme.typography.labelSmall)
                         }
+                        Text(when (hardwareMsaa) { true -> "Pen & eraser · GPU 4× MSAA"; false -> "GPU unavailable · software coverage"; null -> "Starting GPU canvas…" }, color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.labelSmall)
                         Text("Stroke control", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Stabilizer", color = Color.White, modifier = Modifier.width(100.dp), style = MaterialTheme.typography.labelSmall)

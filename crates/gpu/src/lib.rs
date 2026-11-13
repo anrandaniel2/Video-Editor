@@ -39,6 +39,7 @@ use filmcraft_render::Blend;
 use filmcraft_render::plan::{DeviceCaps, FramePlan, PlanLayer, PlanStep};
 
 pub mod scene3d;
+pub mod drawing;
 pub mod adapter;
 pub mod export_renderer;
 pub mod fx;

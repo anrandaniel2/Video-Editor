@@ -116,7 +116,13 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         c.drawCircle(cursor.x, cursor.y, 1.5f * resources.displayMetrics.density, p)
     }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    init { setLayerType(LAYER_TYPE_SOFTWARE, null) }
+    private var liveLayer: Bitmap? = null
+    private data class CoverageKey(val path: Path, val width: Float)
+    private data class CoverageTile(val bitmap: Bitmap, val x: Float, val y: Float)
+    private val coverageMasks = object : android.util.LruCache<CoverageKey, CoverageTile>(8 * 1024 * 1024) {
+        override fun sizeOf(key: CoverageKey, value: CoverageTile) = value.bitmap.allocationByteCount
+    }
+    init { setLayerType(LAYER_TYPE_HARDWARE, null) }
     private fun blank() = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888)
     private fun copy(b: Bitmap) = b.copy(Bitmap.Config.ARGB_8888, true)!!
     private fun fit() = min(width.toFloat() / canvasW, height.toFloat() / canvasH)
@@ -264,12 +270,22 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         backgroundFrame?.let { c.drawBitmap(it, null, Rect(0, 0, canvasW, canvasH), paint) }
         images.forEachIndexed { i, image ->
             val saved = c.saveLayer(0f, 0f, canvasW.toFloat(), canvasH.toFloat(), null)
-            c.drawBitmap(image, 0f, 0f, null)
-            if (i == layer) {
-                if (transformMode != null) transformed(c)
-                stroke?.let { path -> if (tool == "Brush" || tool == "Eraser") drawStroke(c, path) }
-                if (tool == "Shapes") shapes.path()?.let { shapeStroke(c, it) }
+            if (i == layer && c.isHardwareAccelerated && stroke != null) {
+                // Legacy patterned brushes require a software layer for blur/mask filters.
+                // The screen still composites via HWUI; standard pen/eraser coverage uses wgpu MSAA.
+                val tile = liveLayer ?: blank().also { liveLayer = it }
+                tile.eraseColor(Color.TRANSPARENT)
+                val raster = Canvas(tile); raster.drawBitmap(image, 0f, 0f, null)
+                stroke?.let { path -> if (tool == "Brush" || tool == "Eraser") drawStroke(raster, path) }
+                c.drawBitmap(tile, 0f, 0f, paint.apply { reset(); isFilterBitmap = true })
+            } else {
+                c.drawBitmap(image, 0f, 0f, null)
+                if (i == layer) {
+                    if (transformMode != null) transformed(c)
+                    stroke?.let { path -> if (tool == "Brush" || tool == "Eraser") drawStroke(c, path) }
+                }
             }
+            if (i == layer && tool == "Shapes") shapes.path()?.let { shapeStroke(c, it) }
             c.restoreToCount(saved)
         }
         paint.reset(); paint.isAntiAlias = true; paint.color = Color.CYAN; paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f / (fit() * zoom)
@@ -293,6 +309,13 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     override fun onDraw(canvas: Canvas) { drawScene(canvas); drawPenCursor(canvas); backdropObservers.forEach { it.postInvalidateOnAnimation() } }
     /** Android flattens its UI path; coverage generation and multisample resolve are Rust. */
     private fun drawNativeCoverage(c: Canvas, path: Path, width: Float, strength: Float): Boolean {
+        val key = CoverageKey(path, width)
+        coverageMasks.get(key)?.let { mask ->
+            val p = Paint().apply { color = inkColor; alpha = (strength * Color.alpha(inkColor)).toInt().coerceIn(0,255)
+                if (eraserStroke) { alpha = (strength * 255).toInt().coerceIn(0,255); xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) } }
+            c.drawBitmap(mask.bitmap, mask.x, mask.y, p)
+            return true
+        }
         val measure = PathMeasure(path, false)
         val points = ArrayList<DrawingStrokePoint>()
         val position = FloatArray(2)
@@ -318,7 +341,8 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                 if (eraserStroke) { alpha = (strength * 255).toInt().coerceIn(0, 255); xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
             }
             c.drawBitmap(mask, tile.left.toFloat(), tile.top.toFloat(), p)
-        } finally { mask.recycle() }
+        } catch (e: Exception) { mask.recycle(); throw e }
+        coverageMasks.put(key, CoverageTile(mask, tile.left.toFloat(), tile.top.toFloat()))
         return true
     }
 
@@ -368,6 +392,8 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         mergeSelection(added, "Add")
     }
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        // The current path is mutable; immutable pressure segments can keep cached coverage.
+        stroke?.let { path -> coverageMasks.snapshot().keys.filter { it.path === path }.forEach { coverageMasks.remove(it) } }
         updatePenCursor(e)
         if (e.actionMasked == MotionEvent.ACTION_CANCEL) penCursor = null
         parent?.requestDisallowInterceptTouchEvent(true)
@@ -465,6 +491,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     }
     fun dispose() {
         penCursor = null
+        liveLayer?.recycle(); liveLayer = null; coverageMasks.evictAll()
         images.forEach { it.recycle() }; disposeEdits(history); disposeEdits(future); clipboard?.recycle(); source?.recycle(); original?.recycle(); meshSource?.recycle(); strokeBefore?.recycle()
     }
 }

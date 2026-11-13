@@ -1,6 +1,10 @@
 //! Native drawing input dynamics. Android supplies pen samples and displays the result.
 //! This is the first extracted part of the drawing engine, not a Krita compatibility layer.
 
+/// Reports the real GPU painter, rather than presenting software coverage as hardware MSAA.
+#[uniffi::export]
+pub fn drawing_hardware_msaa_available() -> bool { filmcraft_gpu::drawing::available() }
+
 #[derive(Clone, Copy, Debug, uniffi::Record)]
 pub struct DrawingInput {
     pub x: f32,
@@ -74,9 +78,9 @@ pub struct DrawingCoverage {
     pub alpha: Vec<u8>,
 }
 
-/// Four fixed coverage samples per pixel, with one shading/alpha operation after resolving.
+/// Hardware four-sample rasterization when available, with software coverage fallback.
 /// Capsules union sample masks before resolve, avoiding dark seams at segment joins.
-/// This is software coverage MSAA for strokes, not a hardware GPU render target.
+/// The GPU path uses an actual 4x multisampled attachment and hardware resolve.
 #[uniffi::export]
 pub fn drawing_stroke_coverage(points: Vec<DrawingStrokePoint>, width: u32, height: u32) -> Option<DrawingCoverage> {
     if points.is_empty() || points.len() > 8192 || width == 0 || height == 0 || u64::from(width) * u64::from(height) > 4_194_304 { return None; }
@@ -88,6 +92,10 @@ pub fn drawing_stroke_coverage(points: Vec<DrawingStrokePoint>, width: u32, heig
     if right <= left || bottom <= top { return None; }
     let w = (right - left) as usize;
     let h = (bottom - top) as usize;
+    let gpu_points: Vec<[f32; 3]> = points.iter().map(|p| [p.x, p.y, p.radius]).collect();
+    if let Some(alpha) = filmcraft_gpu::drawing::coverage(&gpu_points, left, top, w as u32, h as u32) {
+        return Some(DrawingCoverage { left, top, width: w as u32, height: h as u32, alpha });
+    }
     let mut coverage = vec![0u8; w * h];
     let samples = [(0.25f32, 0.25f32), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
     let mut work = 0u64;
