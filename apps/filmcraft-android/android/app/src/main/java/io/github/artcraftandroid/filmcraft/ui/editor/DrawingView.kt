@@ -5,6 +5,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import io.github.artcraftandroid.filmcraft.core.DrawingStrokePoint
 import io.github.artcraftandroid.filmcraft.core.drawingStrokeCoverage
+import io.github.artcraftandroid.filmcraft.core.drawingFilterRgba
+import io.github.artcraftandroid.filmcraft.core.drawingFloodFill
+import io.github.artcraftandroid.filmcraft.core.drawingBlendColor
+import io.github.artcraftandroid.filmcraft.core.drawingSymmetryMatrices
 import io.github.artcraftandroid.filmcraft.core.DrawingInput
 import io.github.artcraftandroid.filmcraft.core.drawingStrokeSamples
 import android.content.Context
@@ -21,13 +25,71 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     private data class Edit(val layer: Int, val before: Bitmap?)
     private val history = ArrayDeque<Edit>()
     private val future = ArrayDeque<Edit>()
-    val canUndo get() = (history.isNotEmpty() || shapes.pending) && transformMode == null
-    val canRedo get() = future.isNotEmpty() && transformMode == null && !shapes.pending
+    val canUndo get() = !operationBusy && (history.isNotEmpty() || shapes.pending) && transformMode == null
+    val canRedo get() = !operationBusy && future.isNotEmpty() && transformMode == null && !shapes.pending
     var inkColor = Color.BLACK
     var brushSize = 12f
     var usePressure = true
     var stabilization = 0f
     var pressureCurve = 1f
+    var symmetryMode = 0u
+    var operationBusy by mutableStateOf(false)
+        private set
+    private fun rgba(image: Bitmap): ByteArray {
+        val pixels = IntArray(canvasW * canvasH); image.getPixels(pixels, 0, canvasW, 0, 0, canvasW, canvasH)
+        return ByteArray(pixels.size * 4).also { bytes -> pixels.forEachIndexed { i, c ->
+            bytes[i*4] = Color.red(c).toByte(); bytes[i*4+1] = Color.green(c).toByte(); bytes[i*4+2] = Color.blue(c).toByte(); bytes[i*4+3] = Color.alpha(c).toByte()
+        } }
+    }
+    private fun replacePixels(bytes: ByteArray) {
+        require(bytes.size == canvasW * canvasH * 4)
+        val pixels = IntArray(canvasW * canvasH) { i -> Color.argb(bytes[i*4+3].toInt() and 255, bytes[i*4].toInt() and 255, bytes[i*4+1].toInt() and 255, bytes[i*4+2].toInt() and 255) }
+        val before = copy(images[layer]); val result = blank()
+        try {
+            result.setPixels(pixels, 0, canvasW, 0, 0, canvasW, canvasH)
+            val c = Canvas(images[layer]); c.save(); selection?.let { c.clipPath(it) }
+            c.drawBitmap(result, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }); c.restore()
+            record(before)
+        } catch (e: Exception) { before.recycle(); throw e }
+        finally { result.recycle() }
+        changed()
+    }
+    suspend fun applyFilter(operation: String, amount: Float) {
+        if (operationBusy || transformMode != null || stroke != null) return
+        operationBusy = true
+        try {
+            val index = layer; val input = rgba(images[index])
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { drawingFilterRgba(input, canvasW.toUInt(), canvasH.toUInt(), operation, amount) }
+            require(index == layer && transformMode == null) { "The selected layer changed. Apply the filter again." }
+            replacePixels(result)
+        } finally { operationBusy = false }
+    }
+    suspend fun blendColor(mode: UInt) {
+        if (operationBusy || transformMode != null || stroke != null) return
+        operationBusy = true
+        try {
+            val index = layer; val input = rgba(images[index]); val strength = opacity
+            val color = byteArrayOf(Color.red(inkColor).toByte(), Color.green(inkColor).toByte(), Color.blue(inkColor).toByte(), Color.alpha(inkColor).toByte())
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { drawingBlendColor(input, canvasW.toUInt(), canvasH.toUInt(), color, strength, mode) }
+            require(index == layer && transformMode == null) { "The selected layer changed. Apply the blend again." }
+            replacePixels(result)
+        } finally { operationBusy = false }
+    }
+    private fun selectionBytes(): ByteArray {
+        val path = selection ?: return ByteArray(0)
+        val mask = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ALPHA_8)
+        try {
+            Canvas(mask).drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL })
+            val buffer = java.nio.ByteBuffer.allocate(mask.rowBytes * mask.height)
+            mask.copyPixelsToBuffer(buffer)
+            val bytes = buffer.array()
+            return ByteArray(canvasW * canvasH).also { out -> for (row in 0 until canvasH) bytes.copyInto(out, row * canvasW, row * mask.rowBytes, row * mask.rowBytes + canvasW) }
+        } finally { mask.recycle() }
+    }
+    private fun fill(x: Int, y: Int) {
+        val color = byteArrayOf(Color.red(inkColor).toByte(), Color.green(inkColor).toByte(), Color.blue(inkColor).toByte(), (Color.alpha(inkColor) * opacity).toInt().toByte())
+        replacePixels(drawingFloodFill(rgba(images[layer]), canvasW.toUInt(), canvasH.toUInt(), x.toUInt(), y.toUInt(), color, wandTolerance.coerceIn(0, 255).toUByte(), selectionBytes()))
+    }
     private data class PressureSegment(val path: Path, val pressure: Float)
     private val pressureSegments = mutableListOf<PressureSegment>()
     private var pressureStroke = false
@@ -47,9 +109,9 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     var tool = "Brush"
         set(value) { if (field != value) shapes.clear(); field = value }
     var layer = 0
-        set(value) { shapes.clear(); if (transformMode != null) finishTransform(false); field = value.coerceIn(0, images.lastIndex); clearSelection() }
+        set(value) { if (operationBusy) return; shapes.clear(); if (transformMode != null) finishTransform(false); field = value.coerceIn(0, images.lastIndex); clearSelection() }
     val layers get() = images.size
-    val canAddLayer get() = images.size < 16 && transformMode == null && (images.size + 1L) * canvasW * canvasH * 4 <= 96L * 1024 * 1024
+    val canAddLayer get() = !operationBusy && images.size < 16 && transformMode == null && (images.size + 1L) * canvasW * canvasH * 4 <= 96L * 1024 * 1024
     var currentLayerOnly = false
     var selectionMode = "Add"
     var wandTolerance = 16
@@ -347,7 +409,15 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
     }
 
     private fun drawStroke(c: Canvas, path: Path) {
-        c.save(); selection?.let { c.clipPath(it) }
+        drawStrokeOnce(c, path)
+        for (values in drawingSymmetryMatrices(canvasW.toFloat(), canvasH.toFloat(), symmetryMode)) {
+            c.save(); selection?.let { c.clipPath(it) }
+            c.concat(Matrix().apply { setValues(values.toFloatArray()) })
+            drawStrokeOnce(c, path, clipSelection = false); c.restore()
+        }
+    }
+    private fun drawStrokeOnce(c: Canvas, path: Path, clipSelection: Boolean = true) {
+        c.save(); if (clipSelection) selection?.let { c.clipPath(it) }
         fun draw(path: Path, pressure: Float) {
             val width = brushSize * if (pressureStroke) .1f + .9f * sqrt(pressure) else 1f
             val strength = opacity * if (pressureStroke) .45f + .55f * pressure else 1f
@@ -392,6 +462,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
         mergeSelection(added, "Add")
     }
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (operationBusy) return true
         // The current path is mutable; immutable pressure segments can keep cached coverage.
         stroke?.let { path -> coverageMasks.snapshot().keys.filter { it.path === path }.forEach { coverageMasks.remove(it) } }
         updatePenCursor(e)
@@ -439,6 +510,11 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, val c
                 if (x < 0 || x >= canvasW || y < 0 || y >= canvasH) return true
                 lastX = x; lastY = y
                 if (tool == "Magic wand") { wand(x.toInt(), y.toInt()); return true }
+                if (tool == "Fill") {
+                    try { fill(x.toInt(), y.toInt()) }
+                    catch (e: Exception) { android.widget.Toast.makeText(context, e.message ?: "Fill failed", android.widget.Toast.LENGTH_LONG).show() }
+                    return true
+                }
                 strokeBefore = if (tool == "Lasso") null else copy(images[layer])
                 val pen = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
                 pressureStroke = usePressure && pen && (tool == "Brush" || tool == "Eraser")

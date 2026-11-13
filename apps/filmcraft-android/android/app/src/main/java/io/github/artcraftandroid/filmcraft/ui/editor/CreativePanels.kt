@@ -280,6 +280,10 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
     LaunchedEffect(Unit) { hardwareMsaa = withContext(Dispatchers.IO) { io.github.artcraftandroid.filmcraft.core.drawingHardwareMsaaAvailable() } }
     var stabilizer by remember { mutableFloatStateOf(0f) }
     var pressureResponse by remember { mutableFloatStateOf(1f) }
+    var filterOperation by remember { mutableStateOf("grayscale") }
+    var filterAmount by remember { mutableFloatStateOf(.5f) }
+    var rasterError by remember { mutableStateOf<String?>(null) }
+    var symmetry by remember { mutableIntStateOf(0) }
     var shape by remember { mutableStateOf("Circle") }
     var revision by remember { mutableIntStateOf(0) }
     val entrance = remember { Animatable(0f) }
@@ -296,11 +300,13 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
             }
             DrawingGlass(view, Modifier.align(Alignment.CenterStart).padding(start = 8.dp, top = 60.dp, bottom = 110.dp).width(58.dp)) {
                 Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
-                    listOf("Brush" to LucideIcons.Paintbrush.glyph(), "Eraser" to LucideIcons.DrawEraser.glyph(), "Smudge" to LucideIcons.DrawSmudge.glyph(), "Blur" to LucideIcons.DrawBlur.glyph(), "Lasso" to LucideIcons.DrawLasso.glyph(), "Magic wand" to LucideIcons.WandSparkles.glyph(), "Shapes" to LucideIcons.Shapes.glyph()).forEach { (name, icon) ->
+                    listOf("Brush" to LucideIcons.Paintbrush.glyph(), "Fill" to LucideIcons.PaintBucket.glyph(), "Eraser" to LucideIcons.DrawEraser.glyph(), "Smudge" to LucideIcons.DrawSmudge.glyph(), "Blur" to LucideIcons.DrawBlur.glyph(), "Lasso" to LucideIcons.DrawLasso.glyph(), "Magic wand" to LucideIcons.WandSparkles.glyph(), "Shapes" to LucideIcons.Shapes.glyph()).forEach { (name, icon) ->
                         Box(Modifier.background(if (tool == name) Color.White.copy(alpha = .18f) else Color.Transparent, RoundedCornerShape(10.dp))) {
-                            DrawIcon(icon, if (name == "Brush") "Draw" else name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes"; if (name == "Shapes") menu = "Shapes" }
+                            DrawIcon(icon, if (name == "Brush") "Draw" else name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes"; if (name == "Shapes") menu = "Shapes"; if (name == "Fill") menu = "Fill" }
                         }
                     }
+                    DrawIcon(LucideIcons.SwatchBook.glyph(), "Layer filters", !view.operationBusy && view.transformMode == null) { rasterError = null; menu = "Filters" }
+                    DrawIcon(LucideIcons.FlipHorizontal2.glyph(), "Painting symmetry", !view.operationBusy && view.transformMode == null) { menu = "Symmetry" }
                     DrawIcon(LucideIcons.Maximize.glyph(), "Transform current layer", view.transformMode == null) { selectedOnly = false; menu = "Transform" }
                 }
             }
@@ -346,7 +352,46 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                     }
                     FcIconButton(LucideIcons.X.glyph(), "Close drawing menu", { if (view.transformMode != null) view.finishTransform(false); menu = null })
                 }
+                if (view.operationBusy) { Text("Processing in Rust…", color = Color.White); LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.White) }
+                rasterError?.let { Text(it, color = Color.White) }
                 when (menu) {
+                    "Fill" -> {
+                        Text("Tap a connected area to fill it with the selected colour. The current selection limits the result.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Text("Tolerance ${tolerance.toInt()}", color = Color.White)
+                        Slider(tolerance, { tolerance = it; view.wandTolerance = it.toInt() }, valueRange = 0f..96f)
+                    }
+                    "Symmetry" -> Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                        listOf("Off", "Mirror left / right", "Mirror top / bottom", "Both axes", "Radial · 4", "Radial · 8").forEachIndexed { index, name ->
+                            SelectChip(name, symmetry == index, { symmetry = index; view.symmetryMode = index.toUInt(); view.invalidate() }, tag = "drawing_symmetry_$index")
+                        }
+                    }
+                    "Filters" -> Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                        Text("Applies to the active layer, or the selected part of it. Undo restores the previous pixels.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        val filters = listOf("grayscale" to "Grayscale", "invert" to "Invert", "sepia" to "Sepia", "threshold" to "Threshold", "brightness" to "Brightness", "contrast" to "Contrast", "saturation" to "Saturation", "posterize" to "Posterize", "blur" to "Blur", "sharpen" to "Sharpen", "edges" to "Edge detection", "emboss" to "Emboss", "alpha-luma" to "Luminance to alpha", "opaque" to "Make opaque")
+                        Row(Modifier.horizontalScroll(rememberScrollState())) { filters.forEach { (id, name) ->
+                            SelectChip(name, filterOperation == id, { filterOperation = id; filterAmount = if (id == "contrast") .25f else .5f }, tag = "drawing_filter_$id")
+                        } }
+                        if (filterOperation !in listOf("grayscale", "invert", "sepia", "alpha-luma", "opaque")) {
+                            Text("Amount", color = Color.White); Slider(filterAmount, { filterAmount = it }, enabled = !view.operationBusy)
+                        }
+                        TextButton(onClick = { importScope.launch {
+                            rasterError = null
+                            try { view.applyFilter(filterOperation, filterAmount); revision++ }
+                            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                            catch (e: Exception) { rasterError = e.message ?: "Filter failed" }
+                        } }, enabled = !view.operationBusy) { Text("Apply filter") }
+                        TextButton(onClick = { menu = "Colour blend" }, enabled = !view.operationBusy) { Text("Blend selected colour…") }
+                    }
+                    "Colour blend" -> Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                        Text("Blend the current colour into existing layer pixels. Alpha is preserved; the opacity slider controls strength.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        val modes = listOf("Normal", "Dissolve", "Darken", "Multiply", "Color burn", "Linear burn", "Darker color", "Lighten", "Screen", "Color dodge", "Linear dodge", "Lighter color", "Overlay", "Soft light", "Hard light", "Vivid light", "Linear light", "Pin light", "Hard mix", "Difference", "Exclusion", "Subtract", "Divide", "Hue", "Saturation", "Color", "Luminosity")
+                        modes.forEachIndexed { index, name -> if (index != 1) TextButton(enabled = !view.operationBusy, onClick = { importScope.launch {
+                            rasterError = null
+                            try { view.blendColor(index.toUInt()); revision++ }
+                            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                            catch (e: Exception) { rasterError = e.message ?: "Blend failed" }
+                        } }) { Text(name) } }
+                    }
                     "Export" -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                         OutlinedTextField(exportName, { exportName = it.take(80) }, label = { Text("File name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         DrawingFormat.entries.forEach { format ->

@@ -12,6 +12,11 @@ Krita is a C++/Qt application. Its sources are not a Rust dependency. Reimplemen
 
 - Distance-adaptive stroke stabilization and pressure response, exposed through UniFFI.
 - Bounded pen/eraser coverage generation.
+- Connected flood fill with alpha-aware tolerance and a selection mask.
+- Fourteen raster filters: invert, grayscale, sepia, threshold, brightness, contrast, saturation, posterize, blur, sharpen, edge detection, emboss, luminance-to-alpha and make-opaque.
+- Destructive selected-colour blending using 26 engine blend formulas. This is not a layer blend-mode stack.
+- Canvas-centred horizontal/vertical/both-axis symmetry and 4/8-fold radial transforms, used by the existing brush renderer.
+- Undo integration for filter/fill/colour operations; cancellation-aware background execution for filters and colour operations.
 - Real GPU 4x MSAA: stroke geometry rendered to a four-sample RGBA8 attachment, resolved by the GPU to a single-sample texture. Standard pen and eraser use this path when available; coverage tiles are read back to the current Android raster layer storage.
 - Explicit software fallback if the GPU is unavailable or fails.
 
