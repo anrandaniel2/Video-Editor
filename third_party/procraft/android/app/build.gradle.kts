@@ -99,7 +99,7 @@ android {
 
 androidComponents {
     beforeVariants(selector().withBuildType("release")) { builder ->
-        builder.enableUnitTest = true
+        builder.hostTests.getValue(com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE).enable = true
     }
     onVariants { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
