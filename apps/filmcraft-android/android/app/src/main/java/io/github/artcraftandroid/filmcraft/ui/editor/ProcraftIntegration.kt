@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 
 /** Each embedded canvas/picker owns its model; closing releases threads and autosave. */
 @Composable
-private fun rememberProcraftModel(): CanvasViewModel {
+internal fun rememberProcraftModel(): CanvasViewModel {
     val app = LocalContext.current.applicationContext as Application
     val store = remember { ViewModelStore() }
     val model = remember {
@@ -79,6 +79,9 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 snapshotFlow { vm.opening }.first { !it }
             } else if (ed.drawingPicture != null) {
                 vm.newFromPicture(requireNotNull(ed.drawingPicture))?.join()
+            } else if (ed.drawingPreset != null) {
+                vm.newPresetArtwork(requireNotNull(ed.drawingPreset))
+                snapshotFlow { vm.opening }.first { !it }
             } else if (frame == null) {
                 vm.newArtwork(ed.timeline?.width?.toInt() ?: 1080, ed.timeline?.height?.toInt() ?: 1920)?.join()
             } else {
@@ -115,9 +118,15 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                                 BitmapFactory.decodeFile(file.path) ?: kotlin.error("Could not read exported drawing.")
                             }
                             if (standalone) {
-                                try { withContext(Dispatchers.IO) { saveDrawingPhoto(context, image) } }
-                                finally { image.recycle() }
-                                android.widget.Toast.makeText(context, "Saved to Pictures/FilmCraft", android.widget.Toast.LENGTH_LONG).show()
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val link = vm.artworkFolder()?.let { File(it, ".filmcraft-photo") }
+                                        val previous = link?.takeIf { it.isFile }?.readText()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
+                                        val uri = saveDrawingPhoto(context, image, previous)
+                                        link?.writeText(uri.toString())
+                                    }
+                                } finally { image.recycle() }
+
                             } else {
                                 ed.importDrawing(image) // Suspends until timeline insertion succeeds; owns the bitmap.
                             }

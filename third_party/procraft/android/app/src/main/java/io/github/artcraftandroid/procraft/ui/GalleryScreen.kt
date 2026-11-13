@@ -1623,7 +1623,7 @@ private fun Thumbnail(a: Artwork, version: Int, chosen: Boolean? = null, wash: B
  * plugin on makes, the screen's size.
  */
 @Composable
-private fun NewCanvasPanel(
+fun NewCanvasPanel(
     modifier: Modifier,
     arrowX: Dp,
     presets: List<CanvasPreset>,

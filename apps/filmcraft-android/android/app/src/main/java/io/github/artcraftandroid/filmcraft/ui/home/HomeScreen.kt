@@ -100,7 +100,7 @@ fun HomeScreen(vm: AppViewModel) {
     var drawingSetup by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("all") }
     var newMenu by remember { mutableStateOf(false) }
-    if (drawingSetup) DrawingCanvasDialog({ drawingSetup = false }) { w, h -> drawingSetup = false; vm.createDrawing(w, h) }
+    if (drawingSetup) DrawingCanvasDialog({ drawingSetup = false }) { p -> drawingSetup = false; vm.createDrawing(p.width, p.height, p) }
     Box(Modifier.fillMaxSize().background(Fc.Gallery).windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal)).testTag("screen_home")) {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(160.dp),

@@ -94,7 +94,7 @@ private val Sections = listOf(
  * millimetres. It edits [CanvasViewModel.editingPreset], or makes a new canvas ([onMade] then).
  */
 @Composable
-fun CustomCanvasScreen(vm: CanvasViewModel, onMade: () -> Unit) {
+fun CustomCanvasScreen(vm: CanvasViewModel, onCreate: ((CanvasPreset) -> Unit)? = null, onMade: () -> Unit) {
     val start = remember { vm.editingPreset?.let { vm.canvasPresets.getOrNull(it) } ?: CanvasPreset("Untitled Canvas", "px", 1080f, 1080f, 300f) }
     var section by remember { mutableIntStateOf(0) }
     var name by remember { mutableStateOf(start.name) }
@@ -152,7 +152,8 @@ fun CustomCanvasScreen(vm: CanvasViewModel, onMade: () -> Unit) {
     }
     fun create() {
         commit()
-        if (vm.finishCustomCanvas(preset())) onMade()
+        if (onCreate != null && vm.editingPreset == null) { onCreate(preset()); onMade() }
+        else if (vm.finishCustomCanvas(preset())) onMade()
     }
     BackHandler { vm.closeCustomCanvas() }
     BoxWithConstraints(Modifier.fillMaxSize().background(ScreenFill).pointerInput(Unit) { detectTapGestures { } }) {

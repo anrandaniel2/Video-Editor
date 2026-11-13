@@ -15,9 +15,13 @@ import java.io.File
 internal class SavedVisuals(private val context: Context) {
     private val store by lazy { ArtworkStore(File(context.filesDir, "artworks")) }
 
-    fun list(): List<ProjectEntry> = artworks() + runCatching { pictures() }.getOrElse {
+    fun list(): List<ProjectEntry> {
+        val drawings = artworks()
+        val linked = drawings.mapNotNull { p -> runCatching { File(p.dir, ".filmcraft-photo").readText() }.getOrNull() }.toSet()
+        return drawings + runCatching { pictures().filterNot { it.sourceUri in linked } }.getOrElse {
         android.util.Log.w("FilmCraftLibrary", "Saved pictures could not be listed", it)
         emptyList()
+        }
     }
 
     private fun artworks(): List<ProjectEntry> = store.list().flatMap { entry ->

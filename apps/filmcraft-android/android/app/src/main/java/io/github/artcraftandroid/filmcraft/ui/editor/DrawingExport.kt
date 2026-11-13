@@ -39,8 +39,12 @@ internal fun writeDrawing(context: Context, uri: Uri, bitmap: Bitmap, format: Dr
 }
 
 /** Save standalone drawings directly to the photo library; publish only after encoding succeeds. */
-internal fun saveDrawingPhoto(context: Context, bitmap: Bitmap): Uri {
+internal fun saveDrawingPhoto(context: Context, bitmap: Bitmap, existing: Uri? = null): Uri {
     val resolver = context.contentResolver
+    if (existing != null) {
+        writeDrawing(context, existing, bitmap, DrawingFormat.PNG)
+        return existing
+    }
     val values = android.content.ContentValues().apply {
         put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "Drawing-${System.currentTimeMillis()}.png")
         put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")

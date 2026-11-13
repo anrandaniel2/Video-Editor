@@ -507,7 +507,7 @@ pub(crate) fn add_object(s: &mut Session, mesh: Object3DMesh) -> Result<u64, Mob
 
 /// Validate and report a model's animation list before/after import.
 pub(crate) fn model_info(path: &str) -> Result<ModelInfo, MobileError> {
-    let m = filmcraft_render::model::Model::load(std::path::Path::new(path)).map_err(|e| MobileError::Command(format!("That model could not be opened: {e}")))?;
+    let m = filmcraft_render::model::load_cached(std::path::Path::new(path)).map_err(|e| MobileError::Command(format!("That model could not be opened: {e}")))?;
     Ok(ModelInfo {
         name: m.name.clone(),
         meshes: m.meshes.len() as u32,
