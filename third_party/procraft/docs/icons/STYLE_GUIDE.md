@@ -1,0 +1,258 @@
+# ProCraft icon style guide
+
+The rules for ProCraft's interface icons, every one of them our own drawing. `LucideIcons` keeps the
+Lucide set beside them.
+
+## Where an icon comes from
+
+- **Draw from the idea, never from another app's icon.** Start from what the control does ("a
+  wrench", "a brush", "two stacked sheets") and build it from this guide's shapes. Don't trace,
+  redraw, adapt or work beside another app's glyph, and don't feed one to a tool.
+- **What we match is the slot, not the drawing.** Each icon's frame, its ink box in that frame
+  (where and how big it sits), its colour and its states are measured facts, kept in
+  [`assets/icons/slots.tsv`](../../assets/icons/slots.tsv). An icon fills its slot's ink box;
+  nothing else about the old glyph is used.
+- **A distinctive mark gets our own idea.** Where a control's usual picture is one app's own
+  invention rather than a common metaphor, pick a different, plain idea.
+- **Every drawing is recorded.** Its master SVG lives in `assets/icons/procraft/`, it is made by
+  `tools/icons/draw_icons.py`, and it has a line in `ATTRIBUTION.md` as original work.
+
+## Grid and shapes
+
+- A 24-unit square; the drawing stays inside the live area 2 to 22. It is then scaled into its
+  slot's ink box, keeping its proportions and centring it there.
+- Solid, filled shapes in one colour (white; the interface tints it, blue when chosen). No
+  outlines-only icons, gradients, shadows or text.
+- Built from plain geometry: circles, capsules (a line with round ends), rounded rectangles,
+  triangles with rounded corners, arcs. Outer corners are rounded by 1 unit, inner ones by 0.5.
+- Details are knockouts: gaps cut through a shape, 1.2 units wide (1 for small parts). Nothing
+  solid is thinner than 1.6 units, so it survives at 22 px.
+- Long tools (brush, pencil, wand) lie on the diagonal from lower left to upper right, writing
+  end down.
+
+## Weight
+
+- A square-ish icon's ink box is about 18 units across; a diagonal tool runs about 20.
+- Line-like parts (capsules, arcs, arrows) are 2.4 units thick; small accents (sparkles, dots)
+  1.6 to 3 units across.
+
+## The bar (first drawings)
+
+| Control | Idea |
+|---|---|
+| Actions | an open-end wrench with a hole in its handle |
+| Adjustments | a wand with a banded tip and three sparkles |
+| Selection | a selection's four corner marks around a solid square |
+| Transform | a solid arrow pointing up and to the right |
+| Paint | a round brush: handle, ferrule, bristles |
+| Smudge | a fingertip pressing on a smear |
+| Erase | an eraser block with a band, on a line |
+| Layers | two stacked sheets, the top one solid |
+| Undo / Redo | a curved arrow turning back / forward |
+
+## The Actions panel's tabs
+
+| Tab | Idea |
+|---|---|
+| Add | a plus |
+| Canvas | a canvas's frame with a stroke across it |
+| Share | a tray with an arrow rising out of it |
+| Video | a camera, its body and its lens |
+| Preferences | a switch, turned on |
+| Help | a question mark in a ring |
+
+## The Selection toolbar
+
+| Control | Idea |
+|---|---|
+| Automatic | the Adjustments wand |
+| Freehand | a lasso's loop with its tail |
+| Rectangle / Ellipse | a dashed rectangle / ellipse |
+| Add / Subtract | a plus / minus cut out of a disc |
+| Invert | a disc, one half solid, the other its outline |
+| Copy and paste | two sheets, the front one solid |
+| Feather | a feather, its vane split by the shaft |
+| Save and load | a tray with an arrow coming down into it |
+| Colour fill | a tipped bucket and a drop falling from it |
+| Clear | a cross |
+
+## The Transform toolbar
+
+| Control | Idea |
+|---|---|
+| Freeform | a frame stretched across: a two-headed arrow inside |
+| Uniform | a square frame scaled corner to corner |
+| Distort | a skewed four-sided frame with a handle at each corner |
+| Warp | a frame whose inner lines bend |
+| Snapping | an upright magnet, its poles cut off |
+| Flip horizontal / vertical | a solid triangle facing its hollow mirror image |
+| Rotate | a tilted square with an arrow turning over it |
+| Fit to canvas | four arrows pointing out to the corners |
+| Interpolation | three square pixels and a round one |
+| Reset | a turning arrow back, round a dot |
+
+## The Adjustments menu
+
+| Adjustment | Idea |
+|---|---|
+| Hue, Saturation, Brightness | a colour wheel, six segments round a hole |
+| Colour Balance | a balance, a pan hanging from each end of its beam |
+| Curves | a graph's two axes and an S-curve rising between them |
+| Gradient Map | a bar breaking into narrower and narrower strips |
+| Gaussian Blur | a dot with two rings of smaller dots round it |
+| Motion Blur | a disc with speed lines trailing behind it |
+| Perspective Blur | a tunnel of squares, smaller toward the middle |
+| Noise | dots of a few sizes scattered over a square |
+| Sharpen | a cut gem, its facets knocked out |
+| Bloom | a bright disc caught in a four-point glint |
+| Glitch | a block cut into three bands, each slipped sideways |
+| Halftone | a grid of dots growing toward one corner |
+| Chromatic Aberration | a prism, one ray in and three spreading out |
+| Liquify | a block melting, three drips running off it |
+| Clone | a rubber stamp over the mark it leaves |
+
+## The colour panel's modes
+
+| Mode | Idea |
+|---|---|
+| Disc | a disc with a picker's ring on it |
+| Classic | a square field with its picker, a slider under it |
+| Harmony | a disc with two opposite points joined across it |
+| Value | three upright sliders set at different heights |
+| Palettes | a painter's palette, its thumb hole and paints cut out |
+
+## The adjustment menus
+
+| Control | Idea |
+|---|---|
+| Layer / Pencil | a single sheet / a pencil, point down to the left |
+| Apply / Cancel | a tick / a cross cut out of a disc |
+| Preview | an eye, its outline and its pupil |
+| Undo / Reset | the bar's Undo arrow / the Transform toolbar's Reset |
+| Adjust (Liquify) | a knurled knob with its pointer |
+
+## The Brush Studio's tabs
+
+| Tab | Idea |
+|---|---|
+| Stroke path | a stroke's dabs, a row of dots along a curve |
+| Stabilization | a shaky line whose shake dies away |
+| Taper | a stroke that thins out at both ends |
+| Shape | a circle, a square and a triangle |
+| Grain | a tile pitted with holes of a few sizes |
+| Rendering | a paint roller |
+| Wet Mix | two drops, a small one beside a large one |
+| Color dynamics | three overlapping circles, their edges cut through |
+| Dynamics | three chevrons, heavier as they go |
+| Stylus | a pen-shaped stylus, point down to the left |
+| Properties | a gear |
+| Materials | a ball with a rim of light round its shaded side |
+| Preview | the adjustment menus' eye |
+| About this brush | a name tag with its hole and two lines of writing |
+
+## Canvas information, menus and panels
+
+| Control | Idea |
+|---|---|
+| About this artwork | the Brush Studio's name tag |
+| Dimensions | a ruler, its marks cut in from one edge |
+| Layers | the bar's two stacked sheets |
+| Colour profile | a triangle of colours inside the ring of all colours |
+| Video settings | the Actions tab's camera |
+| Statistics | a pie chart with one slice pulled out |
+| New brush | the Paint brush with a plus beside it |
+| New set | a folder with a plus cut out of it |
+| Share (menus) | the Actions tab's tray and rising arrow |
+| Open / disclose | a chevron, right / down |
+| Done | a tick |
+| Add | a plus |
+| Full screen | a two-headed arrow from corner to corner |
+| Compact / stacked cards | three bars / a card in front of another |
+| Folder | a folder, its tab up to the left |
+| Clear the colour history | a bin, its lid and two slots |
+| Keyboard | a keyboard, its keys and space bar cut out |
+
+## Gesture controls
+
+| Gesture | Idea |
+|---|---|
+| Assisted Drawing | a straight line between two handles |
+| Eyedropper | a dropper, its tip down to the left |
+| QuickShape | the Brush Studio's circle, square and triangle |
+| QuickMenu | six buttons round a centre |
+| Full Screen | the menus' corner-to-corner arrow |
+| Clear Layer | the colour history's bin |
+| Copy & Paste | the Selection toolbar's two sheets |
+| Layer Select | the bar's two stacked sheets |
+| Hover | a stylus held just above the glass |
+| General | the Actions tab's switch |
+
+## The copy and paste panel
+
+| Button | Idea |
+|---|---|
+| Cut | scissors, open, handles down |
+| Copy | the two sheets |
+| Copy All | three sheets, one behind another |
+| Duplicate | the two sheets, a plus cut out of the front one |
+| Cut & Paste | a sheet with an arrow leaping off it |
+| Paste | a clipboard, its clip and two lines of writing |
+
+## Text
+
+| Control | Idea |
+|---|---|
+| Cut / Copy / Paste | the copy and paste panel's scissors / two sheets / clipboard |
+| Align left, centre, right, justified | four lines of text, long and short, set that way |
+| Underline | a block of text with a line under it |
+| Outline | a shape with its outline drawn round it |
+| Vertical | three columns of writing, the first running down to an arrowhead |
+| Keyboard | the keyboard |
+
+## QuickShape and the drawing guides
+
+| Control | Idea |
+|---|---|
+| Line / Polyline | a line between its end points / three joined lines, a dot at each corner |
+| Ellipse, Circle, Triangle, Equilateral, Quadrilateral, Rectangle, Square | the shape itself, solid |
+| Grid | nine squares in three rows |
+| Isometric | a cube, its three faces apart |
+| Symmetry | a pair of wings and their mirror image across a dashed axis |
+
+## The adjustments' kinds, grain modes and the rest
+
+| Control | Idea |
+|---|---|
+| Clouds / Billows / Ridges (Noise) | wisps of mist / two rows of rounded humps / a range of sharp peaks |
+| Full colour / Screen / Newspaper (Halftone) | big and small dots in a checker / dots set out in a diamond / a page with a picture and columns |
+| Perspective / Displace (Chromatic Aberration) | four arrows out from a centre / a disc with its outline copy shifted off it |
+| Positional / Directional (Perspective Blur) | a dot with rays streaming out of it all round / the same rays fanning out one way only |
+| Artifact / Wave / Signal / Diverge (Glitch) | a mosaic of blocks / a square wave / a screen with broken lines / a line that splits in two |
+| Moving / Texturized (grain) | rows of grain with an arrow along under them / the pitted Grain tile |
+| Paint, painting an adjustment on | the Paint brush with an adjustment ring |
+| Brush swipe: Share / Duplicate | the tray and rising arrow / the Duplicate sheets |
+| Recent set | an hourglass, its sand run down |
+| Recent swipe: Find / Pin / Unpin / Clear | a target / a thumbtack standing on its point / the tack struck through / a broom sweeping two specks |
+| A pinned brush's mark | the standing thumbtack |
+| An alert's question | a disc with a question mark cut out |
+
+## Brush set icons
+
+Each of the 48 is the object its name says, drawn plainly in this guide's shapes (`SET_ICONS` in
+`tools/icons/draw_icons.py`, in the picker's order). Where the name is a way of working, the icon is
+its tool: Sketching a pencil, Inking an ink bottle, Painting the palette, Airbrushing a spray can,
+Charcoals a stick of charcoal, Textures the pitted Grain tile. Brush, Wand and Checkmark are the
+bar's brush, the Adjustments wand and Done's tick.
+
+## Blend modes
+
+The arithmetic modes are two overlapping discs: Multiply two rings solid through their overlap,
+Overlay two rings, Exclusion two discs with the overlap cut away, Difference one disc with the
+other's share taken out. The rest picture their idea: Normal a disc; Darken and Darker Color a
+disc and a swatch with a chevron cut pointing down, Lighter Color a swatch's outline with one
+pointing up; Shade a sun half sunk; Color Burn a flame, Linear Burn a campfire; Lighten a sun,
+Screen a disc ringed with dots; Color Dodge a sparkle; Add a plus in a ring; Soft Light a lamp,
+Hard Light a spotlight, Vivid Light a bolt, Linear Light a torch, Pin Light a thumbtack; Hard Mix
+four squares; Subtract a minus, Divide a division sign; Hue the colour wheel, Saturation a drop
+filled halfway, Color three overlapping circles, Luminosity a disc half solid on the slant; Behind
+a solid sheet behind an outline; Height an arrow standing on a base, Linear Height a ramp.

@@ -67,6 +67,8 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var initialised by remember { mutableStateOf(false) }
+    var openedOnce by remember { mutableStateOf(false) }
+    LaunchedEffect(vm.session) { if (vm.session != null) openedOnce = true }
     LaunchedEffect(vm) {
         try {
             if (frame == null) {
@@ -118,7 +120,15 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog()
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            if (vm.session != null) AppRoot(vm)
+            if (vm.session != null || (openedOnce && vm.screen == io.github.artcraftandroid.procraft.canvas.Screen.GALLERY)) {
+                AppRoot(vm)
+                if (vm.session == null) {
+                    BackHandler { requestClose() }
+                    IconButton(onClick = requestClose, modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp)) {
+                        Icon(PcIcons.Cross, contentDescription = "Return to FilmCraft", tint = Color.White)
+                    }
+                }
+            }
             else Column(Modifier.fillMaxSize().padding(24.dp)) {
                 Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
                 TextButton(onClick = { if (standalone) ed.closeEditor() else close() }) { Text("Close") }

@@ -2412,6 +2412,11 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeArtwork() {
         hostClose?.let { it(); return }
+        closeArtworkToGallery()
+    }
+
+    /** The full upstream gallery remains available inside the FilmCraft host. */
+    fun closeArtworkToGallery() {
         endFilling()
         endLayerOpacity()
         endTransform(true)
