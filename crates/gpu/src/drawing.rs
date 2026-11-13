@@ -47,7 +47,7 @@ impl Painter {
                 Ok((device,queue))=>{selected=Some((info,sample_rate,device,queue));break;}
                 Err(error)=>{
                     log::warn!("Drawing device {} ({:?}) unavailable: {error}; trying another hardware backend",info.name,info.backend);
-                    adapters.retain(|candidate| {let other=candidate.get_info();other.name!=info.name || other.backend!=info.backend || other.device!=info.device;});
+                    adapters.retain(|candidate| {let other=candidate.get_info();other.name!=info.name || other.backend!=info.backend || other.device!=info.device});
                 }
             }
         }
