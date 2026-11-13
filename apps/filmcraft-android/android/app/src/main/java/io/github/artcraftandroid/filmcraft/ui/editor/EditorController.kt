@@ -631,6 +631,8 @@ class EditorController(
     }
 
     var blankDrawing = false
+    /** Home-created drawing, not an editing panel opened inside an existing project. */
+    var standaloneDrawing = false
 
     fun importDrawing(bitmap: android.graphics.Bitmap) {
         scope.launch {

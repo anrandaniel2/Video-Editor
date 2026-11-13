@@ -326,18 +326,42 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
         layerRename = view.layerName(view.layer)
         pendingLayerOpacity = view.layerOpacity(view.layer)
     }
+    val standaloneDrawing = remember { ed.standaloneDrawing }
+    var closingDrawing by remember { mutableStateOf(false) }
+    val requestClose: () -> Unit = {
+        if (!closingDrawing && !exporting && !importing) {
+            if (!standaloneDrawing) close() else {
+                closingDrawing = true; view.isEnabled = false
+                importScope.launch {
+                    try {
+                        while (view.operationBusy) kotlinx.coroutines.delay(16)
+                        check(view.transformMode == null) { "Apply or cancel the transform before saving." }
+                        view.commitShapeDraft()
+                        val image = view.bitmap()
+                        try { withContext(Dispatchers.IO) { saveDrawingPhoto(context, image) } }
+                        finally { image.recycle() }
+                        android.widget.Toast.makeText(context, "Saved to Pictures/FilmCraft", android.widget.Toast.LENGTH_LONG).show()
+                        ed.closeEditor()
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch (e: Exception) { exportMessage = e.message ?: "Could not save the photo."; menu = "Export" }
+                    finally { closingDrawing = false; view.isEnabled = true }
+                }
+            }
+        }
+    }
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(420, easing = FastOutSlowInEasing)) }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         ImmersiveDialog()
         Box(Modifier.fillMaxSize().background(Color(0xFF0F1118)).systemBarsPadding()) {
             AndroidView(factory = { view }, modifier = Modifier.fillMaxSize().padding(top = 56.dp).graphicsLayer {
                 scaleX = .65f + .35f * entrance.value; scaleY = scaleX; alpha = entrance.value
             })
             Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                FcIconButton(LucideIcons.X.glyph(), "Close", close)
+                FcIconButton(LucideIcons.X.glyph(), if (standaloneDrawing) "Save photo and close" else "Close", requestClose)
                 EditorExportButton({ exportMessage = null; menu = "Export" }, enabled = ed.busy == null && !importing && !exporting && view.transformMode == null)
             }
+            if (closingDrawing) Text("Saving photo…", color = Color.White, modifier = Modifier.align(Alignment.TopCenter).padding(top = 56.dp))
             DrawingGlass(view, Modifier.align(Alignment.CenterStart).padding(start = 8.dp, top = 60.dp, bottom = 110.dp).width(58.dp)) {
                 Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
                     listOf("Brush" to LucideIcons.Paintbrush.glyph(), "Fill" to LucideIcons.PaintBucket.glyph(), "Eraser" to LucideIcons.DrawEraser.glyph(), "Smudge" to LucideIcons.DrawSmudge.glyph(), "Blur" to LucideIcons.DrawBlur.glyph(), "Lasso" to LucideIcons.DrawLasso.glyph(), "Magic wand" to LucideIcons.WandSparkles.glyph(), "Shapes" to LucideIcons.Shapes.glyph()).forEach { (name, icon) ->
@@ -553,7 +577,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                             val name = exportName.trim().map { if (it in "\\/:*?\"<>|") '_' else it }.joinToString("").removeSuffix(".${exportFormat.extension}")
                             saveDrawing.launch("$name.${exportFormat.extension}" to exportFormat.mime)
                         }, enabled = exportName.isNotBlank() && !exporting && pendingExport == null) { Text(if (exporting) "Exporting…" else "Save file") }
-                        TextButton(onClick = { view.commitShapeDraft(); ed.importDrawing(view.bitmap()) }, enabled = !exporting && ed.busy == null) { Text("Add to timeline") }
+                        TextButton(onClick = { view.commitShapeDraft(); ed.importDrawing(view.bitmap()) }, enabled = !standaloneDrawing && !exporting && ed.busy == null) { Text("Add to timeline") }
                     }
                     "Colors" -> Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
                         WheelPicker(color) { color = it; view.inkColor = it }
@@ -747,6 +771,9 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                     Slider(opacity, { opacity = it; view.opacity = it }, modifier = Modifier.weight(1f).height(32.dp).semantics { contentDescription = "Brush opacity" }, valueRange = 0f..1f)
                     Text("${(opacity * 100).toInt()}%", color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }
+            }
+            if (closingDrawing) Box(Modifier.fillMaxSize().clickable { }, contentAlignment = Alignment.Center) {
+                DrawingGlass(view, Modifier.padding(24.dp)) { Text("Saving photo…", color = Color.White, modifier = Modifier.padding(20.dp)) }
             }
         }
     }

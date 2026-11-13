@@ -1109,7 +1109,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, canva
         }
         paint.reset(); paint.isAntiAlias = true; paint.color = Color.CYAN; paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.5f / (fit() * zoom)
         selection?.let { c.drawPath(it, paint) }
-        maskGuide?.let { c.drawPath(it, paint) }
+        if (!usesNativeStroke()) maskGuide?.let { c.drawPath(it, paint) }
         if (tool == "Polygon selection" && polygonVertices.isNotEmpty()) {
             val outline = Path().apply { polygonVertices.forEachIndexed { i, p -> if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y) }; if (polygonVertices.size >= 3) close() }
             c.drawPath(outline, paint)
@@ -1268,15 +1268,15 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, canva
     }
     private fun usesNativeStroke() = nativeBrushEnabled && tool in listOf("Brush", "Eraser")
     private fun drawNativeBrushPreview(c: Canvas) {
-        if (!usesNativeStroke() || maskPoints.isEmpty() || nativePreviewFailed) return
+        if (!usesNativeStroke() || nativePreviewFailed || (maskPoints.isEmpty() && !operationBusy)) return
         val settings = nativeStrokeSettings ?: return
         try {
-            if (nativePreviewPointCount != maskPoints.size && nativePreviewJob == null) {
+            if (maskPoints.isNotEmpty() && nativePreviewPointCount != maskPoints.size && nativePreviewJob == null) {
                 val points = maskPoints.toList(); val w = canvasW.toUInt(); val h = canvasH.toUInt()
                 nativePreviewJob = maskScope.launch {
                     try {
                         val coverage = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { drawingNativeBrushCoverage(points, w, h, settings) }
-                        if (nativeStrokeSettings === settings && maskPoints.isNotEmpty() && !operationBusy) {
+                        if (nativeStrokeSettings === settings && (maskPoints.isNotEmpty() || operationBusy)) {
                             val mask = if (coverage.width == 0u || coverage.height == 0u) null else Bitmap.createBitmap(coverage.width.toInt(), coverage.height.toInt(), Bitmap.Config.ALPHA_8).also { bitmap ->
                                 val bytes = java.nio.ByteBuffer.allocate(bitmap.rowBytes * bitmap.height)
                                 for (row in 0 until bitmap.height) { bytes.position(row * bitmap.rowBytes); bytes.put(coverage.alpha, row * bitmap.width, bitmap.width) }
@@ -1308,10 +1308,10 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, canva
         }
     }
     private fun commitNativeBrushStroke() {
-        val points = maskPoints.toList(); maskPoints.clear(); maskGuide = null; clearNativePreview()
+        val points = maskPoints.toList(); maskPoints.clear(); maskGuide = null
         val settings = nativeStrokeSettings ?: return
         if (points.isEmpty() || maskStrokeOverflow) {
-            nativeStrokeSettings = null
+            nativeStrokeSettings = null; clearNativePreview()
             if (maskStrokeOverflow) android.widget.Toast.makeText(context, "Native brush stroke exceeds the point limit; use shorter strokes.", android.widget.Toast.LENGTH_LONG).show()
             changed(); return
         }
@@ -1347,7 +1347,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, canva
                 installNativePixels(bitmap, result.first, result.second)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { android.widget.Toast.makeText(context, e.message ?: "Native GPU brush failed; no pixels committed", android.widget.Toast.LENGTH_LONG).show() }
-            finally { nativeStrokeSettings = null; operationBusy = false; changed() }
+            finally { clearNativePreview(); nativeStrokeSettings = null; operationBusy = false; changed() }
         }
     }
     private fun commitRetouchStroke(operation: String) {
@@ -1395,7 +1395,7 @@ internal class DrawingView(context: Context, val backgroundFrame: Bitmap?, canva
         } finally { if (!currentLayerOnly) merged.recycle() }
     }
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        if (operationBusy || animationPlaying) return true
+        if (!isEnabled || operationBusy || animationPlaying) return true
         // The current path is mutable; immutable pressure segments can keep cached coverage.
         stroke?.let { path -> coverageMasks.snapshot().keys.filter { it.path === path }.forEach { coverageMasks.remove(it) } }
         updatePenCursor(e)

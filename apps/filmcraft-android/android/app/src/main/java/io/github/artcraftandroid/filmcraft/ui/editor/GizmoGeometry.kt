@@ -26,19 +26,19 @@ internal data class GizmoFace(val axis:Int,val points:List<GizmoPoint>,val brigh
 }
 internal enum class GizmoMode { Move,Rotate }
 
-/** Uses precisely the object's camera (+Z, principal point at x/y, focal length = layer height),
- * Rx/Ry/Rz convention, and its layer's 2D placement. Gizmos are meshes in this 3D coordinate
- * system, not screen-space arrows or fixed ellipses. Geometry and picking share one projection.
- */
-internal class GizmoGeometry(val settings:Object3DSettings,private val layer:Placement?,private val fw:Double,private val fh:Double,private val width:Double,private val height:Double,pixels:Double) {
-    val origin=GizmoVec(0.0,0.0,settings.z.coerceAtLeast(1.0))
+internal data class GizmoPose(val x:Double,val y:Double,val z:Double,val rotationX:Double=0.0,val rotationY:Double=0.0,val rotationZ:Double=0.0)
+
+/** Mesh display and hit-testing share the renderer's fixed, frame-centred camera. */
+internal class GizmoGeometry(val pose:GizmoPose,private val layer:Placement?,private val fw:Double,private val fh:Double,private val width:Double,private val height:Double,pixels:Double) {
+    constructor(settings:Object3DSettings,layer:Placement?,fw:Double,fh:Double,width:Double,height:Double,pixels:Double):this(GizmoPose(settings.x,settings.y,settings.z,settings.rotationX,settings.rotationY,settings.rotationZ),layer,fw,fh,width,height,pixels)
+    val origin=GizmoVec((pose.x-fw/2)*pose.z.coerceAtLeast(1.0)/fh.coerceAtLeast(1.0),(pose.y-fh/2)*pose.z.coerceAtLeast(1.0)/fh.coerceAtLeast(1.0),pose.z.coerceAtLeast(1.0))
     val radius=pixels*origin.z/fh.coerceAtLeast(1.0)/(width/fw.coerceAtLeast(1.0))/(layer?.scale?.absoluteValue ?: 1.0).coerceAtLeast(0.001)
     val axes=gizmoBasis.map {rotate(it)}
-    fun rotate(v:GizmoVec)=v.rotate(settings.rotationX,settings.rotationY,settings.rotationZ)
+    fun rotate(v:GizmoVec)=v.rotate(pose.rotationX,pose.rotationY,pose.rotationZ)
     fun project(world:GizmoVec):GizmoPoint? {
         if(world.z<1.0)return null
-        val lx=settings.x+fh*world.x/world.z
-        val ly=settings.y+fh*world.y/world.z
+        val lx=fw/2+fh*world.x/world.z
+        val ly=fh/2+fh*world.y/world.z
         val a=Math.toRadians(layer?.rotation ?: 0.0);val scale=layer?.scale ?: 1.0
         val x=(lx-fw/2)*scale;val y=(ly-fh/2)*scale
         val px=(layer?.x ?: fw/2)+x*cos(a)-y*sin(a)
@@ -119,7 +119,9 @@ internal class GizmoGeometry(val settings:Object3DSettings,private val layer:Pla
         // drag vertically to push/pull it in depth instead of dividing by a near-zero tangent.
         val amount:Double=if(length>0.0001f)((drag.x*t.x+drag.y*t.y)/length).toDouble() else -drag.y*radius/64.0
         val d=axes[axis]*amount.toDouble()
-        return current.copy(x=current.x+fh/origin.z*d.x,y=current.y+fh/origin.z*d.y,z=(current.z+d.z).coerceIn(1.0,10000.0))
+        val old=GizmoVec((current.x-fw/2)*current.z/fh,(current.y-fh/2)*current.z/fh,current.z)
+        val next=old+d;val z=next.z.coerceIn(1.0,10000.0)
+        return current.copy(x=fw/2+fh*next.x/z,y=fh/2+fh*next.y/z,z=z)
     }
     fun rotationDelta(axis:Int,point:Offset,drag:Offset):Double {
         val samples=ring(axis)

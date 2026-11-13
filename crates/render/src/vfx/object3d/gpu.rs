@@ -17,7 +17,7 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
             range: l.range, cos_outer: l.cos_outer, cos_inner: l.cos_inner,
         }).collect(), draws: Vec::new(),
     };
-    let off = V3::new(0.0, 0.0, p.z);
+    let off = p.translation;
     let place = vertex;
     // Primitive/text vertex transforms are applied by the same vertex stage as model skinning.
     let primitive_deformation = || {

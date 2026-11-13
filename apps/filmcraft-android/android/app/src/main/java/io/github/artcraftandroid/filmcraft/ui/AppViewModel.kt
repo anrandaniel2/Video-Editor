@@ -150,7 +150,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         viewModelScope.launch {
             val p = withContext(Dispatchers.IO) { projects.create("Drawing", width, height) }
             open(e, p, fresh = true)
-            editor?.let { it.blankDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
+            editor?.let { it.blankDrawing = true; it.standaloneDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
         }
     }
 
@@ -162,7 +162,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
                 val (w, h) = if (how == NewProject.Drawing) 1080 to 1080 else 1080 to 1920
                 val p = withContext(Dispatchers.IO) { projects.create(projects.todaysName(), w, h) }
                 open(e, p, fresh = true)
-                if (how == NewProject.Drawing) editor?.let { it.blankDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
+                if (how == NewProject.Drawing) editor?.let { it.blankDrawing = true; it.standaloneDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
             }
             NewProject.PhotoLibrary, NewProject.Files -> pick(if (how == NewProject.PhotoLibrary) PickKind.PhotosAndVideos else PickKind.FilesVisual) { uris ->
                 if (uris.isEmpty()) return@pick
@@ -248,6 +248,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         screen = Screen.Home
         viewModelScope.launch {
             ed.close()
+            if (ed.standaloneDrawing) withContext(Dispatchers.IO) { projects.delete(ed.project) }
             editor = null
             refreshProjects()
         }

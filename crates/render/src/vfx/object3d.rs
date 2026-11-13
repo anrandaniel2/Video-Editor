@@ -76,6 +76,7 @@ struct Params {
     depth: f32,
     bevel: f32,
     pos: (f32, f32),
+    translation: V3,
     z: f32,
     rot: V3,
     scale: f32,
@@ -156,6 +157,11 @@ fn aim(angle: f32, elevation: f32) -> V3 {
     V3::new(la.cos() * le.cos(), la.sin() * le.cos(), -le.sin()).norm()
 }
 
+fn camera_translation(screen:(f32,f32),width:f32,height:f32,z:f32)->V3 {
+    let focal=height.max(1.0);
+    V3::new((screen.0-width*0.5)*z/focal,(screen.1-height*0.5)*z/focal,z)
+}
+
 fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
     let px = cx.px_scale.max(1e-4);
     let mut pos = crate::effects::point(e, "position", cx, img);
@@ -197,8 +203,7 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
             cos_inner: 1.0,
         });
     } else {
-        // Light positions are the object placement units (output pixels); the vertices live in
-        // the object's own frame, whose camera axis runs through the object's position.
+        // All objects and lights share one camera-centred world frame.
         for l in &lighting.lights {
             if !l.enabled || l.intensity <= 0.0 {
                 continue;
@@ -215,7 +220,7 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
                 },
                 color: [col[0] * k, col[1] * k, col[2] * k],
                 toward: aim(l.angle, l.elevation),
-                pos: V3::new(l.position[0] * px - pos.x as f32, l.position[1] * px - pos.y as f32, l.position[2] * px),
+                pos: V3::new(l.position[0] * px - img.w as f32 * 0.5, l.position[1] * px - img.h as f32 * 0.5, l.position[2] * px),
                 range: l.range.max(0.0) * px,
                 cos_outer: (cone as f32).to_radians().cos(),
                 cos_inner: (cone as f32 * (1.0 - 0.95 * soft)).to_radians().cos(),
@@ -242,7 +247,8 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
         size: fv(e, "size", cx).max(1.0) * px,
         depth: fv(e, "depth", cx).max(0.0) * px,
         bevel: fv(e, "bevel", cx).max(0.0) * px,
-        pos: (pos.x as f32, pos.y as f32),
+        pos: (img.w as f32 * 0.5, img.h as f32 * 0.5),
+        translation: camera_translation((pos.x as f32,pos.y as f32),img.w as f32,img.h as f32,z.max(8.0*px)),
         z: z.max(8.0 * px),
         rot: V3::new(fv(e, "rotation_x", cx), fv(e, "rotation_y", cx), rz),
         scale: scale.max(0.0),
@@ -799,7 +805,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f3
     let base = lin(p.color);
     let side = lin(p.side);
     // Glyphs are centred on the origin; `cam` carries the position (see `apply`).
-    let to_v = |x: f32, y: f32, z: f32| rotate(V3::new(x, y, z), p.rot).add(V3::new(0.0, 0.0, p.z));
+    let to_v = |x: f32, y: f32, z: f32| rotate(V3::new(x, y, z), p.rot).add(p.translation);
     let proj_ct = |ct: &[(f32, f32)], z: f32| -> Vec<(f32, f32)> {
         ct.iter().filter_map(|&(x, y)| project(to_v(x, y, z), cx, cy, f).map(|(sx, sy, _)| (sx, sy))).collect()
     };
@@ -1029,7 +1035,7 @@ fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam:
     let center = std::array::from_fn::<_, 3, _>(|i| (model.bounds.0[i] + model.bounds.1[i]) * 0.5);
     let extent = (0..3).map(|i| model.bounds.1[i] - model.bounds.0[i]).fold(0.0f32, f32::max).max(1e-6);
     let fit = p.size * p.scale / extent;
-    let off = V3::new(0.0, 0.0, p.z);
+    let off = p.translation;
     // glTF is right-handed Y-up, +Z toward the viewer. The object renderer looks down +Z with
     // Y down, so rotate 180° about X: (x, y, z) -> (x, -y, -z), preserving winding.
     let place = |v: crate::model::Vertex| {
@@ -1108,12 +1114,10 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     if p.opacity <= 0.0 || p.scale <= 0.0 {
         return;
     }
-    // `position` is where the object sits in the layer, in layer pixels (the frame centre by
-    // default), so it is the camera's principal point. It must not be added to the vertices as
-    // well: that would move the object by f/z times its position — a few pixels in a thumbnail,
-    // but well over a thousand at 1080p, which put every object outside the frame.
+    // Fixed principal point; position moves vertices in camera space, so the visible sides
+    // change off-axis. Convert the screen-space anchor to world coordinates at object depth.
     let cam = (p.pos.0, p.pos.1, (img.h as f32).max(1.0));
-    let off = V3::new(0.0, 0.0, p.z);
+    let off = p.translation;
     if p.mesh == 7 {
         draw_model(img, e, &p, cx, cam);
         return;
@@ -1269,12 +1273,12 @@ mod tests {
         apply(&mut img, &e, &ctx());
         let (cx, cy, _, _, n) = drawn(&img);
         assert!(n > 10_000, "the moved cube covered only {n} pixels");
-        assert!((cx - 300.0).abs() < 3.0, "x was {cx}, wanted 300");
-        assert!((cy - 500.0).abs() < 3.0, "y was {cy}, wanted 500");
+        assert!((cx - 300.0).abs() < 25.0, "perspective silhouette x was {cx}, anchor 300");
+        assert!((cy - 500.0).abs() < 25.0, "perspective silhouette y was {cy}, anchor 500");
         let mut small = Image::new(405, 720);
         apply(&mut small, &e, &FxCtx { px_scale: 0.375, ..ctx() });
         let (sx, sy, _, _, _) = drawn(&small);
-        assert!((sx - 112.5).abs() < 2.0 && (sy - 187.5).abs() < 2.0, "scaled position was ({sx}, {sy})");
+        assert!((sx - cx * 0.375).abs() < 2.0 && (sy - cy * 0.375).abs() < 2.0, "scaled perspective silhouette was ({sx}, {sy})");
     }
 
     #[test]
@@ -1416,5 +1420,18 @@ mod tests {
         let (cx, cy) = box_centre(&img);
         // placement (30, 30) plus the tracked delta ((0.75−0.5)·256, (0.6−0.5)·256) = (94, 55.6)
         assert!((cx - 94.0).abs() < 2.0 && (cy - 55.6).abs() < 2.0, "followed to ({cx}, {cy}), wanted (94, 55.6)");
+    }
+}
+
+#[cfg(test)]
+mod camera_translation_tests {
+    use super::*;
+    #[test] fn anchor_is_preserved_but_depth_planes_shift_off_axis() {
+        let cam=(540.0,960.0,1920.0);let position=(800.0,1200.0);
+        let offset=camera_translation(position,1080.0,1920.0,1500.0);
+        let anchor=project(offset,cam.0,cam.1,cam.2).expect("anchor in front");
+        assert!((anchor.0-position.0).abs()<0.001 && (anchor.1-position.1).abs()<0.001);
+        let front=project(offset.add(V3::new(0.0,0.0,-200.0)),cam.0,cam.1,cam.2).expect("front");
+        assert!(front.0>anchor.0 && front.1>anchor.1);
     }
 }

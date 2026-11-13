@@ -433,7 +433,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                     drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
                 }
             }
-            if (object3d && !masking && !advanced && ed.panel !is Panel.TextInput && t != null) {
+            if (object3d && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
                 ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
             }
             if (ed.panel == Panel.Lights && t != null) {

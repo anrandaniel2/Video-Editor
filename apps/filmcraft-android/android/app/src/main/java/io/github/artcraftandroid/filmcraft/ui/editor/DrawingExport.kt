@@ -37,3 +37,21 @@ internal fun writeDrawing(context: Context, uri: Uri, bitmap: Bitmap, format: Dr
         }
     } ?: error("Could not open the export destination.")
 }
+
+/** Save standalone drawings directly to the photo library; publish only after encoding succeeds. */
+internal fun saveDrawingPhoto(context: Context, bitmap: Bitmap): Uri {
+    val resolver = context.contentResolver
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, "Drawing-${System.currentTimeMillis()}.png")
+        put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/FilmCraft")
+        put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+    }
+    val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        ?: error("Could not create a photo in the library.")
+    try {
+        writeDrawing(context, uri, bitmap, DrawingFormat.PNG)
+        check(resolver.update(uri, android.content.ContentValues().apply { put(android.provider.MediaStore.Images.Media.IS_PENDING, 0) }, null, null) > 0) { "Could not publish the saved photo." }
+        return uri
+    } catch (e: Exception) { resolver.delete(uri, null, null); throw e }
+}
