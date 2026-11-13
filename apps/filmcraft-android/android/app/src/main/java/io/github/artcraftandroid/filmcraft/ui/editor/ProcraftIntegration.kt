@@ -45,8 +45,12 @@ private fun rememberProcraftModel(): CanvasViewModel {
 internal fun ProcraftColorPicker(color: Int, change: (Int) -> Unit) {
     val vm = rememberProcraftModel()
     val onChange by rememberUpdatedState(change)
-    val alpha = color ushr 24
+    val alpha by rememberUpdatedState(color ushr 24)
     val held = remember { HeldColor(color and 0xFFFFFF) { onChange((alpha shl 24) or (it and 0xFFFFFF)) } }
+    DisposableEffect(vm) {
+        CanvasSpace.set(false) // FilmCraft text, lights and 3D colours are sRGB.
+        onDispose { }
+    }
     ProCraftTheme {
         CompactColors(vm, held, arrowX = 130.dp)
     }
@@ -82,7 +86,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
         } catch (e: kotlinx.coroutines.CancellationException) { throw e }
         catch (e: Exception) { error = e.message ?: "Could not open drawing." }
     }
-    DisposableEffect(Unit) { onDispose { frame?.recycle(); ed.blankDrawing = false } }
+    DisposableEffect(Unit) { onDispose { frame?.recycle(); ed.blankDrawing = false; CanvasSpace.set(false) } }
     val requestClose: () -> Unit = {
         if (!saving && vm.session != null) {
             saving = true
@@ -91,6 +95,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                     // Apply active transforms before flattening; keep the native layered autosave.
                     vm.endTransform(true)
                     vm.endAdjustment(true)
+                    vm.saveForHost()
                     val file = vm.exportImage(false) ?: kotlin.error("Could not export the drawing. Please try again.")
                     val image = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(file.path) ?: kotlin.error("Could not read exported drawing.") }
                     if (standalone) {

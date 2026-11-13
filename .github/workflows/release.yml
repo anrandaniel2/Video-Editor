@@ -64,6 +64,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-android
+          workspaces: |
+            . -> target
+            third_party/procraft -> target
 
       - name: Install cargo-ndk and the Android NDK
         run: |

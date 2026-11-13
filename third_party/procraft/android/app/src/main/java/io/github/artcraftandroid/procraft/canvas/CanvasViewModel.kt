@@ -2398,6 +2398,16 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Saves the open artwork and goes back to the gallery. */
+    /** Complete the layered save before the host tears down this model's coroutine scope. */
+    suspend fun saveForHost() {
+        val s = session ?: return
+        val dir = artworkDir ?: return
+        noteTime()
+        keepChoices(s)
+        keepColour()
+        withContext(Dispatchers.IO) { s.save(dir.path) }
+    }
+
     var hostClose: (() -> Unit)? = null
 
     fun closeArtwork() {
