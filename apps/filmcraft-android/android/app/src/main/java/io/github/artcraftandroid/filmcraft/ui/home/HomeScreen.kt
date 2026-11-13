@@ -103,7 +103,7 @@ fun HomeScreen(vm: AppViewModel) {
     if (drawingSetup) DrawingCanvasDialog({ drawingSetup = false }) { p -> drawingSetup = false; vm.createDrawing(p.width, p.height, p) }
     Box(Modifier.fillMaxSize().background(Fc.Gallery).windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal)).testTag("screen_home")) {
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(160.dp),
+            columns = GridCells.Adaptive(190.dp),
             modifier = Modifier.fillMaxSize().statusBarsPadding().testTag("home_projects_list"),
             contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 120.dp),
             horizontalArrangement = Arrangement.spacedBy(24.dp),
@@ -122,7 +122,7 @@ fun HomeScreen(vm: AppViewModel) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for ((kind, title) in listOf("all" to "All", "video" to "Videos", "drawing" to "Drawings", "picture" to "Pictures")) {
-                        FilterChip(selected = filter == kind, onClick = { filter = kind }, label = { Text(title) })
+                        io.github.artcraftandroid.filmcraft.ui.SelectChip(title, filter == kind, { filter = kind })
                     }
                 }
             }
@@ -181,7 +181,7 @@ private fun HomeTopBar(vm: AppViewModel) {
     Row(Modifier.fillMaxWidth().height(88.dp).padding(horizontal = 4.dp).testTag("home_screen_top_bar"), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.padding(vertical = 8.dp)) {
             Text("Projects", style = FcType.GalleryTitle, color = Fc.Title, modifier = Modifier.testTag("home_your_projects_header"))
-            Text("FilmCraft", style = FcType.Caption, color = Fc.Secondary)
+            Text("YOUR CREATIVE LIBRARY", style = FcType.Caption, color = Fc.Secondary)
         }
         Spacer(Modifier.weight(1f))
         Box {
@@ -199,18 +199,11 @@ private fun HomeTopBar(vm: AppViewModel) {
 
 @Composable
 private fun QuickTile(glyph: Glyph, label: String, tag: String, onClick: () -> Unit) {
-    Column(
-        Modifier
-            .width(94.dp)
-            .clickable(role = Role.Button, onClick = onClick)
-            .testTag(tag),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(16.dp)).background(Fc.Layer1), contentAlignment = Alignment.Center) {
-            GlyphIcon(glyph, Fc.Icon)
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(label, style = FcType.ToolLabel, color = Fc.Body, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    Row(Modifier.clip(RoundedCornerShape(12.dp)).background(Fc.Raised).clickable(role = Role.Button, onClick = onClick)
+        .padding(horizontal = 14.dp, vertical = 12.dp).testTag(tag), verticalAlignment = Alignment.CenterVertically) {
+        GlyphIcon(glyph, Fc.Icon, size = 20.dp)
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = FcType.Label, color = Fc.Body, maxLines = 1)
     }
 }
 

@@ -1,6 +1,8 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import io.github.artcraftandroid.filmcraft.ui.editorGlass
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -56,12 +58,14 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
     }
     val lane = lanes.firstOrNull { it.id == laneId } ?: lanes.firstOrNull()
     val key = lane?.keys?.firstOrNull { it.time == selected }
-    ToolPanel("Keyframes", close, modifier, tag = "keyframes_panel") {
+    ToolPanel("Keyframes", close, modifier, tag = "keyframes_panel", scrollContent = false) {
+      LazyColumn(Modifier.fillMaxWidth()) {
+       item(key = "animation_header") {
         Text("Add a keyframe snapshot, move the playhead, then change any slider or preview control. Tap a property title to edit its curve.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
         if (error != null) Text(error.orEmpty(), color = Fc.Detail, modifier = Modifier.padding(12.dp))
         if (clip == null || lane == null) {
             Text("Select a clip with animatable properties.", color = Fc.Detail, modifier = Modifier.padding(12.dp))
-            return@ToolPanel
+            return@item
         }
         val animated = lanes.any { it.animated }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -94,23 +98,29 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 SelectChip("Delete key", false, { ed.animationCommand("effects.deleteKeyframe", lane.address(clip.id).put("mediaTime", key.time)); selected = null }, tag = "keyframes_delete")
             }
         }
-        lanes.groupBy { it.group }.forEach { (group,items) ->
-            Text(group,style=FcType.Body,color=Fc.Title,modifier=Modifier.padding(horizontal=12.dp,vertical=10.dp))
-            items.forEach { item -> androidx.compose.runtime.key(item.id) {
-                SelectChip(item.label + if (item.animated) " ◆" else "",item.id==lane.id,{laneId=item.id;selected=null},tag="keyframes_property_${item.id}")
-                val selectedKey=if (item.id==lane.id) key else null
-                ValueEditor(selectedKey?.value ?: item.value,item.kind,item.param=="path" && item.mask!=null,item.label,item.id,
-                    (ed.timeline?.width?.toDouble() ?: 1920.0) to (ed.timeline?.height?.toDouble() ?: 1080.0),
-                    editPath={if(selectedKey!=null) ed.seek(selectedKey.timeline,draft=false);ed.panel=Panel.Mask},
-                    save={value,merge ->
-                        val body=item.address(clip.id).put("value",value)
-                        if(merge!=null) body.put("merge",merge)
-                        if(selectedKey!=null) ed.animationCommand("effects.setKeyframe",body.put("mediaTime",selectedKey.time))
-                        else ed.animationCommand("effects.setParam",body)
-                    },
-                )
-            } }
+       }
+       if (clip != null && lane != null) {
+        lanes.groupBy { it.group }.forEach { (group, properties) ->
+            item(key = "group:$group") { Text(group, style=FcType.Header, color=Fc.Title, modifier=Modifier.padding(16.dp)) }
+            items(properties, key = { "property:${it.id}" }) { item ->
+                Column(Modifier.fillMaxWidth().padding(horizontal=12.dp, vertical=4.dp).background(Fc.Raised, androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).padding(vertical=10.dp)) {
+                    SelectChip(item.label + if (item.animated) " ◆" else "", item.id==lane.id, {laneId=item.id;selected=null}, tag="keyframes_property_${item.id}")
+                    val selectedKey=if (item.id==lane.id) key else null
+                    ValueEditor(selectedKey?.value ?: item.value,item.kind,item.param=="path" && item.mask!=null,item.label,item.id,
+                        (ed.timeline?.width?.toDouble() ?: 1920.0) to (ed.timeline?.height?.toDouble() ?: 1080.0),
+                        editPath={if(selectedKey!=null) ed.seek(selectedKey.timeline,draft=false);ed.panel=Panel.Mask},
+                        save={value,merge ->
+                            val body=item.address(clip.id).put("value",value)
+                            if(merge!=null) body.put("merge",merge)
+                            if(selectedKey!=null) ed.animationCommand("effects.setKeyframe",body.put("mediaTime",selectedKey.time))
+                            else ed.animationCommand("effects.setParam",body)
+                        },
+                    )
+                }
+            }
         }
+       }
+      }
     }
 }
 
@@ -195,13 +205,13 @@ private fun KeyframeGraph(lane: AnimationLane, selected: Long?, start: Long, dur
                 dragPixels = 0f
                 dragKey?.let(select)
             }, onDragCancel = { dragKey = null }, onDragEnd = {
-                dragKey?.let { move(it, (dragPixels / size.width * span).roundToLong()) }
+                if (size.width > 0) dragKey?.let { move(it, (dragPixels / size.width * span).roundToLong()) }
                 dragKey = null
             }) { change, amount ->
                 if (dragKey != null) { change.consume(); dragPixels += amount.x }
             }
         }) {
-        val values = keys.mapNotNull { (it.value as? Number)?.toDouble() }
+        val values = keys.mapNotNull { (it.value as? Number)?.toDouble()?.takeIf { v -> v.isFinite() } }
         val low = values.minOrNull() ?: 0.0
         val high = values.maxOrNull() ?: 1.0
         fun x(k: AnimationKey) = ((k.timeline - start) / span * size.width).toFloat()

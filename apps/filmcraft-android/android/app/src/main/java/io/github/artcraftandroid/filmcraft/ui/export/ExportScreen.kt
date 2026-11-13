@@ -79,7 +79,7 @@ fun ExportScreen(vm: AppViewModel) {
     }
     Box(Modifier.fillMaxSize().background(Fc.Layer1).testTag("screen_export")) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().height(84.dp).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 FcIconButton(LucideIcons.X.glyph(), if (phase is ExportPhase.Running) "Cancel export" else "Close", {
                     when (phase) {
                         is ExportPhase.Running -> vm.cancelExport()
@@ -93,13 +93,13 @@ fun ExportScreen(vm: AppViewModel) {
                         is ExportPhase.Done -> "Ready to share"
                         else -> "Export"
                     },
-                    style = FcType.PanelTitle,
+                    style = FcType.GalleryTitle,
                     color = Fc.Title,
                     modifier = Modifier.testTag("export_title"),
                 )
             }
             Box(Modifier.weight(1f).fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.aspectRatio(aspect, matchHeightConstraintsFirst = aspect < 1f).clip(RoundedCornerShape(12.dp)).background(Fc.Black)) {
+                Box(Modifier.aspectRatio(aspect, matchHeightConstraintsFirst = aspect < 1f).clip(RoundedCornerShape(20.dp)).background(Fc.Black)) {
                     if (phase is ExportPhase.Done) {
                         AndroidView(
                             factory = { ctx ->
@@ -116,11 +116,11 @@ fun ExportScreen(vm: AppViewModel) {
                     }
                 }
             }
-            Column(Modifier.fillMaxWidth().padding(horizontal = 36.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 when (phase) {
                     ExportPhase.Settings -> {
                         Row(
-                            Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(12.dp)).background(Fc.Raised).clickable(role = Role.Button) { vm.exportSheet = true }.padding(horizontal = 16.dp).testTag("export_settings_row"),
+                            Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(20.dp)).background(Fc.Raised).clickable(role = Role.Button) { vm.exportSheet = true }.padding(horizontal = 16.dp).testTag("export_settings_row"),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text("Export settings", style = FcType.Label, color = Fc.Body, modifier = Modifier.weight(1f))

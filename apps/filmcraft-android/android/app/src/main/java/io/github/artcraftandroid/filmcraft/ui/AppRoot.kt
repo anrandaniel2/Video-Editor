@@ -10,6 +10,8 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -30,6 +32,15 @@ import io.github.artcraftandroid.filmcraft.ui.home.SettingsScreen
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun AppRoot(vm: AppViewModel) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var crashNotice by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(io.github.artcraftandroid.filmcraft.CrashReports.hasReport(context)) }
+    if (crashNotice) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { crashNotice = false },
+        title = { Text("Crash report available") },
+        text = { Text("The last error was saved on this device. Share it to help identify the exact failure. Nothing is sent automatically.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { crashNotice = false; io.github.artcraftandroid.filmcraft.CrashReports.share(context) }) { Text("Share report") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { crashNotice = false }) { Text("Not now") } },
+    )
     val snackbars = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
         for (m in vm.messages) snackbars.showSnackbar(m)

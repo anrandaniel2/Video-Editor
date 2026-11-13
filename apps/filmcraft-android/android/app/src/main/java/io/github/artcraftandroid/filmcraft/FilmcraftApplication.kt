@@ -16,6 +16,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 class FilmcraftApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        CrashReports.install(this)
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** The engine, loaded once per process on a background thread and shared by the screens. */

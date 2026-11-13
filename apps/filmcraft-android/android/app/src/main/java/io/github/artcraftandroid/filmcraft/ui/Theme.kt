@@ -26,15 +26,15 @@ val Inter = FontFamily(
  * the timeline's clips coloured by kind.
  */
 object Fc {
-    val Gallery = Color(0xFF212121)
+    val Gallery = Color(0xFF282828)
     // surfaces
     val Black = Color(0xFF1C1C1C)
     /** Full-screen pages over the editor (export). */
     val Layer1 = Color(0xFF212121)
     /** Bottom panels, dialogs, menus, the text strip. */
-    val Panel = Color(0xFF262626)
+    val Panel = Color(0xFF303030)
     /** Rows and cards on panels. */
-    val Raised = Color(0xFF303030)
+    val Raised = Color(0xFF414141)
     /** The band behind the navigation buttons under a panel. */
     val PanelBand = Color(0xFF212121)
     /** Timeline lanes. */
@@ -60,7 +60,7 @@ object Fc {
     val Recording = Color(0xFFF83A2B)
 
     // controls
-    val SliderOn = Color(0xFFD0D0D0)
+    val SliderOn = Color(0xFF0076FD)
     val SliderOff = Color(0xFF484848)
     val SliderDisabled = Color(0xFF323232)
     val ThumbFill = Color(0xFF0E0E0E)
@@ -135,7 +135,7 @@ object FcSize {
     val TopButton = 44.dp
     val Transport = 48.dp
     val FrameBar = 96.dp
-    val ToolTile = 68.dp
+    val ToolTile = 60.dp
     val ToolChip = 44.dp
     val PanelCorner = 24.dp
     val PanelInset = 12.dp

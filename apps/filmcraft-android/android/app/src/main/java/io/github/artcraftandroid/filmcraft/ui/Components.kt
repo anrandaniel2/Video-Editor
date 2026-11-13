@@ -167,6 +167,7 @@ fun ToolPanel(
     modifier: Modifier = Modifier,
     actions: (@Composable RowScope.() -> Unit)? = null,
     tag: String? = null,
+    scrollContent: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val close by rememberUpdatedState(onClose)
@@ -176,6 +177,7 @@ fun ToolPanel(
             .fillMaxWidth()
             .padding(horizontal = FcSize.PanelInset, vertical = 8.dp)
             .clip(RoundedCornerShape(FcSize.PanelCorner))
+            .background(Fc.Panel)
             .editorGlass(FcSize.PanelCorner, layer = 2f)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier),
     ) {
@@ -197,7 +199,7 @@ fun ToolPanel(
                     // with no action pills beside it the title row is shorter, so the title sits higher
                     Text(
                         title,
-                        style = FcType.PanelTitle,
+                        style = FcType.GalleryTitle.copy(fontSize = 26.sp),
                         color = Fc.Title,
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
@@ -209,7 +211,7 @@ fun ToolPanel(
             }
         }
         // the content scrolls when the room is short (a phone held sideways)
-        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) { content() }
+        Column(Modifier.weight(1f, fill = false).then(if (scrollContent) Modifier.verticalScroll(rememberScrollState()) else Modifier)) { content() }
         Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars).background(Color.Black.copy(alpha = .12f)))
     }
 }
@@ -235,6 +237,7 @@ fun FcSlider(
     description: String = "",
     tag: String? = null,
 ) {
+    val safeFraction = fraction.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
     val change by rememberUpdatedState(onChange)
     val done by rememberUpdatedState(onDone)
     val haptic = LocalHapticFeedback.current
@@ -246,7 +249,7 @@ fun FcSlider(
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics {
                 contentDescription = description
-                progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
+                progressBarRangeInfo = ProgressBarRangeInfo(safeFraction, 0f..1f)
                 if (enabled) setProgress { v -> change(v.coerceIn(0f, 1f)); done(); true }
             }
             .pointerInput(enabled) {
@@ -277,8 +280,8 @@ fun FcSlider(
         val pad = 10.dp.toPx()
         val y = size.height / 2f
         val track = 4.dp.toPx()
-        val w = size.width - 2 * pad
-        val x = pad + w * fraction.coerceIn(0f, 1f)
+        val w = (size.width - 2 * pad).coerceAtLeast(0f)
+        val x = pad + w * safeFraction
         val r = CornerRadius(2.dp.toPx())
         when (look) {
             SliderLook.Standard -> {
@@ -288,8 +291,7 @@ fun FcSlider(
                     val tx = pad + w * t
                     drawRect(if (x >= tx) Fc.SliderOn else Fc.SliderOff, Offset(tx - 0.5.dp.toPx(), y - track / 2), Size(1.dp.toPx(), track))
                 }
-                drawCircle(Fc.ThumbFill, 10.dp.toPx(), Offset(x, y))
-                drawCircle(if (enabled) Fc.ThumbRing else Fc.SliderOff, 9.dp.toPx(), Offset(x, y), style = Stroke(2.dp.toPx()))
+                drawRoundRect(if (enabled) Color.White else Fc.SliderOff, Offset(x - 6.dp.toPx(), y - 12.dp.toPx()), Size(12.dp.toPx(), 24.dp.toPx()), CornerRadius(4.dp.toPx()))
             }
             SliderLook.Opacity -> {
                 drawRoundRect(Brush.horizontalGradient(listOf(Color.Black, Fc.Title), startX = pad, endX = pad + w), Offset(pad, y - track / 2), Size(w, track), r)
@@ -333,7 +335,7 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
         modifier
             .fillMaxWidth()
             .height(56.dp)
-            .clip(CircleShape)
+            .clip(RoundedCornerShape(14.dp))
             .background(if (enabled) Fc.Accent else Fc.Accent.copy(alpha = 0.4f))
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier),

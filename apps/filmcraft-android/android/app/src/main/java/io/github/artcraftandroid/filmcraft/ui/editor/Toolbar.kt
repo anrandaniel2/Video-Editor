@@ -65,7 +65,7 @@ fun EditorToolbar(ed: EditorController, modifier: Modifier = Modifier) {
 
 @Composable
 private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modifier: Modifier) {
-    BoxWithConstraints(modifier.fillMaxWidth().height(FcSize.ToolTile).editorGlass()) {
+    BoxWithConstraints(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).height(FcSize.ToolTile).clip(RoundedCornerShape(22.dp)).background(Fc.Panel)) {
         // with a back button the tools start clear of it and centre in what is left
         val start = if (back != null) 43.5.dp else 0.dp
         val end = if (back != null) 15.dp else 0.dp

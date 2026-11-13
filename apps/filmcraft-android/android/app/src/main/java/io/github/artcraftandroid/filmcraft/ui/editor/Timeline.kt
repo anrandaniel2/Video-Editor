@@ -92,7 +92,7 @@ fun Timeline(ed: EditorController, modifier: Modifier = Modifier, compact: Boole
     var move by remember { mutableStateOf<MoveDrag?>(null) }
     var scrollY by remember { mutableStateOf(0f) }
     val edState by rememberUpdatedState(ed)
-    BoxWithConstraints(modifier.editorBackdropSource().background(Fc.Black).testTag("editor_timeline")) {
+    BoxWithConstraints(modifier.padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(16.dp)).editorBackdropSource().background(Fc.Lane).testTag("editor_timeline")) {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
         with(density) {

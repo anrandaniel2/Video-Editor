@@ -104,6 +104,7 @@ import kotlinx.coroutines.launch
 /** The editor: preview, transport, timeline and tools, stacked or side by side. */
 @Composable
 fun EditorScreen(ed: EditorController) {
+    SideEffect { io.github.artcraftandroid.filmcraft.CrashReports.screen = "Editor panel=${ed.panel}, clip=${ed.selectedClip?.kind}, 3D=${ed.selectedClip?.has3d}" }
     BackHandler {
         when {
             ed.panel != null -> ed.panel = null
@@ -120,7 +121,7 @@ fun EditorScreen(ed: EditorController) {
                 .windowInsetsPadding(WindowInsets.displayCutout.union(WindowInsets.navigationBars).only(WindowInsetsSides.Horizontal))
                 .testTag("screen_editor"),
         ) {
-            if (maxWidth >= 600.dp && maxWidth > maxHeight) SideBySide(ed) else Stacked(ed)
+            EditorWorkspace(ed)
             // The animation frame browser floats across the bottom. The layouts above reserve its
             // height (the preview window goes up; when there is no room it shrinks) so the two never
             // sit on top of each other.
@@ -156,145 +157,78 @@ private fun BusyOverlay(text: String) {
     }
 }
 
+/** One stable workspace. Inspectors FLOAT over the monitor instead of rebuilding its layout. */
 @Composable
-private fun Stacked(ed: EditorController) {
-    val density = LocalDensity.current
-    val screenHeight = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
-    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds || it == Panel.Drawing }
-    val textInput = panel as? Panel.TextInput
-    val showPanel = panel != null && textInput == null
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        AnimatedVisibility(panel == null, enter = expandVertically(tween(300)) + fadeIn(tween(300)), exit = shrinkVertically(tween(300)) + fadeOut(tween(300))) {
-            TopBar(ed, sideBySide = false)
-        }
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val room = maxHeight
-            val minPlayer = 100.dp
-            val minTimeline = if (showPanel) 110.dp else 78.dp
-            // the player keeps its height when a panel opens (the top bar makes way; the timeline
-            // gives up the rest)
-            val default = (room + FcSize.ToolTile) * 0.55f
-            val wanted = when {
-                ed.playerHeight > 0f -> with(density) { ed.playerHeight.toDp() }
-                showPanel && ed.basePlayerPx > 0f -> with(density) { ed.basePlayerPx.toDp() }
-                else -> default
-            }
-            val player = wanted.coerceIn(minPlayer, max(minPlayer.value, (room - FcSize.Transport - minTimeline).value).dp)
-            if (!showPanel) SideEffect { ed.basePlayerPx = with(density) { player.toPx() } }
-            Column(Modifier.fillMaxSize()) {
-                Preview(ed, Modifier.fillMaxWidth().height(player))
-                TransportRow(ed, onResize = { dy ->
-                    val now = if (ed.playerHeight > 0f) ed.playerHeight else with(density) { player.toPx() }
-                    ed.playerHeight = (now + dy).coerceIn(with(density) { minPlayer.toPx() }, with(density) { (room - FcSize.Transport - minTimeline).toPx() })
-                })
-                Timeline(ed, Modifier.fillMaxWidth().weight(1f))
-            }
-        }
-        when {
-            showPanel -> EditorPanel(ed, panel!!, Modifier.heightIn(max = screenHeight * 0.48f))
-            textInput != null -> TextInputStrip(ed, textInput)
-            else -> {
-                EditorToolbar(ed)
-                Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
-            }
-        }
-    }
-}
-
-@Composable
-private fun SideBySide(ed: EditorController) {
-    val density = LocalDensity.current
-    val panel = ed.panel.takeUnless { it == Panel.OnlineVideos || it == Panel.OnlineSounds || it == Panel.Drawing }
-    val textInput = panel as? Panel.TextInput
-    val showPanel = panel != null && textInput == null
-    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding()) {
-        val total = maxWidth
-        val room = maxHeight
-        val t = ed.timeline
-        val aspect = if (t != null && t.height.toInt() > 0) t.width.toFloat() / t.height.toFloat() else 9f / 16f
-        val available = total - 60.dp
-        val default = min((maxHeight * aspect).value, (available / 2).value).dp
-        val minPlayer = 160.dp
-        val minTimeline = 340.dp
-        val playerW = (if (ed.sideFraction > 0f) available * ed.sideFraction else default).coerceIn(minPlayer, max(minPlayer.value, (available - minTimeline).value).dp)
-        // The floating frame bar owns the bottom of the screen: the full-height preview lifts
-        // above it, and shrinks to the minimum when there is no room to lift.
-        val barSpace = if (frameBarVisible(ed)) FcSize.FrameBar else 0.dp
-        val previewH = (room - barSpace).coerceAtLeast(minPlayer)
-        Row(Modifier.fillMaxSize()) {
-            // transport rail
-            Column(Modifier.width(48.dp).fillMaxHeight().editorGlass(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                FcIconButton(Glyphs.StepBack, "Previous frame", { ed.step(-1) }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_previous_frame_button"))
-                FcIconButton(if (ed.playing) Glyphs.Pause else Glyphs.Play, if (ed.playing) "Pause" else "Play", { ed.togglePlay() }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_play_button"))
-                FcIconButton(Glyphs.StepForward, "Next frame", { ed.step(1) }, size = 40.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_next_frame_button"))
-            }
-            Preview(ed, Modifier.width(playerW).height(previewH))
-            // the divider between the monitor and the timeline
-            Box(
-                Modifier
-                    .width(12.dp)
-                    .fillMaxHeight()
-                    .pointerInput(available) {
-                        detectHorizontalDragGestures { change, dx ->
-                            change.consume()
-                            val now = ed.sideFraction.takeIf { it > 0f } ?: (playerW / available)
-                            ed.sideFraction = (now + dx / with(density) { available.toPx() }).coerceIn(minPlayer / available, ((available - minTimeline) / available).coerceAtLeast(minPlayer / available))
-                        }
-                    }
-                    .testTag("editor_side_by_side_divider")
-                    .semantics { contentDescription = "Resize monitor" },
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(Modifier.size(width = 4.dp, height = 32.dp).clip(CircleShape).background(Fc.Detail))
-            }
-            Column(Modifier.weight(1f).fillMaxHeight()) {
-                AnimatedVisibility(!showPanel) { TopBar(ed, sideBySide = true) }
-                Timeline(ed, Modifier.fillMaxWidth().weight(1f))
-                when {
-                    showPanel -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
-                        // never more than most of the height: the timeline stays in sight
-                        Box(Modifier.width(min((total - playerW - 60.dp).value, 640f).dp).heightIn(max = room * 0.72f)) { EditorPanel(ed, panel!!) }
-                    }
-                    textInput != null -> TextInputStrip(ed, textInput)
-                    else -> {
-                        EditorToolbar(ed)
-                        Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
+private fun EditorWorkspace(ed: EditorController) {
+    val panel = ed.panel.takeUnless { it == Panel.Drawing || it == Panel.OnlineVideos || it == Panel.OnlineSounds || it is Panel.TextInput }
+    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        val wide = maxWidth >= 700.dp && maxWidth > maxHeight
+        val inspectorWidth = if (wide) 380.dp else maxWidth - 12.dp
+        val inspectorHeight = maxHeight * if (wide) 0.80f else 0.62f
+        Column(Modifier.fillMaxSize()) {
+            WorkspaceBar(ed)
+            if (wide) {
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    WorkspaceMonitor(ed, Modifier.weight(1f).fillMaxHeight())
+                    Column(Modifier.weight(1f).fillMaxHeight()) {
+                        TransportRow(ed)
+                        Timeline(ed, Modifier.fillMaxWidth().weight(1f))
                     }
                 }
+            } else {
+                WorkspaceMonitor(ed, Modifier.weight(1f).fillMaxWidth())
+                TransportRow(ed)
+                Timeline(ed, Modifier.fillMaxWidth().height(174.dp))
+            }
+            val input = ed.panel as? Panel.TextInput
+            if (input != null) TextInputStrip(ed, input) else EditorToolbar(ed)
+        }
+        if (panel != null) {
+            Box(Modifier.align(Alignment.BottomEnd).padding(end = if (wide) 12.dp else 0.dp, bottom = FcSize.ToolTile + 8.dp)
+                .width(inspectorWidth).heightIn(max = inspectorHeight)) {
+                EditorPanel(ed, panel, Modifier.fillMaxWidth())
             }
         }
     }
 }
 
 @Composable
-private fun TopBar(ed: EditorController, sideBySide: Boolean) {
-    Row(Modifier.fillMaxWidth().height(FcSize.TopBar).editorGlass(0.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        FcIconButton(LucideIcons.X.glyph(), "Save project and return to Projects", { ed.closeEditor() }, modifier = Modifier.testTag("editor_home_button"))
-        Spacer(Modifier.weight(1f))
-        if (sideBySide) {
-            val st = ed.status
-            FcIconButton(LucideIcons.Undo2.glyph(), "Undo", { ed.undo() }, enabled = st?.canUndo == true, modifier = Modifier.testTag("editor_top_bar_undo_button"))
-            FcIconButton(LucideIcons.Redo2.glyph(), "Redo", { ed.redo() }, enabled = st?.canRedo == true, modifier = Modifier.testTag("editor_top_bar_redo_button"))
-            Spacer(Modifier.width(8.dp))
+private fun WorkspaceMonitor(ed: EditorController, modifier: Modifier) {
+    Box(modifier.padding(horizontal = 12.dp, vertical = 8.dp).clip(RoundedCornerShape(16.dp)).background(Fc.Lane)) {
+        Preview(ed, Modifier.fillMaxSize())
+        Column(Modifier.align(Alignment.CenterStart).padding(6.dp).clip(RoundedCornerShape(14.dp)).background(Fc.Black)) {
+            NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Undo, "Undo", false) { ed.undo() }
+            NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Redo, "Redo", false) { ed.redo() }
         }
-        EditorExportButton({ ed.export() }, enabled = (ed.timeline?.duration ?: 0L) > 0L, modifier = Modifier.testTag("editor_export_button"))
     }
 }
 
 @Composable
-private fun TransportRow(ed: EditorController, onResize: (Float) -> Unit) {
+private fun WorkspaceBar(ed: EditorController) {
+    Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Cross, "Save and return to Projects", false) { ed.closeEditor() }
+        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Actions, "Keyframes", ed.panel == Panel.Keyframes) { if (ed.selectedClip != null) ed.panel = Panel.Keyframes }
+        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Adjustments, "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) ed.panel = Panel.Effects }
+        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Transform, "3D", ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D }
+        Spacer(Modifier.weight(1f))
+        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.Brush, "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
+        NativeAction(io.github.artcraftandroid.procraft.ui.PcIcons.MenuShare, "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
+    }
+}
+
+@Composable
+private fun NativeAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, click: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(if (selected) Fc.Accent else Color.Transparent)
+        .clickable(onClick = click).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        androidx.compose.material3.Icon(icon, label, tint = Color.White, modifier = Modifier.size(42.dp))
+    }
+}
+
+@Composable
+private fun TransportRow(ed: EditorController) {
     val st = ed.status
     Row(Modifier.fillMaxWidth().height(FcSize.Transport).editorGlass(0.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier
-                .size(48.dp)
-                .pointerInput(Unit) { detectVerticalDragGestures { change, dy -> change.consume(); onResize(dy) } }
-                .testTag("editor_resize_player_button")
-                .semantics { contentDescription = "Resize player" },
-            contentAlignment = Alignment.Center,
-        ) {
-            io.github.artcraftandroid.filmcraft.ui.GlyphIcon(LucideIcons.ChevronsUpDown.glyph(), Fc.Icon, size = 22.dp)
-        }
+        Text(TimelineMath.clock(ed.playhead), style = FcType.Value, color = Fc.Body, modifier = Modifier.padding(start = 16.dp))
         Spacer(Modifier.weight(1f))
         val has = (ed.timeline?.duration ?: 0L) > 0L
         FcIconButton(Glyphs.StepBack, "Previous frame", { ed.step(-1) }, enabled = has, size = 36.dp, iconSize = 22.dp, modifier = Modifier.testTag("editor_previous_frame_button"))

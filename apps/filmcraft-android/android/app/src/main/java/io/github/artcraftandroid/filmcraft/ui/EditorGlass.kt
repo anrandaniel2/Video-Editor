@@ -84,9 +84,9 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp =
         }
         // Floating catalogs use effect-only panes: all panes sample the editor, not each
         // other's render layers. Capturing nested full-screen effects can form a draw cycle.
-        // Normal editor panels retain their explicit source ordering.
+        // Only preview/timeline are sources. A frosted control must NEVER record itself
+        // as a source: sibling/nested panels can otherwise form RenderNode dependency cycles.
         return clip(RoundedCornerShape(corner))
-            .then(if (captureSurface) Modifier.hazeSource(state, zIndex = layer) else Modifier)
             .hazeEffect(state, style = style)
     }
     val backdrop = LocalEditorGlass.current

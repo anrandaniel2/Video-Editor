@@ -67,7 +67,7 @@ private fun Page(title: String, onClose: () -> Unit, tag: String, content: @Comp
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             FcIconButton(LucideIcons.X.glyph(), "Close", onClose)
         }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
             Text(title, style = FcType.GalleryTitle, color = Fc.Title)
             Spacer(Modifier.height(24.dp))
             content()
@@ -79,7 +79,7 @@ private fun Page(title: String, onClose: () -> Unit, tag: String, content: @Comp
 @Composable
 private fun Row48(label: String, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp).heightIn(min = 52.dp).clip(RoundedCornerShape(14.dp)).background(Fc.Panel).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).heightIn(min = 52.dp).clip(RoundedCornerShape(18.dp)).background(Fc.Raised).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = FcType.Body, color = Fc.Body, modifier = Modifier.weight(1f))
@@ -99,6 +99,7 @@ private fun bytesOnDisk(p: ModelPackage): Long = File(p.dir).listFiles()?.sumOf 
 
 @Composable
 fun SettingsScreen(vm: AppViewModel) {
+    val context = LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
     var asking by remember { mutableStateOf<ModelPackage?>(null) }
     val downloading = ModelDownloads.state?.id
@@ -108,6 +109,7 @@ fun SettingsScreen(vm: AppViewModel) {
         }
     }
     Page("Settings", { vm.back() }, "screen_settings") {
+        Row48("Share crash report") { io.github.artcraftandroid.filmcraft.CrashReports.share(context) }
         Row48("About FilmCraft") { vm.show(Screen.About) }
         if (stored.isNotEmpty()) {
             Spacer(Modifier.height(24.dp))
