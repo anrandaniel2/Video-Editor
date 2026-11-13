@@ -98,6 +98,9 @@ android {
 }
 
 androidComponents {
+    beforeVariants(selector().withBuildType("release")) { builder ->
+        builder.enableUnitTest = true
+    }
     onVariants { variant ->
         val name = variant.name.replaceFirstChar { it.uppercase() }
         val cargoBuild = tasks.register<CargoNdkBuild>("cargoBuild$name") {
