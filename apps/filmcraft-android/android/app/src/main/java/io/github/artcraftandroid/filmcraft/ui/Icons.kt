@@ -57,6 +57,11 @@ fun GlyphIcon(glyph: Glyph, tint: Color, modifier: Modifier = Modifier, size: Dp
 
 /** FilmCraft's own glyphs, drawn on a 24-unit grid: shapes Lucide has no stroke-only form of. */
 object Glyphs {
+    /** Purpose-drawn isometric cube; distinct from the stacked-layer/overlay icon. */
+    val Object3D by lazy {
+        lucide("Object3D", "M12 2.5 21 7.5v9L12 21.5 3 16.5v-9Z", "m3 7.5 9 5 9-5", "M12 12.5v9").glyph()
+    }
+
     private fun DrawScope.u(v: Float) = v * size.minDimension / 24f
 
     /** A filled play triangle. */

@@ -93,7 +93,7 @@ private fun addTools(ed: EditorController) = listOf(
     Tool("editor_tool_drawing", "Draw", LucideIcons.Paintbrush.glyph()) { ed.panel = Panel.Drawing },
     Tool("editor_tool_audio", "Audio", LucideIcons.Music.glyph()) { ed.submenu = Submenu.AddAudio },
     Tool("editor_tool_text", "Text", LucideIcons.Type.glyph()) { ed.panel = Panel.TextInput(null) },
-    Tool("editor_tool_3d", "3D", LucideIcons.Layers.glyph()) { ed.panel = Panel.Object3D },
+    Tool("editor_tool_3d", "3D", Glyphs.Object3D) { ed.panel = Panel.Object3D },
     Tool("editor_tool_lights", "Lights", LucideIcons.Sun.glyph()) { ed.panel = Panel.Lights },
     Tool("editor_tool_captions", "Captions", LucideIcons.Captions.glyph(), enabled = ed.duration > 0) { ed.panel = Panel.Captions },
     Tool("editor_tool_files", "Files", LucideIcons.File.glyph()) { ed.submenu = Submenu.Files },
@@ -143,7 +143,7 @@ private fun clipTools(ed: EditorController, c: ClipInfo): List<Tool> {
     return (if (c.kind != ClipKind.MISSING) listOf(animation) else emptyList()) + when (c.kind) {
         ClipKind.MISSING -> listOf(delete, replace)
         ClipKind.TEXT -> if (c.has3d) listOf(
-            Tool("editor_tool_3d", "3D", LucideIcons.Layers.glyph(), active = ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D },
+            Tool("editor_tool_3d", "3D", Glyphs.Object3D, active = ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D },
             split, delete, duplicate,
         ) else listOf(
             Tool("editor_tool_edit_text", "Edit text", LucideIcons.Keyboard.glyph()) { ed.panel = Panel.TextInput(c.id) },

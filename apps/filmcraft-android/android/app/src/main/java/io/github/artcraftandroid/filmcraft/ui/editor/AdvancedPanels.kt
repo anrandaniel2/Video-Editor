@@ -119,12 +119,20 @@ fun Object3DPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
 @Composable
 private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated: Boolean) {
     fun change(next: Object3DSettings, merge: String? = null) = ed.setObject(next, merge)
+    var section by remember(st.mesh) { mutableStateOf("Transform") }
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf("Transform", "Geometry", "Surface", "Lighting").forEach { tab ->
+            SelectChip(tab, section == tab, { section = tab }, tag = "object3d_section_${tab.lowercase()}")
+        }
+    }
+
     Spacer(Modifier.height(8.dp))
     Text(
         if (animated) "Keyframed · edits at playhead" else "Static · enable keyframes to animate",
         style = FcType.Caption, color = Fc.Detail,
         modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
     )
+    if (section == "Geometry") {
     if (st.mesh == Object3DMesh.MODEL) {
         val info by produceState<ModelInfo?>(null, st.modelPath) {
             value = if (st.modelPath.isBlank()) null else runCatching { ed.engine.command { modelInfo(st.modelPath) } }.getOrNull()
@@ -218,6 +226,8 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         AdvancedSlider("Extrusion", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }
         AdvancedSlider("Bevel", st.bevel, 0.0, 100.0, 0.5, "object3d_bevel") { v, k -> change((ed.object3DState?.settings ?: st).copy(bevel = v), k) }
     }
+    }
+    if (section == "Transform") {
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
     AdvancedSlider("Rotate X", st.rotationX, -180.0, 180.0, 1.0, "object3d_rx") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationX = v), k) }
     AdvancedSlider("Rotate Y", st.rotationY, -180.0, 180.0, 1.0, "object3d_ry") { v, k -> change((ed.object3DState?.settings ?: st).copy(rotationY = v), k) }
@@ -226,6 +236,8 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     AdvancedSlider("Camera distance", st.z, 50.0, 3000.0, 5.0, "object3d_z") { v, k -> change((ed.object3DState?.settings ?: st).copy(z = v), k) }
     AdvancedSlider("X", st.x, -2000.0, 4000.0, 1.0, "object3d_x") { v, k -> change((ed.object3DState?.settings ?: st).copy(x = v), k) }
     AdvancedSlider("Y", st.y, -2000.0, 4000.0, 1.0, "object3d_y") { v, k -> change((ed.object3DState?.settings ?: st).copy(y = v), k) }
+    }
+    if (section == "Surface") {
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
     ColorPicker("Base color", st.color.toInt()) { c -> change((ed.object3DState?.settings ?: st).copy(color = c.toUInt(), sideColor = c.toUInt())) }
     if (st.mesh != Object3DMesh.MODEL) {
@@ -233,6 +245,8 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         AdvancedSlider("Roughness", st.roughness, 0.0, 100.0, 1.0, "object3d_rough") { v, k -> change((ed.object3DState?.settings ?: st).copy(roughness = v), k) }
     }
     AdvancedSlider("Opacity", st.opacity, 0.0, 100.0, 1.0, "object3d_opacity") { v, k -> change((ed.object3DState?.settings ?: st).copy(opacity = v), k) }
+    }
+    if (section == "Lighting") {
     // Lighting is the scene's light objects (coloured, multiple) — not a per-object angle.
     LaunchedEffect(Unit) { ed.loadLights() }
     Row(
@@ -274,9 +288,10 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
             change((ed.object3DState?.settings ?: st).copy(trackDepth = v), k)
         }
     }
+    }
     // Shape geometry sliders live at the bottom. A 3D model has no size/extrusion sliders —
     // its Scale in the transform group above is the only size control.
-    if (st.mesh != Object3DMesh.MODEL && st.mesh != Object3DMesh.TEXT) {
+    if (section == "Geometry" && st.mesh != Object3DMesh.MODEL && st.mesh != Object3DMesh.TEXT) {
         HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
         AdvancedSlider("Size", st.size, 10.0, 1200.0, 1.0, "object3d_size") { v, k -> change((ed.object3DState?.settings ?: st).copy(size = v), k) }
         AdvancedSlider("Depth", st.depth, 0.0, 500.0, 1.0, "object3d_depth") { v, k -> change((ed.object3DState?.settings ?: st).copy(depth = v), k) }

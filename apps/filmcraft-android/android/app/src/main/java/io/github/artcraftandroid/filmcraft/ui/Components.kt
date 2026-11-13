@@ -177,8 +177,7 @@ fun ToolPanel(
             .fillMaxWidth()
             .padding(horizontal = FcSize.PanelInset, vertical = 8.dp)
             .clip(RoundedCornerShape(FcSize.PanelCorner))
-            .background(Fc.Panel)
-            .editorGlass(FcSize.PanelCorner, layer = 2f)
+            .background(io.github.artcraftandroid.procraft.ui.Pc.PopoverFill)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier),
     ) {
         // the handle and the title row drag the panel down to close it
@@ -196,10 +195,19 @@ fun ToolPanel(
                     Modifier.fillMaxWidth().padding(start = FcSize.PanelPadding, end = FcSize.PanelPadding, top = 12.dp, bottom = 4.dp).height(44.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // with no action pills beside it the title row is shorter, so the title sits higher
+                    val toolIcon = when {
+                        title.contains("3D", true) -> Glyphs.Object3D
+                        title.contains("keyframe", true) -> LucideIcons.ChartSpline.glyph()
+                        title.contains("speed", true) -> LucideIcons.Gauge.glyph()
+                        title.contains("volume", true) || title.contains("audio", true) -> LucideIcons.Volume2.glyph()
+                        title.contains("light", true) -> LucideIcons.Sun.glyph()
+                        else -> LucideIcons.WandSparkles.glyph()
+                    }
+                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(Fc.Raised), contentAlignment = Alignment.Center) { GlyphIcon(toolIcon, Fc.Icon, size = 22.dp) }
+                    Spacer(Modifier.width(12.dp))
                     Text(
                         title,
-                        style = FcType.GalleryTitle.copy(fontSize = 26.sp),
+                        style = FcType.GalleryTitle.copy(fontSize = 23.sp),
                         color = Fc.Title,
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
@@ -211,7 +219,8 @@ fun ToolPanel(
             }
         }
         // the content scrolls when the room is short (a phone held sideways)
-        Column(Modifier.weight(1f, fill = false).then(if (scrollContent) Modifier.verticalScroll(rememberScrollState()) else Modifier)) { content() }
+        Column(Modifier.weight(1f, fill = false).then(if (scrollContent) Modifier.verticalScroll(rememberScrollState()) else Modifier), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
+        Spacer(Modifier.height(12.dp))
         Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars).background(Color.Black.copy(alpha = .12f)))
     }
 }
@@ -307,8 +316,8 @@ fun FcSlider(
 fun SelectChip(label: String, selected: Boolean, onClick: () -> Unit, tag: String? = null) {
     Row(
         Modifier
-            .height(36.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .height(40.dp)
+            .clip(CircleShape)
             .background(if (selected) Fc.Accent else Fc.Raised)
             .clickable(role = Role.RadioButton, onClick = onClick)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
@@ -442,12 +451,13 @@ fun PresetTile(name: String, selected: Boolean, onClick: () -> Unit, tag: String
 /** A labelled slider row: name and value over the slider. */
 @Composable
 fun SliderRow(label: String, value: String, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)
+        .clip(RoundedCornerShape(18.dp)).background(Fc.Raised).padding(horizontal = 14.dp, vertical = 10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
-            Text(value, style = FcType.Value, color = Fc.Secondary)
+            Text(label, style = FcType.Label, color = Fc.Body, modifier = Modifier.weight(1f))
+            Text(value, style = FcType.Value, color = Fc.Body,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Fc.Black).padding(horizontal = 10.dp, vertical = 5.dp))
         }
-        Spacer(Modifier.height(5.dp))
         content()
     }
 }

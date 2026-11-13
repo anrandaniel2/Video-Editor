@@ -209,7 +209,7 @@ private fun WorkspaceBar(ed: EditorController) {
         NativeAction(LucideIcons.X.glyph(), "Save and return to Projects", false) { ed.closeEditor() }
         NativeAction(LucideIcons.ChartSpline.glyph(), "Keyframes", ed.panel == Panel.Keyframes) { if (ed.selectedClip != null) ed.panel = Panel.Keyframes }
         NativeAction(LucideIcons.WandSparkles.glyph(), "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) ed.panel = Panel.Effects }
-        NativeAction(LucideIcons.Layers.glyph(), "3D", ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D }
+        NativeAction(Glyphs.Object3D, "3D", ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D }
         Spacer(Modifier.weight(1f))
         NativeAction(LucideIcons.Paintbrush.glyph(), "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
         NativeAction(LucideIcons.Share2.glyph(), "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
