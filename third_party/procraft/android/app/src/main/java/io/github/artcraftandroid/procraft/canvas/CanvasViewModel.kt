@@ -142,7 +142,7 @@ internal fun brushFileName(name: String, single: Boolean): String {
 
 /** The gallery, the open artwork and the state of the controls around it; outlives configuration changes. */
 class CanvasViewModel(app: Application) : AndroidViewModel(app) {
-    var session: CanvasSession? = null
+    var session by mutableStateOf<CanvasSession?>(null)
         private set
 
     /** Frosted panels open over the canvas, for the engine to blur what is behind them. */
@@ -1289,31 +1289,45 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         io.github.artcraftandroid.procraft.core.layersFor(width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt())
             .coerceAtMost(Int.MAX_VALUE.toUInt()).toInt()
 
-    /** A new artwork of `width` × `height` pixels (the screen's size), in Display P3, opened on the canvas; of a plugin's [kind] (`<id>.<key>`), its plugin keeping it. */
-    fun newArtwork(width: Int, height: Int, kind: String? = null) {
-        if (opening || session != null) return
+    /** A host can await opening; failures become visible UI state, never a silent loading loop. */
+    private fun launchArtworkOpening(open: suspend () -> Unit): kotlinx.coroutines.Job? {
+        if (opening || session != null) return null
         opening = true
-        viewModelScope.launch {
-            val s = withContext(Dispatchers.IO) {
-                val made = CanvasSession(width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt()).also {
-                    it.setNewProfile(io.github.artcraftandroid.procraft.gallery.CanvasPreset.P3)
-                    loadBrushes(it)
-                }
-                if (kind == null) {
-                    made
-                } else {
-                    val canvas = plugins.openCanvas(kind, width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt(), null)
-                    made.takeIf { canvas != null && it.attachPluginCanvas(kind, canvas) }
-                }
+        message = null
+        return viewModelScope.launch {
+            try {
+                open()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "opening artwork", e)
+                message = e.message ?: "The drawing couldn't be opened."
+            } finally {
+                opening = false
             }
-            opening = false
-            if (s == null) {
-                message = "The plugin couldn't make this artwork."
-                return@launch
-            }
-            start(s, store.newFolder(galleryDir), brushesLoaded = true)
-            startedNew()
         }
+    }
+
+    /** A new artwork of `width` × `height` pixels (the screen's size), in Display P3, opened on the canvas; of a plugin's [kind] (`<id>.<key>`), its plugin keeping it. */
+    fun newArtwork(width: Int, height: Int, kind: String? = null): kotlinx.coroutines.Job? = launchArtworkOpening {
+        val s = withContext(Dispatchers.IO) {
+            val made = CanvasSession(width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt()).also {
+                it.setNewProfile(io.github.artcraftandroid.procraft.gallery.CanvasPreset.P3)
+                loadBrushes(it)
+            }
+            if (kind == null) {
+                made
+            } else {
+                val canvas = plugins.openCanvas(kind, width.coerceAtLeast(1).toUInt(), height.coerceAtLeast(1).toUInt(), null)
+                made.takeIf { canvas != null && it.attachPluginCanvas(kind, canvas) }
+            }
+        }
+        if (s == null) {
+            message = "The plugin couldn't make this artwork."
+            return@launchArtworkOpening
+        }
+        start(s, store.newFolder(galleryDir), brushesLoaded = true)
+        startedNew()
     }
 
     // the app's own settings (the settings page beside the canvas): read when the app comes back
@@ -1391,9 +1405,8 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** A new artwork from a photo or picture file, its size, the picture as its one layer. */
-    fun newFromPicture(uri: android.net.Uri) {
-        viewModelScope.launch { pictureArtwork(uri) }
-    }
+    fun newFromPicture(uri: android.net.Uri): kotlinx.coroutines.Job? =
+        launchArtworkOpening { pictureArtwork(uri) }
 
     /** [newFromPicture], the artwork called [title] (an imported file's name). */
     private suspend fun pictureArtwork(uri: android.net.Uri, title: String = "Untitled Artwork") {

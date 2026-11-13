@@ -39,3 +39,15 @@ Timeline insertion is awaited by the host rather than launched in a second scope
 On failed insertion the partial project PNG is removed and the native canvas stays
 open; successful insertion transfers bitmap ownership to the controller. Export
 and input cache files are cleaned up on success, failure, and cancellation.
+
+## Opening state
+
+The embedded host reads `CanvasViewModel.session` before it renders AppRoot.
+Unlike upstream's gallery route, that branch may not observe `screen` at all.
+`session` must therefore be Compose snapshot state: an ordinary field leaves the
+host displaying its loading screen after native initialization completes.
+The new-artwork and picture-import entry points also return their opening jobs;
+the host awaits those jobs and reports failure rather than polling indefinitely.
+
+Device regression: open a blank Home drawing, a Home imported image, and Draw
+inside a project. Each must replace the loading view with an interactive canvas.

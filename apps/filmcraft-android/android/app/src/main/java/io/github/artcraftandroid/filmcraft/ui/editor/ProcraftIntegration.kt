@@ -76,17 +76,17 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
         var input: File? = null
         try {
             if (frame == null) {
-                vm.newArtwork(ed.timeline?.width?.toInt() ?: 1080, ed.timeline?.height?.toInt() ?: 1920)
+                vm.newArtwork(ed.timeline?.width?.toInt() ?: 1080, ed.timeline?.height?.toInt() ?: 1920)?.join()
             } else {
                 input = File(context.cacheDir, "procraft-input-${java.util.UUID.randomUUID()}.png")
                 val file = requireNotNull(input)
                 withContext(Dispatchers.IO) {
                     file.outputStream().use { check(frame.compress(Bitmap.CompressFormat.PNG, 100, it)) }
                 }
-                vm.newFromPicture(Uri.fromFile(file))
+                vm.newFromPicture(Uri.fromFile(file))?.join()
             }
-            // Both constructors open asynchronously. Keep the input alive until import finishes.
-            while (vm.session == null && vm.message == null) kotlinx.coroutines.delay(25)
+            // Await the real opening job, rather than polling a non-observable session field.
+            check(vm.session != null) { vm.message ?: "The drawing couldn't be opened." }
             initialised = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
