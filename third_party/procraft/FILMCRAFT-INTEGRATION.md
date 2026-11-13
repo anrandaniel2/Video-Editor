@@ -51,3 +51,20 @@ the host awaits those jobs and reports failure rather than polling indefinitely.
 
 Device regression: open a blank Home drawing, a Home imported image, and Draw
 inside a project. Each must replace the loading view with an interactive canvas.
+
+## Upstream brush rendering fixes
+
+GPU files `crates/gpu/src/{lib.rs,canvas.rs,shaders/composite.wgsl}` updated verbatim
+from upstream baafdf9567 (other sources remain based on the original pinned revision).
+These include upstream commits:
+
+- 76c4d8db60: Samsung Xclipse Vulkan stroke blending compiler workaround; restore
+  Vulkan-first Android selection instead of routing these GPUs to OpenGL ES where
+  grainy brushes, liquify and 3D painting could draw nothing.
+- 832a5908a5: pad OpenGL brush texture arrays so their layer count is not a multiple
+  of six. The old 58 stock shapes plus 8 spare layers were treated as cube maps,
+  causing brush shapes and grains to sample blank.
+
+The custom preview queue/cache/resource changes from 0.0.46 remain reverted.
+The upstream `array_textures_on_opengl_are_never_taken_for_cube_maps` regression
+is run with the native GPU library unit tests in the release workflow.

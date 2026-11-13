@@ -63,31 +63,18 @@ fn backends_name(backends: wgpu::Backends) -> String {
     if names.is_empty() { format!("{backends:?}") } else { names.join(" or ") }
 }
 
+/// The layers an array texture of `n` is made with on OpenGL (ES): at least two (one makes a plain
+/// 2D texture), and never six or a multiple of it, which wgpu's OpenGL takes for a cube map (a
+/// square texture's): read as an array, that gave nothing (every brush shape and grain blank once
+/// there were 58 shapes and 8 spare layers).
+fn gl_array_layers(n: u32) -> u32 {
+    let n = n.max(2);
+    if n.is_multiple_of(6) { n + 1 } else { n }
+}
+
 /// Whether a GPU named `name` on `backend` needs its canvas textures uncompressed.
 fn keeps_textures_uncompressed(name: &str, backend: wgpu::Backend) -> bool {
     backend == wgpu::Backend::Vulkan && name.to_ascii_lowercase().contains("mali")
-}
-
-/// Whether a GPU named `name` draws wrong on Vulkan where it draws right on OpenGL ES: Samsung's
-/// Xclipse, whose Vulkan driver draws an open stroke's soft edges and lowered opacity solid, black
-/// where the colour is faint (#153); its OpenGL ES (ANGLE, over the same driver) draws them as
-/// every other GPU does.
-fn draws_wrong_on_vulkan(name: &str) -> bool {
-    name.to_ascii_lowercase().contains("xclipse")
-}
-
-/// Whether OpenGL ES goes before Vulkan on Android: for a GPU that draws wrong on Vulkan (see
-/// [`draws_wrong_on_vulkan`]), asked of Vulkan once (which lists the GPUs, making no device).
-fn opengl_first() -> bool {
-    static FIRST: OnceLock<bool> = OnceLock::new();
-    *FIRST.get_or_init(|| {
-        let seen = std::panic::catch_unwind(|| Gpu::adapters(wgpu::Backends::VULKAN)).unwrap_or_default();
-        let wrong = seen.iter().find(|a| draws_wrong_on_vulkan(&a.name));
-        if let Some(gpu) = wrong {
-            log::info!("{} draws strokes wrong on Vulkan: OpenGL ES first", gpu.name);
-        }
-        wrong.is_some()
-    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -162,8 +149,7 @@ impl Gpu {
 
     /// The backends a device is made from, best first: those `WGPU_BACKEND` names if it is set
     /// (to try another when a driver fails); on Android Vulkan, then OpenGL ES (for a device
-    /// whose Vulkan is missing or fails), the other way round for a GPU that draws wrong on Vulkan
-    /// (see [`draws_wrong_on_vulkan`]); on Windows Vulkan and Direct3D 12, Direct3D 12 first on
+    /// whose Vulkan is missing or fails); on Windows Vulkan and Direct3D 12, Direct3D 12 first on
     /// ARM (the Snapdragon X's Vulkan driver fails as a canvas opens), then OpenGL (a GPU or
     /// driver too old for either); on Linux Vulkan, then OpenGL (the same); elsewhere the native
     /// API. A backend's index here is the one the other calls take.
@@ -172,11 +158,7 @@ impl Gpu {
             return vec![chosen];
         }
         if cfg!(target_os = "android") {
-            if opengl_first() {
-                vec![wgpu::Backends::GL, wgpu::Backends::VULKAN]
-            } else {
-                vec![wgpu::Backends::VULKAN, wgpu::Backends::GL]
-            }
+            vec![wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else if cfg!(all(windows, target_arch = "aarch64")) {
             vec![wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else if cfg!(windows) {
@@ -508,6 +490,12 @@ impl Gpu {
         if self.is_gl() { 2 } else { 1 }
     }
 
+    /// The layers a texture viewed as an array of `n` is made with: on OpenGL (ES) never a
+    /// multiple of six (see [`gl_array_layers`]); else `n`.
+    pub fn array_layers(&self, n: u32) -> u32 {
+        if self.is_gl() { gl_array_layers(n) } else { n.max(1) }
+    }
+
     /// Whether the device is OpenGL (ES)'s.
     pub fn is_gl(&self) -> bool {
         self.adapter.get_info().backend == wgpu::Backend::Gl
@@ -517,25 +505,19 @@ impl Gpu {
 #[cfg(test)]
 mod tests {
     /// A GPU or driver too old for the rest still draws: without OpenGL behind them the app can't
-    /// open at all. (First, on Android, for a GPU that draws wrong on Vulkan.)
+    /// open at all.
     #[test]
     #[cfg(any(target_os = "linux", windows, target_os = "android"))]
     fn opengl_is_the_last_backend_tried() {
         if std::env::var_os("WGPU_BACKEND").is_none() {
-            let backends = super::Gpu::backends();
-            let first = cfg!(target_os = "android") && super::opengl_first();
-            assert_eq!(if first { backends.first() } else { backends.last() }, Some(&wgpu::Backends::GL));
+            assert_eq!(super::Gpu::backends().last(), Some(&wgpu::Backends::GL));
         }
     }
 
     #[test]
-    fn samsung_xclipse_gpus_draw_on_opengl_first() {
-        for name in ["Samsung Xclipse 950", "Samsung Xclipse 540", "ANGLE (Samsung Xclipse 940)"] {
-            assert!(super::draws_wrong_on_vulkan(name), "{name}");
-        }
-        for name in ["Adreno (TM) 750", "Mali-G715", "NVIDIA GeForce RTX 4070", "PowerVR B-Series"] {
-            assert!(!super::draws_wrong_on_vulkan(name), "{name}");
-        }
+    fn array_textures_on_opengl_are_never_taken_for_cube_maps() {
+        use super::gl_array_layers;
+        assert_eq!([1, 2, 5, 6, 7, 12, 63, 66, 67].map(gl_array_layers), [2, 2, 5, 7, 7, 13, 63, 67, 67]);
     }
 
     #[test]

@@ -110,6 +110,9 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
 
+      - name: ProCraft GPU regression tests
+        run: cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-gpu --lib --locked
+
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),
       # so installed copies update. v3 alone: the app needs Android 10 and v3 works from Android 9,
