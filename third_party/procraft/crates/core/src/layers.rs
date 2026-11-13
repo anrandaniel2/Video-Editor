@@ -291,6 +291,7 @@ impl CanvasSession {
     pub fn trim_memory(&self) {
         let mut guard = self.shared.lock();
         let st = &mut *guard;
+        st.preview = None;
         if let Some(canvas) = st.canvas.as_mut() {
             canvas.let_go_of_spares();
         }

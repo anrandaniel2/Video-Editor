@@ -1076,6 +1076,16 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
     /** A brush found from the Recent set ("set-index"), which its own set scrolls to. */
     var foundBrush by mutableStateOf<String?>(null)
     val previews = mutableStateMapOf<String, ImageBitmap>()
+    private val previewRequests = PreviewWorkQueue()
+    private val previewOrder = LinkedHashSet<String>()
+    private val previewCacheLimit = 48
+
+    /** Drop references, not recycle: Compose may still be drawing the previous frame. */
+    fun trimBrushPreviews() {
+        previews.clear()
+        shadedNames.clear()
+        previewOrder.clear()
+    }
 
     /** Counts the library's changes: a sample stroke asked for before the last one isn't kept. */
     var previewRound by androidx.compose.runtime.mutableIntStateOf(0)
@@ -2753,8 +2763,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         followStrokeSound()
         thumbnails.clear()
         thumbnailVersions.clear()
-        previews.clear()
-        shadedNames.clear()
+        trimBrushPreviews()
         panel = Panel.NONE
         barsHidden = false
         restoreReference(s)
@@ -4489,8 +4498,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         if (shownSet != RECENT_SET) shownSet = shownSet.coerceIn(0, (brushSets.size - 1).coerceAtLeast(0))
         recentBrushes = s.recentBrushes()
         readSliders()
-        previews.clear()
-        shadedNames.clear()
+        trimBrushPreviews()
         keepBrushLibrary(s)
     }
 
@@ -5347,15 +5355,22 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Renders the brush's sample stroke once, off the main thread. */
-    fun loadPreview(b: BrushInfo) {
+    suspend fun loadPreview(b: BrushInfo): Unit = previewRequests.run {
         val key = "${b.set}-${b.index}"
-        if (previews.containsKey(key)) return
-        val s = session ?: return
+        if (previews.containsKey(key)) return@run
+        val s = session ?: return@run
         val round = previewRound
-        viewModelScope.launch {
-            val made = withContext(Dispatchers.Default) {
+        val made = try {
+            withContext(Dispatchers.Default) {
                 // half the sample stroke's own canvas: the cell shows it across its width
-                val t = s.brushPreview(b.set, b.index, 530u, 162u) ?: return@withContext null
+                var t = s.brushPreview(b.set, b.index, 530u, 162u)
+                repeat(3) {
+                    if (t == null) {
+                        kotlinx.coroutines.delay(200)
+                        t = s.brushPreview(b.set, b.index, 530u, 162u)
+                    }
+                }
+                val picture = t ?: return@withContext null
                 // whether the stroke runs under the name: the name's box (19.5 in, 14 to 26 down, about
                 // 7.7 a letter wide, in a cell the picture fills 80 high and 261.7 wide) covered more
                 // than 2/255 on average
@@ -5365,16 +5380,34 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
                 val y0 = (14f * k).toInt()
                 val y1 = (26f * k).toInt()
                 var cover = 0L
-                for (y in y0 until y1) for (x in x0 until x1) cover += t.rgba[(y * 530 + x) * 4 + 3].toInt() and 0xFF
+                for (y in y0 until y1) for (x in x0 until x1) cover += picture.rgba[(y * 530 + x) * 4 + 3].toInt() and 0xFF
                 val under = x1 > x0 && cover > 2L * (x1 - x0) * (y1 - y0)
-                val bitmap = io.github.artcraftandroid.procraft.ui.CanvasSpace.tag(Bitmap.createBitmap(t.width.toInt(), t.height.toInt(), Bitmap.Config.ARGB_8888))
-                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(t.rgba))
+                val bitmap = io.github.artcraftandroid.procraft.ui.CanvasSpace.tag(Bitmap.createBitmap(picture.width.toInt(), picture.height.toInt(), Bitmap.Config.ARGB_8888))
+                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(picture.rgba))
                 bitmap.asImageBitmap() to under
             }
-            if (made != null && round == previewRound) {
-                shadedNames[key] = made.second
-                previews[key] = made.first
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: OutOfMemoryError) {
+            trimBrushPreviews()
+            Log.w(TAG, "Not enough memory for brush preview", e)
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "Brush preview failed: $key", e)
+            null
+        }
+        if (made != null && round == previewRound && session === s) {
+            previewOrder.retainAll(previews.keys)
+            previewOrder.remove(key)
+            previewOrder.add(key)
+            while (previewOrder.size > previewCacheLimit) {
+                val oldest = previewOrder.first()
+                previewOrder.remove(oldest)
+                previews.remove(oldest)
+                shadedNames.remove(oldest)
             }
+            shadedNames[key] = made.second
+            previews[key] = made.first
         }
     }
 
@@ -7771,7 +7804,9 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         strokeSound.follow(null, false)
         saveNow()
         session?.stopAutosave()
+        session?.releaseCanvas()
         session = null
+        trimBrushPreviews()
         pourThread.shutdown()
     }
 

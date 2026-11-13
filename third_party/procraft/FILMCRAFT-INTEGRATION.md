@@ -51,3 +51,19 @@ the host awaits those jobs and reports failure rather than polling indefinitely.
 
 Device regression: open a blank Home drawing, a Home imported image, and Draw
 inside a project. Each must replace the loading view with an interactive canvas.
+
+## Brush preview resource bounds
+
+Library cells await a cancellable preview queue rather than launching detached
+ViewModel jobs. Scrolling away cancels queued requests. The queue rechecks the
+cache after admission and stores at most 48 previews (~16 MiB of RGBA pixels).
+A native per-session mutex also serializes library/studio rendering around the
+reusable GPU preview canvas, so parallel JNI callers cannot allocate one canvas
+per request. A temporarily unavailable GPU/readback is retried three times.
+Library previews are released on memory pressure and host teardown; the native
+preview canvas is dropped on memory trim and release_canvas.
+
+PreviewWorkQueueTest covers serialization, cancellation while queued, and recovery
+after a failed request. These do not reproduce a device GPU-driver crash; device
+stress testing (scroll all sets/searches, change brushes, draw, and reopen Draw)
+is still required. A crash log is needed if the issue persists after these fixes.
