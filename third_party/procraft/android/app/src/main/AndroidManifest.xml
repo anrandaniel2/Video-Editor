@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application>
+<activity android:name="io.github.artcraftandroid.procraft.SettingsActivity" android:exported="false" />
+<activity android:name="io.github.artcraftandroid.procraft.SaveToDeviceActivity" android:exported="false" android:excludeFromRecents="true" android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+<provider android:name="io.github.artcraftandroid.procraft.gallery.DragProvider" android:authorities="${applicationId}.drag" android:exported="false" android:grantUriPermissions="true" />
+</application></manifest>

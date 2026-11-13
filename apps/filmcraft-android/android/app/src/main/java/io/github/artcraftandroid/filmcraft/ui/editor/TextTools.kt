@@ -404,36 +404,10 @@ private fun Swatch(color: Long?, selected: Boolean, glyphPicker: Boolean = false
 /** A simple colour picker: hue along a bar, saturation and brightness in a square. */
 @Composable
 private fun ColorPickerDialog(initial: Long, onDismiss: () -> Unit, onPick: (Long) -> Unit) {
-    val hsv = remember { FloatArray(3).also { android.graphics.Color.colorToHSV(initial.toInt(), it) } }
-    var hue by remember { mutableFloatStateOf(hsv[0]) }
-    var sat by remember { mutableFloatStateOf(hsv[1]) }
-    var value by remember { mutableFloatStateOf(hsv[2]) }
-    var version by remember { mutableIntStateOf(0) }
-    val color = android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value)).toLong() and 0xFFFFFFFFL
-    FcDialog("Colors", "Use", { onPick(color) }, onDismiss) {
-        Canvas(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(1.6f)
-                .clip(RoundedCornerShape(12.dp))
-                .pointerInput(Unit) { detectTapGestures { o -> sat = (o.x / size.width).coerceIn(0f, 1f); value = 1f - (o.y / size.height).coerceIn(0f, 1f); version++ } }
-                .pointerInput(Unit) { detectDragGestures { c, _ -> sat = (c.position.x / size.width).coerceIn(0f, 1f); value = 1f - (c.position.y / size.height).coerceIn(0f, 1f); version++ } },
-        ) {
-            val base = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
-            drawRect(Brush.horizontalGradient(listOf(Color.White, base)))
-            drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
-            drawCircle(Color.White, 9.dp.toPx(), Offset(sat * size.width, (1 - value) * size.height), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
-        }
-        Spacer(Modifier.height(16.dp))
-        FcSlider(fraction = hue / 360f, onChange = { hue = it * 360f }, description = "Hue")
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(32.dp).clip(CircleShape).background(Color(color)))
-            Spacer(Modifier.width(12.dp))
-            Text(hex(color), style = FcType.Label, color = Fc.Title)
-        }
+    var color by remember { mutableStateOf(initial.toInt()) }
+    FcDialog("Colors", "Use", { onPick(color.toLong() and 0xFFFFFFFFL) }, onDismiss) {
+        ProcraftColorPicker(color) { color = it }
     }
-    @Suppress("UNUSED_EXPRESSION") version
 }
 
 

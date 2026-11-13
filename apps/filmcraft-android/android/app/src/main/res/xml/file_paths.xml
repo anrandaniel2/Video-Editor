@@ -3,4 +3,5 @@
      being shared -->
 <paths>
     <cache-path name="share" path="share/" />
+    <cache-path name="drawing_exports" path="exports/" />
 </paths>

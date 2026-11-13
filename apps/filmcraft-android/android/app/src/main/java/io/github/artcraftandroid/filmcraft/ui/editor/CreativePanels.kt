@@ -129,7 +129,7 @@ internal fun ColorPicker(label: String, color: Int, change: (Int) -> Unit) {
         Column(Modifier.widthIn(max = 340.dp).editorGlass(24.dp, layer = 4f).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, color = Color.White)
             Spacer(Modifier.height(12.dp))
-            WheelPicker(color, change)
+            ProcraftColorPicker(color, change)
             FcIconButton(LucideIcons.X.glyph(), "Close color picker", { expanded = false })
         }
     }
@@ -205,7 +205,7 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
         primary = Color.White, onPrimary = Color.Black, secondary = Color.White,
         onSurface = Color.White, onSurfaceVariant = Color.White.copy(alpha = .75f),
-    )) { DrawingPanelContent(ed, close) }
+    )) { ProcraftDrawingPanel(ed, close) }
 }
 
 @Composable

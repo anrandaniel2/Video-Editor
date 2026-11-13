@@ -1,0 +1,1336 @@
+package io.github.artcraftandroid.procraft.ui
+
+import android.graphics.BlurMaskFilter
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.snapping.SnapPosition
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.zIndex
+import io.github.artcraftandroid.procraft.canvas.CanvasViewModel
+import io.github.artcraftandroid.procraft.core.LayerInfo
+import io.github.artcraftandroid.procraft.core.LayerOption
+import io.github.artcraftandroid.procraft.core.LayerType
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+private val LayersWidth = 384.dp
+private val RowHeight = 69.dp
+/** A layer with a mask, and the mask, are a little shorter. */
+private val MaskedRowHeight = 65.dp
+private val RowGap = 1.dp
+/** A dragged row this near an end of the list scrolls it, at most this far a second. */
+private val DragEdge = 56.dp
+private val DragScroll = 480.dp
+private val ListCorner = 8.dp
+/** A group's row height, and how far in each level of group sits. */
+private val GroupHeight = 44.dp
+private val GroupIndent = 21.dp
+private val GroupLine = Color(0xFF4E4E4E)
+private val MaskOwnerRow = Color(0xFF2C5281)
+/** Swiping a row left shows these buttons, each this wide, this far apart. */
+private val SwipeButton = 82.dp
+private val SwipeGap = 2.dp
+private val SwipeFill = Color(0xFF3F3F3F)
+private val SwipeInk = Color(0xFFC1C1C1)
+private val SwipeDelete = Color(0xFFFF473D)
+/** How far right a row slides to be picked. */
+private val PickReach = 72.dp
+/** A picked row (the current one stays blue). */
+private val PickedRow = Color(0xFF2C5281)
+private val LockedLetter = Color(0xFF808080)
+/** The options never go higher than this from the window's top (the top bar and a gap). */
+private val OptionsTop = 57.dp
+
+/**
+ * The layers panel: top layer first. Tap a layer to make it current, tap the current one for its
+ * options, tap the blend letter for blend mode and opacity, hold and drag to reorder, swipe left
+ * for lock, duplicate and delete, swipe right to pick it to act on with the current one (the
+ * title's menu then groups, merges, shares, duplicates or deletes them).
+ */
+@Composable
+fun LayersPanel(vm: CanvasViewModel, arrowX: Dp, modifier: Modifier = Modifier) {
+    var options by remember { mutableStateOf<ULong?>(null) }
+    var blendFor by remember { mutableStateOf<ULong?>(null) }
+    // blend modes opening under a layer: the rows under it go at once and the panel grows over where
+    // they were; closing, it shrinks back to them and they come back a moment later. [blendAt] is
+    // the row they open under (-1 when nothing is moving), [belowShown] the rows under it.
+    var blendAt by remember { mutableIntStateOf(-1) }
+    var belowShown by remember { mutableFloatStateOf(1f) }
+    val blendScope = rememberCoroutineScope()
+    var blendSettled by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun changeBlend(id: ULong?) {
+        if (id == blendFor) return
+        val shown = vm.layers.filter { !vm.hidden(it) }
+        val at = listOfNotNull(blendFor, id).map { b -> shown.indexOfFirst { it.id == b } }.filter { it >= 0 }.minOrNull() ?: -1
+        val opening = id != null
+        blendFor = id
+        blendAt = at
+        belowShown = 0f
+        blendSettled?.cancel()
+        blendSettled = blendScope.launch {
+            kotlinx.coroutines.delay(if (opening) Motion.BLEND_OPEN_MS else Motion.BLEND_CLOSE_MS + Motion.BLEND_ROWS_WAIT_MS)
+            androidx.compose.animation.core.animate(0f, 1f, animationSpec = Motion.blendRowsBack()) { v, _ -> belowShown = v }
+            blendAt = -1
+        }
+    }
+    var renaming by remember { mutableStateOf<ULong?>(null) }
+    var swiped by remember { mutableStateOf<ULong?>(null) }
+    var titleMenu by remember { mutableStateOf(false) }
+    var deletingChosen by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var dragId by remember { mutableStateOf<ULong?>(null) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    // the rows that go with the dragged one (its mask, a group's layers)
+    var dragUnit by remember { mutableStateOf(emptySet<ULong>()) }
+    // where each row is in the window: for dropping a dragged row and placing the options
+    val rows = remember { mutableMapOf<ULong, Rect>() }
+
+    // a model's meshes are pictured as the model is seen when the panel opens
+    if (vm.modelOpen) LaunchedEffect(Unit) { vm.refreshSubmeshThumbnails() }
+    Popover(LayersWidth, arrowX, modifier) {
+        // kept while they fade out
+        val open = options?.let { id -> vm.layers.firstOrNull { it.id == id }?.let { l -> rows[id]?.let { l to it } } }
+        val last = remember { arrayOfNulls<Pair<LayerInfo, Rect>>(1) }
+        if (open != null) last[0] = open
+        last[0]?.let { (l, row) -> LayerOptions(open != null, vm, l, row.center.y, onRename = { renaming = l.id }, onDone = { options = null }) }
+        PanelHeader(
+            "Layers",
+            chevronOn = vm.anyPicked,
+            onTitle = { titleMenu = !titleMenu },
+            menu = {
+                LayersTitleMenu(titleMenu, vm, onDismiss = { titleMenu = false }, onShare = {
+                    scope.launch {
+                        val files = vm.chosenLayerFiles()
+                        if (files.isNotEmpty()) shareFiles(context, files, "image/png")
+                    }
+                }, onDelete = { deletingChosen = true })
+            },
+        ) {
+            Box(Modifier.padding(top = 12.dp).size(40.dp, 41.dp).clickable { vm.addLayer() }, contentAlignment = Alignment.Center) {
+                Icon(PcIcons.PlusMedium, contentDescription = "New layer", tint = Pc.PanelGlyph, modifier = Modifier.requiredSize(41.dp))
+            }
+        }
+        // a layer added at the top of what shows comes in there, the rows under it sliding down,
+        // rather than the list holding its place and leaving the new row out of sight above
+        val list = rememberLazyListState()
+        val ids = vm.layers.filter { !vm.hidden(it) }.map { it.id }
+        val lastIds = remember { arrayOfNulls<List<ULong>>(1) }
+        val before = lastIds[0]
+        if (before != null && ids != before) {
+            val added = ids.indices.firstOrNull { ids[it] !in before }
+            if (added != null && added <= list.firstVisibleItemIndex) list.requestScrollToItem(added)
+        }
+        lastIds[0] = ids
+        var listAt by remember { mutableStateOf(Offset.Zero) }
+        val listBox = remember { arrayOf(Rect.Zero) }
+        // held near an end of the list it scrolls, faster the nearer, the row staying under the finger
+        val rowGap = with(LocalDensity.current) { RowGap.toPx() }
+        val dragEdge = with(LocalDensity.current) { DragEdge.toPx() }
+        val dragScroll = with(LocalDensity.current) { DragScroll.toPx() }
+        LaunchedEffect(dragId) {
+            val id = dragId ?: return@LaunchedEffect
+            var last = androidx.compose.runtime.withFrameNanos { it }
+            while (true) {
+                val now = androidx.compose.runtime.withFrameNanos { it }
+                val seconds = (now - last) / 1e9f
+                last = now
+                val y = (rows[id] ?: continue).center.y + dragOffset
+                val box = listBox[0]
+                val towards = when {
+                    y < box.top + dragEdge -> (y - box.top - dragEdge) / dragEdge
+                    y > box.bottom - dragEdge -> (y - box.bottom + dragEdge) / dragEdge
+                    else -> 0f
+                }.coerceIn(-1f, 1f)
+                if (towards != 0f) dragOffset += list.scrollBy(towards * dragScroll * seconds)
+            }
+        }
+        // two rows being pinched, each following its finger part of the way
+        var squeeze by remember { mutableStateOf<Squeeze?>(null) }
+        LazyColumn(
+            Modifier.weight(1f, fill = false).padding(horizontal = 12.dp)
+                .onGloballyPositioned {
+                    listAt = it.positionInWindow()
+                    listBox[0] = it.boundsInWindow()
+                }
+                // two rows pinched together merge with every layer between
+                .pinchRows({ listAt }, { y -> rows.entries.firstOrNull { y >= it.value.top && y <= it.value.bottom }?.key }, { squeeze = it }) { a, b ->
+                    vm.mergeBetween(a, b)
+                },
+            state = list,
+            verticalArrangement = Arrangement.spacedBy(RowGap),
+            contentPadding = PaddingValues(bottom = 12.dp),
+        ) {
+            // a closed group's layers are left out
+            val shown = vm.layers.filter { !vm.hidden(it) }
+            // a layer's row: in the list, or on a model under its submesh, indented
+            val layerItem: @Composable LazyItemScope.(Int, LayerInfo, Shape, Dp, String?) -> Unit = { index, l, shape, indent, subtitle ->
+                val dragging = l.id in dragUnit
+                DisposableEffect(l.id) { onDispose { rows.remove(l.id) } }
+                // scrolled out of the list as it is dragged, the row stays, its gesture going on
+                val pinnable = androidx.compose.ui.layout.LocalPinnableContainer.current
+                val pinned = remember { arrayOfNulls<androidx.compose.ui.layout.PinnableContainer.PinnedHandle>(1) }
+                val aside by androidx.compose.animation.core.animateFloatAsState(
+                    remember(l.id) { androidx.compose.runtime.derivedStateOf { dragId?.let { makingWay(l.id, it, dragUnit, dragOffset, rows, rowGap) } ?: 0f } }.value,
+                    Motion.rowFade(),
+                )
+                Column(
+                    Modifier.animateItem(Motion.rowFade(), if (dragging || blendAt >= 0) null else Motion.rowMove(), Motion.rowFade())
+                        .onGloballyPositioned { rows[l.id] = it.boundsInWindow() }
+                        .zIndex(if (dragging) 1f else squeeze?.above(l.id) ?: 0f).graphicsLayer {
+                            translationY = if (dragging) dragOffset else (squeeze?.offset(l.id) ?: 0f) + aside
+                            alpha = if (blendAt in 0 until index) belowShown else 1f
+                        }
+                        .twoFingers(
+                            l.kind == LayerType.PAINT,
+                            onTap = {
+                                // two fingers tapped on a layer (not a group or mask): its opacity, dragged across the canvas
+                                vm.selectLayer(l.id)
+                                vm.startLayerOpacity()
+                            },
+                            // swiped right, its Alpha Lock on or off; held, its contents selected
+                            onSwipeRight = { vm.toggleAlphaLock(l) },
+                            onHold = { vm.selectLayerContents(l) },
+                        )
+                        .pointerInput(l.id) {
+                            if (l.kind == LayerType.MASK) return@pointerInput
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = {
+                                    dragId = l.id
+                                    dragOffset = 0f
+                                    dragUnit = vm.movingWith(l) + l.id
+                                    swiped = null
+                                    pinned[0] = pinnable?.pin()
+                                },
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    dragOffset += amount.y
+                                },
+                                onDragEnd = {
+                                    rows[l.id]?.let { drop(vm, l, it.center.y + dragOffset, rows) }
+                                    dragId = null
+                                    dragOffset = 0f
+                                    dragUnit = emptySet()
+                                    pinned[0]?.release()
+                                    pinned[0] = null
+                                },
+                                onDragCancel = {
+                                    dragId = null
+                                    dragOffset = 0f
+                                    dragUnit = emptySet()
+                                    pinned[0]?.release()
+                                    pinned[0] = null
+                                },
+                            )
+                        },
+                ) {
+                    val onTap = {
+                        swiped = null
+                        // on a model the row means the layer itself: its colour, no channel's tile
+                        if (vm.modelOpen && vm.channelTileChosen && l.kind != LayerType.GROUP) {
+                            vm.leaveChannelTiles()
+                            if (!l.current) vm.selectLayer(l.id)
+                        } else if (vm.anyPicked) {
+                            // picks give way to the layer tapped, the current one too
+                            vm.selectLayer(l.id)
+                            options = null
+                        } else if (l.current) {
+                            options = if (options == l.id) null else l.id
+                            changeBlend(null)
+                        } else {
+                            vm.selectLayer(l.id)
+                            options = null
+                        }
+                    }
+                    // renamed in place
+                    val name: @Composable (Color, Modifier) -> Unit = { ink, m ->
+                        if (renaming == l.id) {
+                            InlineName(l.name, ink, 17.sp, m) {
+                                vm.rename(l, it)
+                                renaming = null
+                            }
+                        } else {
+                            Text(l.name, color = ink, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = m)
+                        }
+                    }
+                    SwipeRow(vm, l, open = swiped == l.id, enabled = dragId == null, onOpen = { swiped = if (it) l.id else null }, onPick = { vm.pickLayer(l) }) {
+                        if (l.kind == LayerType.GROUP) {
+                            GroupRow(vm, l, shape, name, onTap, indent) { vm.toggleCollapsed(l) }
+                        } else LayerRow(
+                            vm,
+                            l,
+                            shape,
+                            name,
+                            // the current mask's layer, or the current layer's mask
+                            owner = vm.layers.any {
+                                it.current && (it.kind == LayerType.MASK && it.parent == l.id || l.kind == LayerType.MASK && l.parent == it.id)
+                            },
+                            onTap = onTap,
+                            onBlend = {
+                                changeBlend(if (blendFor == l.id) null else l.id)
+                                options = null
+                            },
+                            indent = indent,
+                            subtitle = subtitle,
+                            // on a model: its channels, and the row giving its blue to the channel painted
+                            onCube = if (vm.modelOpen && l.kind != LayerType.MASK) ({ vm.toggleChannelTray(l.id) }) else null,
+                            cubeLit = vm.modelOpen && l.current && vm.channelTileChosen,
+                            selected = l.current && !(vm.modelOpen && vm.channelTileChosen),
+                        )
+                    }
+                    if (vm.modelOpen && vm.channelTrayFor == l.id) ChannelTray(vm, l)
+                    // the blend modes open under the row, the panel growing as they fade in, and close back
+                    androidx.compose.animation.AnimatedVisibility(
+                        blendFor == l.id,
+                        // held at the top, uncovered as the panel grows and covered as it shrinks
+                        enter = androidx.compose.animation.expandVertically(Motion.blendOpenSize(), expandFrom = Alignment.Top) +
+                            androidx.compose.animation.fadeIn(Motion.blendOpen()),
+                        exit = androidx.compose.animation.shrinkVertically(Motion.blendCloseSize(), shrinkTowards = Alignment.Top) +
+                            androidx.compose.animation.fadeOut(Motion.blendClose()),
+                    ) { BlendEditor(vm, l) }
+                }
+            }
+            if (!vm.modelOpen) {
+                itemsIndexed(shown, key = { _, l -> l.id.toLong() }) { index, l ->
+                    // the list's ends round; the rows between are square
+                    val shape = RoundedCornerShape(
+                        topStart = if (index == 0) ListCorner else 0.dp,
+                        topEnd = if (index == 0) ListCorner else 0.dp,
+                        bottomStart = if (index == shown.size - 1) ListCorner else 0.dp,
+                        bottomEnd = if (index == shown.size - 1) ListCorner else 0.dp,
+                    )
+                    layerItem(index, l, shape, 0.dp, null)
+                }
+            } else {
+                // on a model: each texture set headed by its name, its meshes under it; the open
+                // mesh's texture set's layers under that, shared by every mesh in the set
+                vm.textureSets.forEachIndexed { set, setName ->
+                    val meshes = vm.submeshes.withIndex().filter { it.value.textureSet.toInt() == set }
+                    if (meshes.isEmpty()) return@forEachIndexed
+                    item(key = "set $set") { SetHeader(setName, first = set == 0) }
+                    meshes.forEachIndexed { k, (m, info) ->
+                        val open = vm.openSubmesh == m
+                        val lastMesh = k == meshes.size - 1
+                        val layersUnder = open && set == vm.textureSet && shown.isNotEmpty()
+                        item(key = "mesh $m") {
+                            SubmeshRow(
+                                vm,
+                                m,
+                                info.name,
+                                open = layersUnder,
+                                shape = RoundedCornerShape(
+                                    topStart = if (k == 0) ListCorner else 0.dp,
+                                    topEnd = if (k == 0) ListCorner else 0.dp,
+                                    bottomStart = if (lastMesh && !layersUnder) ListCorner else 0.dp,
+                                    bottomEnd = if (lastMesh && !layersUnder) ListCorner else 0.dp,
+                                ),
+                            )
+                        }
+                        if (layersUnder) {
+                            itemsIndexed(shown, key = { _, l -> "layer ${l.id}" }) { index, l ->
+                                val end = lastMesh && index == shown.size - 1
+                                val shape = RoundedCornerShape(bottomStart = if (end) ListCorner else 0.dp, bottomEnd = if (end) ListCorner else 0.dp)
+                                layerItem(index, l, shape, GroupIndent, if (meshes.size > 1) "Shared" else null)
+                            }
+                        }
+                    }
+                }
+            }
+            // it moves down and up with the rows above it
+            if (!vm.modelOpen) item(key = "background") {
+                Box(
+                    Modifier.animateItem(null, if (dragId != null || blendAt >= 0) null else Motion.rowMove(), null)
+                        .padding(top = 10.dp).graphicsLayer { alpha = if (blendAt >= 0) belowShown else 1f },
+                ) { BackgroundRow(vm) }
+            }
+        }
+    }
+    // Delete on a locked layer's row: why not, OK alone
+    Alert(
+        if (vm.lockedDeleteTold) Unit else null,
+        title = { "Locked layer selection" },
+        message = { "A locked layer can’t be deleted. Unlock it first." },
+        action = "OK",
+        icon = PcIcons.PageLocked,
+        destructive = false,
+        alone = true,
+        onCancel = { vm.lockedDeleteTold = false },
+        onAction = { vm.lockedDeleteTold = false },
+    )
+    // the title menu's Delete asks first
+    Alert(
+        if (deletingChosen) Unit else null,
+        title = { "Delete these layers?" },
+        message = { "Undo brings them back." },
+        action = "Delete",
+        icon = PcIcons.Trash,
+        onCancel = { deletingChosen = false },
+        onAction = {
+            // as measured, a locked one among them stops it, said why
+            if (vm.chosenLocked()) vm.lockedDeleteTold = true else vm.deletePicked()
+            deletingChosen = false
+        },
+    )
+}
+
+/**
+ * The title's menu, under it: Select All; Group and Merge (with layers picked); Share and
+ * Duplicate; Delete.
+ */
+@Composable
+private fun LayersTitleMenu(open: Boolean, vm: CanvasViewModel, onDismiss: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit) {
+    val picked = vm.anyPicked
+    // mostly over the panel, whose rows the canvas's frosting doesn't blur: nearly solid
+    LibraryMenu(
+        open,
+        androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f),
+        MenuPlace { a, size -> IntOffset(a.center.x - size.width / 2, a.bottom) },
+        onDismiss,
+        overPanel = true,
+    ) {
+        MenuItem(PcIcons.MenuSelectAll, "Select All") {
+            onDismiss()
+            vm.pickAllLayers()
+        }
+        MenuDivider()
+        if (picked) {
+            MenuItem(PcIcons.MenuGroup, "Group") {
+                onDismiss()
+                vm.groupPicked()
+            }
+            MenuItem(PcIcons.MenuMerge, "Merge") {
+                onDismiss()
+                vm.mergePicked()
+            }
+            MenuDivider()
+        }
+        MenuItem(PcIcons.MenuShare, "Share") {
+            onDismiss()
+            onShare()
+        }
+        MenuItem(PcIcons.MenuDuplicate, "Duplicate") {
+            onDismiss()
+            vm.duplicatePicked()
+        }
+        MenuDivider()
+        MenuItem(PcIcons.MenuTrash, "Delete", Pc.MenuDanger) {
+            onDismiss()
+            onDelete()
+        }
+    }
+}
+
+/** Drops [l] where its row's middle came to rest: just above or below the row it is over. */
+/**
+ * How far row [id] stands aside while [dragged] (with the rest of [unit]) is dragged [offset] from
+ * its place: past the row's middle, the row takes the room the dragged rows left, so the gap shows
+ * where they will land.
+ */
+private fun makingWay(id: ULong, dragged: ULong, unit: Set<ULong>, offset: Float, rows: Map<ULong, Rect>, gap: Float): Float {
+    if (id in unit) return 0f
+    val row = rows[id] ?: return 0f
+    val y = (rows[dragged] ?: return 0f).center.y + offset
+    val moved = unit.mapNotNull { rows[it] }
+    val (top, bottom) = moved.minOf { it.top } to moved.maxOf { it.bottom }
+    val room = bottom - top + gap
+    return when {
+        row.bottom <= top && y < row.center.y -> room
+        row.top >= bottom && y > row.center.y -> -room
+        else -> 0f
+    }
+}
+
+private fun drop(vm: CanvasViewModel, l: LayerInfo, y: Float, rows: Map<ULong, Rect>) {
+    val unit = vm.movingWith(l)
+    val others = vm.layers.filter { it.id !in unit && !vm.hidden(it) }.mapNotNull { o -> rows[o.id]?.let { o to it } }
+    val (target, row) = others.firstOrNull { (_, r) -> y >= r.top && y < r.bottom }
+        ?: others.minByOrNull { (_, r) -> abs(r.center.y - y) }
+        ?: return
+    vm.moveNextTo(l, target, above = y < row.center.y)
+}
+
+/**
+ * A row that slides left to show Lock, Duplicate (not for a mask) and Delete, or a little right to
+ * pick it ([onPick]), springing back.
+ */
+@Composable
+private fun SwipeRow(
+    vm: CanvasViewModel,
+    l: LayerInfo,
+    open: Boolean,
+    enabled: Boolean,
+    onOpen: (Boolean) -> Unit,
+    onPick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val buttons = if (l.kind == LayerType.MASK) 2 else 3
+    // the row slides 6 past the buttons
+    val reach = with(LocalDensity.current) { (SwipeButton * buttons + SwipeGap * (buttons - 1) + 6.dp).toPx() }
+    val pickReach = with(LocalDensity.current) { PickReach.toPx() }
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(open, reach) { offset.animateTo(if (open) -reach else 0f, Motion.swipeSettle()) }
+    // the list only clips top and bottom; a slid row stops at its edge
+    Box(Modifier.clipToBounds()) {
+        if (offset.value < 0f) {
+            Row(Modifier.matchParentSize(), horizontalArrangement = Arrangement.spacedBy(SwipeGap, Alignment.End)) {
+                SwipeAction(if (l.locked) "Unlock" else "Lock", SwipeFill, SwipeInk) {
+                    vm.toggleLocked(l)
+                    onOpen(false)
+                }
+                if (l.kind != LayerType.MASK) SwipeAction("Duplicate", SwipeFill, SwipeInk) {
+                    vm.duplicate(l)
+                    onOpen(false)
+                }
+                // the only layer can't go: it is cleared instead
+                val alone = vm.layers.count { it.kind != LayerType.MASK } == 1
+                SwipeAction(if (alone) "Clear" else "Delete", SwipeDelete, Color.White) {
+                    if (alone) vm.clear(l) else vm.deleteAsking(l)
+                    onOpen(false)
+                }
+            }
+        }
+        Box(
+            Modifier.offset { IntOffset(offset.value.roundToInt(), 0) }.pointerInput(l.id, open, enabled, reach) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        // closed, it goes right as far as picking takes
+                        scope.launch { offset.snapTo((offset.value + amount).coerceIn(-reach, if (open) 0f else pickReach)) }
+                    },
+                    onDragEnd = {
+                        if (offset.value > pickReach / 2f) {
+                            onPick()
+                            scope.launch { offset.animateTo(0f, Motion.swipeSettle()) }
+                            return@detectHorizontalDragGestures
+                        }
+                        val opened = offset.value < -reach / 2f
+                        if (opened == open) scope.launch { offset.animateTo(if (open) -reach else 0f, Motion.swipeSettle()) } else onOpen(opened)
+                    },
+                    onDragCancel = { scope.launch { offset.animateTo(if (open) -reach else 0f, Motion.swipeSettle()) } },
+                )
+            },
+        ) { content() }
+    }
+}
+
+@Composable
+private fun SwipeAction(label: String, fill: Color, ink: Color, onClick: () -> Unit) {
+    Box(
+        Modifier.width(SwipeButton).fillMaxHeight().clip(RoundedCornerShape(8.dp)).background(fill).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = ink, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+/** A panel's title row, [height] tall: the title [start] in, its menu chevron, and [action] [end] from the right. */
+@Composable
+internal fun PanelHeader(
+    title: String,
+    start: Dp = 24.dp,
+    end: Dp = 18.dp,
+    height: Dp = 64.dp,
+    chevron: Boolean = true,
+    chevronOn: Boolean = false,
+    onTitle: (() -> Unit)? = null,
+    menu: @Composable () -> Unit = {},
+    action: @Composable () -> Unit,
+) {
+    Box(Modifier.fillMaxWidth().height(height)) {
+        Row(
+            Modifier.align(Alignment.TopStart).padding(start = start, top = 19.dp)
+                .then(if (onTitle != null) Modifier.clickable(interactionSource = null, indication = null, onClick = onTitle) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, color = Pc.PanelTitle, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            menu()
+            if (chevron) {
+                Box(
+                    Modifier.padding(start = 10.dp).offset(y = (-1.5).dp).size(17.dp).clip(CircleShape)
+                        .background(if (chevronOn) Pc.RowSelected else Pc.ChevronDisc),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(PcIcons.ChevronDown, contentDescription = null, tint = Pc.ChevronGlyph, modifier = Modifier.size(13.dp))
+                }
+            }
+        }
+        Box(Modifier.align(Alignment.TopEnd).padding(end = end)) { action() }
+    }
+}
+
+/** A row's name, where it always is; locked, a small padlock in the gap before it. */
+@Composable
+private fun LockedName(l: LayerInfo, ink: Color, name: @Composable (Color, Modifier) -> Unit, modifier: Modifier) {
+    Box(modifier, contentAlignment = Alignment.CenterStart) {
+        // the padlock's glyph ends 12 short of the name
+        if (l.locked) Icon(PcIcons.LockRow, contentDescription = "Locked", tint = ink, modifier = Modifier.offset(x = 3.dp).size(17.dp))
+        name(ink, Modifier.padding(start = 29.dp, end = 6.dp))
+    }
+}
+
+/** A group's row: a line where a thumbnail would be, its name, its open or closed arrow and its box. */
+@Composable
+private fun GroupRow(
+    vm: CanvasViewModel,
+    l: LayerInfo,
+    shape: Shape,
+    name: @Composable (Color, Modifier) -> Unit,
+    onTap: () -> Unit,
+    indent: Dp,
+    onToggle: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().height(GroupHeight).clip(shape)
+            .background(if (l.current) Pc.RowSelected else if (l.picked) PickedRow else Pc.LayerRow)
+            .clickable(onClick = onTap)
+            .padding(start = indent + GroupIndent * l.depth.toInt()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val ink = if (l.current || l.picked) Color.White else Pc.PanelTitle
+        Box(Modifier.padding(start = 4.dp).size(93.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(GroupLine))
+        LockedName(l, ink, name, Modifier.weight(1f))
+        Box(Modifier.offset(x = 8.dp).size(44.dp, GroupHeight).clickable(onClick = onToggle), contentAlignment = Alignment.Center) {
+            Icon(if (l.collapsed) PcIcons.ChevronRight else PcIcons.ChevronDown, contentDescription = if (l.collapsed) "Open" else "Close", tint = ink, modifier = Modifier.size(16.dp))
+        }
+        Box(Modifier.size(44.dp, GroupHeight).visibilityTouch(vm, l), contentAlignment = Alignment.Center) {
+            CheckBox(l.visible && !l.soloedOut, if (l.current || l.picked) Color.White else Pc.CheckFill)
+        }
+        Spacer(Modifier.width(8.dp))
+    }
+}
+
+@Composable
+private fun LayerRow(
+    vm: CanvasViewModel,
+    l: LayerInfo,
+    shape: Shape,
+    name: @Composable (Color, Modifier) -> Unit,
+    owner: Boolean,
+    onTap: () -> Unit,
+    onBlend: () -> Unit,
+    indent: Dp = 0.dp,
+    subtitle: String? = null,
+    onCube: (() -> Unit)? = null,
+    cubeLit: Boolean = false,
+    selected: Boolean = l.current,
+) {
+    val mask = l.kind == LayerType.MASK
+    val masked = vm.hasMask(l)
+    Row(
+        Modifier.fillMaxWidth().height(if (mask || masked) MaskedRowHeight else RowHeight).clip(shape)
+            // the layer a selected mask belongs to shows a darker blue
+            .background(if (selected) Pc.RowSelected else if (l.picked) PickedRow else if (owner) MaskOwnerRow else Pc.LayerRow)
+            .clickable(onClick = onTap)
+            .padding(start = indent + (if (l.clipped) 18.dp else 0.dp) + GroupIndent * l.depth.toInt()),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val ink = if (selected || l.picked) Color.White else Pc.PanelTitle
+        if (l.clipped) Icon(PcIcons.Clip, contentDescription = "Clipped", tint = ink, modifier = Modifier.size(16.dp))
+        // a mask's thumbnail and its layer's join into one, rounded only at the outer corners
+        val corner = 4.dp
+        val thumbShape = when {
+            mask -> RoundedCornerShape(topStart = corner, topEnd = corner)
+            masked -> RoundedCornerShape(bottomStart = corner, bottomEnd = corner)
+            else -> RoundedCornerShape(corner)
+        }
+        val shift = when {
+            mask -> 2.dp
+            masked -> (-2).dp
+            else -> 0.dp
+        }
+        Box(Modifier.padding(start = 4.dp).offset(y = shift)) { Thumb(vm, l, thumbShape) }
+        // what the layer is, under its name (which stays in the middle): the reference layer, one
+        // drawing assist is on for, a private one, a model's layer shared by its texture set's meshes
+        val tag = when {
+            l.reference && l.assisted -> "Assisted Reference"
+            l.reference -> subtitle?.let { "$it Reference" } ?: "Reference"
+            subtitle != null -> subtitle
+            l.assisted -> "Assisted"
+            l.private -> "Private"
+            else -> null
+        }
+        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) {
+            LockedName(l, ink, name, Modifier)
+            if (tag != null) {
+                Text(tag, color = ink, fontSize = 13.sp, maxLines = 1, modifier = Modifier.offset(y = 17.5.dp).padding(start = 29.dp))
+            }
+        }
+        // a model's layer: the button that shows its channels, blue while one of them is painted;
+        // laid out narrower than it is touched (36 from the blend letter, as before), so the name
+        // keeps its room up to the icon
+        if (onCube != null) {
+            Spacer(Modifier.width(10.dp))
+            Box(Modifier.width(12.dp).height(47.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.requiredSize(44.dp, 47.dp).clickable(onClick = onCube), contentAlignment = Alignment.Center) {
+                    Icon(PcIcons.Tab3D, contentDescription = "Channels", tint = if (cubeLit) Pc.Accent else ink, modifier = Modifier.requiredSize(48.dp))
+                }
+            }
+        }
+        // the blend and visibility buttons overlap by 8, as measured; a mask has no blend
+        if (mask) {
+            Spacer(Modifier.width(36.dp))
+        } else {
+            Box(Modifier.offset(x = 8.dp).size(44.dp, 47.dp).clickable(onClick = onBlend), contentAlignment = Alignment.Center) {
+                // a locked layer's mode is greyed
+                val letter = if (l.locked && !l.current && !l.picked) LockedLetter else ink
+                Text(blendCode(vm, l.blend), color = letter, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        Box(Modifier.size(44.dp, 47.dp).visibilityTouch(vm, l), contentAlignment = Alignment.Center) {
+            CheckBox(l.visible && !l.soloedOut, if (selected || l.picked) Color.White else Pc.CheckFill)
+        }
+        Spacer(Modifier.width(8.dp))
+    }
+}
+
+private val TrayFill = Color(0xFF303032)
+private val TileFill = Color(0xFF3B3B3D)
+
+/**
+ * A model's layer's channels under its row: Color, Roughness and Metallic, each its picture of
+ * the layer; the one painted on (of the current layer) blue. A tap paints on it.
+ */
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun ChannelTray(vm: CanvasViewModel, l: LayerInfo) {
+    Row(Modifier.fillMaxWidth().height(159.dp).background(TrayFill).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf("Color", "Roughness", "Metallic").forEachIndexed { c, label ->
+            val chosen = l.current && vm.channelTileChosen && vm.modelChannel == c
+            // held, a picture replaces what the channel holds
+            val replace = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+            ) { uri -> uri?.let { vm.replaceMaterialMap(l, c, it) } }
+            Column(
+                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(6.dp)).background(if (chosen) Pc.Accent else TileFill)
+                    .combinedClickable(
+                        onLongClick = {
+                            val images = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                            replace.launch(androidx.activity.result.PickVisualMediaRequest(images))
+                        },
+                    ) {
+                        if (!l.current) vm.selectLayer(l.id)
+                        vm.chooseChannelTile(c)
+                    }
+                    .padding(6.dp),
+            ) {
+                Box(Modifier.fillMaxWidth().height(102.dp).clip(RoundedCornerShape(3.dp)).background(Pc.ThumbBackground)) {
+                    vm.channelThumbnails[c to l.id]?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+                }
+                Text(label, color = if (chosen) Color.White else Pc.PanelTitle, fontSize = 15.sp, maxLines = 1, modifier = Modifier.padding(start = 2.dp, top = 9.dp))
+            }
+        }
+    }
+}
+
+/** A layer's visibility box: filled with a check when shown, an outline when hidden. */
+@Composable
+private fun CheckBox(checked: Boolean, fill: Color) {
+    val shape = RoundedCornerShape(5.dp)
+    val tick = androidx.compose.ui.graphics.vector.rememberVectorPainter(PcIcons.Tick)
+    Box(
+        Modifier.size(18.dp)
+            .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+            .clip(shape)
+            .then(if (checked) Modifier.background(fill) else Modifier.border(1.5.dp, fill, shape))
+            .drawWithContent {
+                drawContent()
+                if (!checked) return@drawWithContent
+                // the tick is cut out of the box: the row shows through it
+                val side = 14.dp.toPx()
+                val inset = (size.width - side) / 2f
+                val cut = androidx.compose.ui.graphics.Paint().apply { blendMode = androidx.compose.ui.graphics.BlendMode.DstOut }
+                drawContext.canvas.saveLayer(Rect(Offset.Zero, size), cut)
+                translate(inset, inset) { with(tick) { draw(Size(side, side)) } }
+                drawContext.canvas.restore()
+            },
+    )
+}
+
+@Composable
+private fun Thumb(vm: CanvasViewModel, l: LayerInfo, shape: Shape) {
+    Box(
+        Modifier.size(width = 93.dp, height = 61.dp).clip(shape)
+            // a mask's thumbnail sits on white
+            .then(
+                when {
+                    l.alphaLock -> Modifier.drawBehind { checker() }
+                    l.kind == LayerType.MASK -> Modifier.background(Color.White)
+                    else -> Modifier.background(Pc.ThumbBackground)
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        // the thumbnail is what is drawn, fitted; small drawings show their pixels; a text layer's
+        // is its glyph
+        if (l.text) {
+            Icon(PcIcons.TextLayer, contentDescription = null, tint = Pc.TextLayerGlyph, modifier = Modifier.fillMaxSize())
+        } else {
+            vm.thumbnails[l.id]?.let {
+                Image(it, contentDescription = null, contentScale = ContentScale.Fit, filterQuality = FilterQuality.None, modifier = Modifier.fillMaxSize())
+            }
+        }
+    }
+}
+
+/** The transparency checkerboard behind thumbnails. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.checker() {
+    val cell = 6.dp.toPx()
+    drawRect(Color(0xFFFFFFFF))
+    var y = 0
+    while (y * cell < size.height) {
+        var x = 0
+        while (x * cell < size.width) {
+            if ((x + y) % 2 == 1) drawRect(Color(0xFFD6D6D6), Offset(x * cell, y * cell), Size(cell, cell))
+            x++
+        }
+        y++
+    }
+}
+
+/**
+ * The letters on a layer's row for its mode: a two-word name's initials (the second small), a
+ * one-word name's first letter, or its first two where one letter is already taken.
+ */
+private fun blendCode(vm: CanvasViewModel, blend: UInt): String {
+    val name = vm.blendModeList.firstOrNull { it.id == blend }?.name ?: return "N"
+    if (name in TWO_LETTER_BLENDS) return name.take(2)
+    val words = name.split(' ')
+    return if (words.size == 1) name.take(1) else words[0].take(1) + words[1].take(1).lowercase()
+}
+
+private val TWO_LETTER_BLENDS = setOf("Darken", "Shade", "Lighten", "Subtract", "Divide", "Saturation")
+
+@Composable
+private fun BlendEditor(vm: CanvasViewModel, l: LayerInfo) {
+    var opacity by remember(l.id) { mutableFloatStateOf(l.opacity) }
+    Column(Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 15.dp)) {
+        Row(Modifier.padding(horizontal = 13.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Opacity", color = Pc.PanelTitle, fontSize = 17.sp, modifier = Modifier.weight(1f))
+            Text(if (opacity >= 0.995f) "Max" else "${(opacity * 100).roundToInt()}%", color = Pc.PanelTitle, fontSize = 17.sp)
+        }
+        OpacitySlider(
+            opacity,
+            onChange = {
+                opacity = it
+                vm.setLayerOpacity(l, it, done = false)
+            },
+            onDone = { vm.setLayerOpacity(l, opacity, done = true) },
+        )
+        // a picker: the rows snap to the list's middle and the row there is the layer's mode (set
+        // once a scroll settles); the ends padded so every row can reach the middle, the layer's
+        // mode there when it opens
+        val modes = vm.blendModeList
+        val layer by rememberUpdatedState(l)
+        val list = rememberLazyListState(modes.indexOfFirst { it.id == l.blend }.coerceAtLeast(0))
+        val scope = rememberCoroutineScope()
+        LaunchedEffect(list.isScrollInProgress) {
+            if (list.isScrollInProgress) return@LaunchedEffect
+            val info = list.layoutInfo
+            val middle = (info.viewportStartOffset + info.viewportEndOffset) / 2
+            val at = info.visibleItemsInfo.minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - middle) } ?: return@LaunchedEffect
+            val m = modes.getOrNull(at.index) ?: return@LaunchedEffect
+            if (m.id != layer.blend) vm.setBlend(layer, m.id)
+        }
+        LazyColumn(
+            Modifier.padding(top = 11.dp).fillMaxWidth().height(BlendListHeight).clip(RoundedCornerShape(12.dp)).background(Pc.LayerRow),
+            state = list,
+            contentPadding = PaddingValues(vertical = (BlendListHeight - BlendRow) / 2),
+            flingBehavior = rememberSnapFlingBehavior(list, SnapPosition.Center),
+        ) {
+            itemsIndexed(modes) { i, m ->
+                val chosen = m.id == l.blend
+                val ink = if (chosen) Color.White else Pc.PanelTitle
+                Row(
+                    Modifier.fillMaxWidth().height(BlendRow).background(if (chosen) Pc.RowSelected else Color.Transparent)
+                        .clickable { scope.launch { list.animateScrollToItem(i) } }.padding(start = 12.dp, end = 18.5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(m.name, color = ink, fontSize = 17.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                    // its 26 frame centred 31.5 in from the right; grey unless chosen
+                    PcIcons.BlendGlyphs[m.name]?.let {
+                        Icon(it, contentDescription = null, tint = if (chosen) Color.White else BlendGlyphInk, modifier = Modifier.size(26.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The layer's blend list: nine rows of [BlendRow] showing; its glyphs a darker grey than its names. */
+private val BlendRow = 38.8.dp
+private val BlendListHeight = 349.dp
+private val BlendGlyphInk = Color(0xFF808080)
+
+/** A thin blue slider with a white knob, set by dragging anywhere along it. */
+@Composable
+internal fun OpacitySlider(value: Float, onChange: (Float) -> Unit, onDone: () -> Unit) {
+    val change by rememberUpdatedState(onChange)
+    val done by rememberUpdatedState(onDone)
+    Box(
+        Modifier.padding(horizontal = 13.dp, vertical = 2.dp).fillMaxWidth().height(16.dp)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    change((down.position.x / size.width).coerceIn(0f, 1f))
+                    while (true) {
+                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        if (!c.pressed) break
+                        change((c.position.x / size.width).coerceIn(0f, 1f))
+                        c.consume()
+                    }
+                    done()
+                }
+            }
+            .drawBehind {
+                val y = size.height / 2f
+                val h = 3.dp.toPx()
+                drawRoundRect(Pc.SliderRest, Offset(0f, y - h / 2f), Size(size.width, h), CornerRadius(h / 2f))
+                drawRoundRect(Pc.Accent, Offset(0f, y - h / 2f), Size(size.width * value, h), CornerRadius(h / 2f))
+                val knob = Size(26.dp.toPx(), 15.dp.toPx())
+                val x = (size.width * value).coerceIn(knob.width / 2f, size.width - knob.width / 2f)
+                drawRoundRect(Color.White, Offset(x - knob.width / 2f, y - knob.height / 2f), knob, CornerRadius(knob.height / 2f))
+            },
+    )
+}
+/**
+ * The current layer's options, left of the panel and centred on its row. What doesn't apply to
+ * it is left out; lock, duplicate and delete are on the row's swipe.
+ */
+@Composable
+private fun LayerOptions(open: Boolean, vm: CanvasViewModel, l: LayerInfo, rowY: Float, onRename: () -> Unit, onDone: () -> Unit) {
+    val density = LocalDensity.current
+    val place = remember(rowY, density) {
+        with(density) { OptionsPlace((-183).dp.roundToPx(), rowY, OptionsTop.roundToPx(), OptionsShadowRoom.roundToPx()) }
+    }
+    MenuPresence(open, androidx.compose.ui.graphics.TransformOrigin(1f, 0.5f)) { look ->
+        PcPopup(textScale = MATCHED_POPUP_TEXT, popupPositionProvider = place, onDismissRequest = onDone, properties = PopupProperties(focusable = true)) {
+            // frosted over the canvas, as the library's menus are; empty (a locked group's or
+            // mask's), as measured, a pill 64 tall with the frost alone, untinted
+            val rows = vm.layerOptions(l)
+            // a plugin's actions for the layer, after the app's own
+            val actions = remember { vm.plugins.actionsIn(io.github.artcraftandroid.procraft.core.PluginPlace.LAYER) }
+            val tint = if (rows.isEmpty() && actions.isEmpty()) Color.Transparent else Pc.GlassMenu
+            val room = with(density) { OptionsShadowRoom.toPx() }
+            // the room round it for its shadow: a tap there closes it, as one further out does
+            Box(
+                look.pointerInput(Unit) {
+                    detectTapGestures { p ->
+                        if (p.x < room || p.y < room || p.x > size.width - room || p.y > size.height - room) onDone()
+                    }
+                }.padding(OptionsShadowRoom).drawBehind { optionsShadow() },
+            ) {
+            Column(Modifier.width(194.dp).heightIn(min = 64.dp).clip(RoundedCornerShape(24.dp)).then(rememberFrost(24.dp)).background(tint).padding(vertical = 7.dp)) {
+                // the core's rows: each closes the menu, a switch's too (it shows ticked next time)
+                for (r in rows) {
+                    val act: () -> Unit = when (r.option) {
+                        LayerOption.RENAME -> onRename
+                        LayerOption.UNGROUP -> { { vm.ungroup(l) } }
+                        LayerOption.FLATTEN -> { { vm.flattenGroup(l) } }
+                        LayerOption.SELECT -> { { vm.selectLayerContents(l) } }
+                        LayerOption.COPY -> { { vm.copyLayerContents(l) } }
+                        LayerOption.FILL -> { { vm.fillLayer(l) } }
+                        LayerOption.CLEAR -> { { vm.clear(l) } }
+                        LayerOption.ALPHA_LOCK -> { { vm.toggleAlphaLock(l) } }
+                        LayerOption.MASK -> { { vm.addMask(l) } }
+                        LayerOption.CLIPPING_MASK -> { { vm.toggleClipped(l) } }
+                        LayerOption.DRAWING_ASSIST -> { { vm.setGuideAssisted(!l.assisted) } }
+                        LayerOption.INVERT -> { { vm.invertLayer(l) } }
+                        LayerOption.REFERENCE -> { { vm.toggleReference(l) } }
+                        LayerOption.EDIT_TEXT -> { { vm.editText(l) } }
+                        LayerOption.RASTERIZE -> { { vm.rasterize(l) } }
+                        LayerOption.MERGE_DOWN -> { { vm.mergeDown(l) } }
+                        LayerOption.COMBINE_DOWN -> { { vm.combineDown(l) } }
+                        LayerOption.MERGE_MASK -> { { vm.mergeMask(l) } }
+                    }
+                    Option(r.label, checked = r.switchOn, enabled = r.enabled, onClick = { act(); onDone() })
+                }
+                for (action in actions) {
+                    Option(action.label, onClick = { onDone(); vm.runPluginAction(action.key) })
+                }
+            }
+            }
+        }
+    }
+}
+
+/** Room round the options for their shadow, which has faded out by then. */
+private val OptionsShadowRoom = 52.dp
+
+/**
+ * The options' shadow round this (their size), as measured: black at 14%, blurred by 15 (its
+ * sigma) and 6 lower. None of it under them: they show the frost alone when empty.
+ */
+private fun DrawScope.optionsShadow() {
+    val outline = Path().apply {
+        addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(24.dp.toPx())))
+    }
+    val shadow = Path().apply {
+        addRoundRect(RoundRect(0f, 6.dp.toPx(), size.width, size.height + 6.dp.toPx(), CornerRadius(24.dp.toPx())))
+    }
+    // the blur's radius for that sigma, as the platform's blur takes it
+    val radius = (15.dp.toPx() - 0.5f) / 0.57735f
+    drawIntoCanvas { canvas ->
+        val paint = androidx.compose.ui.graphics.Paint().apply {
+            color = Color.Black.copy(alpha = 0.14f)
+            asFrameworkPaint().maskFilter = BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL)
+        }
+        canvas.save()
+        canvas.clipPath(outline, ClipOp.Difference)
+        canvas.drawPath(shadow, paint)
+        canvas.restore()
+    }
+}
+
+/**
+ * Puts the options left of the panel, centred on the row tapped and kept below the top bar; the
+ * popup is [room] bigger all round for their shadow.
+ */
+private class OptionsPlace(private val left: Int, private val rowY: Float, private val top: Int, private val room: Int) : PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+        val bottom = (windowSize.height - popupContentSize.height + room).coerceAtLeast(top - room)
+        val y = (rowY - popupContentSize.height / 2f).roundToInt().coerceIn(top - room, bottom)
+        return IntOffset(anchorBounds.left + left - room, y)
+    }
+}
+
+@Composable
+private fun Option(label: String, checked: Boolean? = null, enabled: Boolean = true, destructive: Boolean = false, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(38.dp).clickable(enabled = enabled, onClick = onClick).padding(start = 19.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val color = when {
+            !enabled -> Pc.MenuDisabled
+            destructive -> Color(0xFFFF453A)
+            else -> Pc.MenuInk
+        }
+        Text(label, color = color, fontSize = 17.sp, modifier = Modifier.weight(1f))
+        if (checked == true) Icon(PcIcons.Tick, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+    }
+}
+/** A model's texture set's name, heading its meshes: 41 tall, 16 under the set before it. */
+@Composable
+private fun SetHeader(name: String, first: Boolean) {
+    Column {
+        if (!first) Spacer(Modifier.height(16.dp))
+        Box(Modifier.fillMaxWidth().height(41.dp), contentAlignment = Alignment.TopStart) {
+            Text(name, color = Pc.PanelTitle, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.padding(start = 16.dp, top = 12.dp))
+        }
+    }
+}
+
+/** A model's mesh opened in the layers panel: its row darkened blue. */
+private val SubmeshOpen = Color(0xFF25344A)
+private val SubmeshTile = Color(0xFF434246)
+
+/**
+ * One of a model's meshes: its picture, its name, the arrow that opens it (its texture set's
+ * layers under it) and its box (shown or hidden). A tap anywhere but the box opens or closes it.
+ */
+@Composable
+private fun SubmeshRow(vm: CanvasViewModel, index: Int, name: String, open: Boolean, shape: Shape) {
+    val hidden = vm.submeshesHidden.getOrNull(index) == true
+    val locked = vm.submeshesLocked.getOrNull(index) == true
+    val picked = index in vm.activeSubmeshes
+    // slid left it shows Lock (or Unlock); a little right, it joins the meshes picked
+    val reach = with(LocalDensity.current) { (SwipeButton + 6.dp).toPx() }
+    val pickReach = with(LocalDensity.current) { PickReach.toPx() }
+    val offset = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    var opened by remember { mutableStateOf(false) }
+    Box(Modifier.clipToBounds()) {
+    if (offset.value < 0f) {
+        Row(Modifier.matchParentSize(), horizontalArrangement = Arrangement.End) {
+            SwipeAction(if (locked) "Unlock" else "Lock", SwipeFill, SwipeInk) {
+                vm.toggleSubmeshLocked(index)
+                opened = false
+                scope.launch { offset.animateTo(0f, Motion.swipeSettle()) }
+            }
+        }
+    }
+    Row(
+        Modifier.offset { IntOffset(offset.value.roundToInt(), 0) }
+            .pointerInput(index, opened, reach) {
+                detectHorizontalDragGestures(
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        scope.launch { offset.snapTo((offset.value + amount).coerceIn(-reach, if (opened) 0f else pickReach)) }
+                    },
+                    onDragEnd = {
+                        if (offset.value > pickReach / 2f) {
+                            vm.pickMoreSubmeshes(index)
+                            opened = false
+                        } else {
+                            opened = offset.value < -reach / 2f
+                        }
+                        scope.launch { offset.animateTo(if (opened) -reach else 0f, Motion.swipeSettle()) }
+                    },
+                    onDragCancel = { scope.launch { offset.animateTo(if (opened) -reach else 0f, Motion.swipeSettle()) } },
+                )
+            }
+            .fillMaxWidth().height(RowHeight).clip(shape).background(if (open || picked) SubmeshOpen else Pc.LayerRow)
+            .clickable { vm.openSubmesh(index) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.padding(start = 4.dp).size(93.dp, 61.dp).clip(RoundedCornerShape(4.dp)).background(SubmeshTile), contentAlignment = Alignment.Center) {
+            vm.submeshThumbnails[index]?.let { Image(it, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(4.dp)) }
+        }
+        Text(name, color = Pc.PanelTitle, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 29.dp, end = 6.dp))
+        if (locked) Icon(PcIcons.PageLocked, contentDescription = "Locked", tint = Pc.PanelTitle, modifier = Modifier.size(16.dp))
+        Box(Modifier.offset(x = 8.dp).size(44.dp, 51.dp).clickable { vm.openSubmesh(index) }, contentAlignment = Alignment.Center) {
+            Icon(if (open) PcIcons.ChevronDown else PcIcons.ChevronRight, contentDescription = if (open) "Close" else "Open", tint = Pc.PanelTitle, modifier = Modifier.size(16.dp))
+        }
+        Box(Modifier.size(44.dp, 47.dp).clickable { vm.toggleSubmeshHidden(index) }, contentAlignment = Alignment.Center) {
+            CheckBox(!hidden, Pc.CheckFill)
+        }
+        Spacer(Modifier.width(8.dp))
+    }
+    }
+}
+
+@Composable
+private fun BackgroundRow(vm: CanvasViewModel) {
+    val bg = vm.background
+    Row(
+        Modifier.fillMaxWidth().height(50.dp).clip(RoundedCornerShape(17.dp)).background(Pc.BackgroundRow),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(Modifier.weight(1f).fillMaxHeight().clickable { vm.pickBackground() }, verticalAlignment = Alignment.CenterVertically) {
+            // hidden, the swatch shows no colour: a faint white over the row
+            val swatch = if (bg.visible) Color(bg.r, bg.g, bg.b) else Color.White.copy(alpha = 0.06f)
+            Box(Modifier.padding(start = 4.dp).size(92.dp, 42.dp).clip(RoundedCornerShape(14.dp)).background(swatch))
+            Text("Background color", color = Pc.PanelTitle, fontSize = 17.sp, maxLines = 1, modifier = Modifier.weight(1f).padding(start = 14.dp))
+        }
+        Box(Modifier.size(44.dp, 41.dp).clickable { vm.toggleBackground() }, contentAlignment = Alignment.Center) {
+            CheckBox(bg.visible, Pc.CheckFill)
+        }
+        Spacer(Modifier.width(8.dp))
+    }
+}
+
+/** A layer's visibility box: tapped, shown or hidden (or, with a layer shown alone, every layer again); held, shown alone (or every layer again). */
+private fun Modifier.visibilityTouch(vm: CanvasViewModel, l: LayerInfo): Modifier =
+    pointerInput(l) { detectTapGestures(onTap = { vm.toggleVisible(l) }, onLongPress = { vm.toggleSolo(l) }) }
+
+/**
+ * Two fingers on a row: tapping (down and up together, still) do [onTap], swiped right together do
+ * [onSwipeRight], held still do [onHold]. One finger's touches go on to the rest as they are; once
+ * a second is down they are the two fingers' alone.
+ */
+private fun Modifier.twoFingers(enabled: Boolean, onTap: () -> Unit, onSwipeRight: () -> Unit, onHold: () -> Unit): Modifier =
+    if (!enabled) this else pointerInput(Unit) {
+        awaitEachGesture {
+            val first = awaitFirstDown(requireUnconsumed = false, pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            var two: Long? = null
+            var middle: Offset? = null
+            var moved = false
+            var done = false
+            while (true) {
+                val e = withTimeoutOrNull(TWO_FINGER_HOLD_MS / 4) {
+                    awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                }
+                // the touches' clock (uptime), also while no event comes
+                val now = e?.changes?.maxOfOrNull { it.uptimeMillis } ?: android.os.SystemClock.uptimeMillis()
+                if (e != null) {
+                    val fingers = e.changes.filter { it.pressed }
+                    if (fingers.size >= 2) {
+                        val between = (fingers[0].position + fingers[1].position) / 2f
+                        val start = middle ?: between.also { middle = it }
+                        if (two == null) two = now
+                        e.changes.forEach { it.consume() }
+                        val d = between - start
+                        if (d.getDistance() > viewConfiguration.touchSlop) moved = true
+                        if (!done && d.x > TWO_FINGER_SWIPE.toPx() && d.x > 2f * kotlin.math.abs(d.y)) {
+                            done = true
+                            onSwipeRight()
+                        }
+                    } else if (two == null) {
+                        e.changes.firstOrNull { it.id == first.id }?.let {
+                            if ((it.position - first.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                        }
+                    }
+                    if (e.changes.none { it.pressed }) {
+                        val since = two
+                        if (!done && since != null && !moved && now - first.uptimeMillis <= TWO_FINGER_TAP_MS) onTap()
+                        break
+                    }
+                }
+                // two fingers kept still long enough: held
+                val since = two
+                if (!done && !moved && since != null && now - since >= TWO_FINGER_HOLD_MS) {
+                    done = true
+                    onHold()
+                }
+            }
+        }
+    }
+
+/** How long two fingers may stay down and still tap, milliseconds. */
+private const val TWO_FINGER_TAP_MS = 400L
+
+/** How long two fingers kept still on a row hold it, milliseconds. */
+private const val TWO_FINGER_HOLD_MS = 500L
+
+/** How far two fingers go right together to swipe a row. */
+private val TWO_FINGER_SWIPE = 40.dp
+
+/** Two rows being pinched: each moved a share of its finger's way ([SQUEEZE_FOLLOW]), the upper on top. */
+private class Squeeze(val upper: ULong, val lower: ULong, val upperBy: Float, val lowerBy: Float) {
+    fun offset(id: ULong): Float? = when (id) {
+        upper -> upperBy * SQUEEZE_FOLLOW
+        lower -> lowerBy * SQUEEZE_FOLLOW
+        else -> null
+    }
+
+    fun above(id: ULong): Float? = if (id == upper) 1f else null
+}
+
+/**
+ * Two fingers put on two rows of the list (their layers by [rowAt], from a window y; [origin] the
+ * list's place in the window) and pinched together to [PINCH_MERGE] of how far apart they were:
+ * the list stays put from then, and as a finger lets go [onPinched] gets the two layers. Meanwhile
+ * [onSqueeze] follows the two rows' fingers (none once they let go).
+ */
+private fun Modifier.pinchRows(
+    origin: () -> Offset,
+    rowAt: (Float) -> ULong?,
+    onSqueeze: (Squeeze?) -> Unit,
+    onPinched: (ULong, ULong) -> Unit,
+): Modifier = this.pointerInput(Unit) {
+    val initial = androidx.compose.ui.input.pointer.PointerEventPass.Initial
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = initial)
+        var ends: Pair<ULong, ULong>? = null
+        // the fingers on the upper and lower rows, and where they went down
+        var fingers: Pair<androidx.compose.ui.input.pointer.PointerId, androidx.compose.ui.input.pointer.PointerId>? = null
+        var starts = 0f to 0f
+        var apart = 0f
+        var pinched = false
+        while (true) {
+            val e = awaitPointerEvent(initial)
+            val down = e.changes.filter { it.pressed }
+            if (ends == null && down.size == 2) {
+                val (a, b) = down.sortedBy { it.position.y }
+                val ra = rowAt(origin().y + a.position.y)
+                val rb = rowAt(origin().y + b.position.y)
+                if (ra != null && rb != null && ra != rb) {
+                    ends = ra to rb
+                    fingers = a.id to b.id
+                    starts = a.position.y to b.position.y
+                    apart = b.position.y - a.position.y
+                }
+            }
+            val pair = ends
+            val ids = fingers
+            if (pair != null && ids != null && down.size >= 2) {
+                val upper = down.firstOrNull { it.id == ids.first }?.position?.y ?: starts.first
+                val lower = down.firstOrNull { it.id == ids.second }?.position?.y ?: starts.second
+                if (kotlin.math.abs(lower - upper) <= apart * PINCH_MERGE) pinched = true
+                if (pinched) e.changes.forEach { it.consume() }
+                onSqueeze(Squeeze(pair.first, pair.second, upper - starts.first, lower - starts.second))
+            }
+            if (pair != null && down.size < 2) {
+                onSqueeze(null)
+                if (pinched) onPinched(pair.first, pair.second)
+                break
+            }
+            if (down.isEmpty()) {
+                onSqueeze(null)
+                break
+            }
+        }
+    }
+}
+
+/** How much of its finger's way a pinched row moves (as measured, about a quarter to a third). */
+private const val SQUEEZE_FOLLOW = 0.3f
+
+/** Two rows pinched to this share of how far apart they were merge (as measured: a pinch a third closed merges, opened again or not). */
+private const val PINCH_MERGE = 0.65f

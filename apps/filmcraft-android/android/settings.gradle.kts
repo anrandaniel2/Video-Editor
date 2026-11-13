@@ -23,3 +23,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "FilmCraft"
 include(":app")
+
+include(":procraft")
+project(":procraft").projectDir = file("../../../third_party/procraft/android/app")

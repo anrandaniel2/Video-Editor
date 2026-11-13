@@ -1,0 +1,310 @@
+package io.github.artcraftandroid.procraft.ui
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+/** Interface colours and sizes. Sizes in dp equal the measured points. */
+object Pc {
+    /** The light interface (Prefs) is on: panels and bars go light grey with dark text. */
+    var light by mutableStateOf(false)
+
+    /** A colour for the interface as it is now: [dark], or [light] when the light interface is on. */
+    private fun pick(dark: Long, light: Long) = Color(if (this.light) light else dark)
+
+    val Panel: Color get() = pick(0xF7262626, 0xF7E6E6E6)
+    val Row: Color get() = pick(0xFF303030, 0xFFD8D8D8)
+
+    /** A plugin has the colour panel's Classic show a triangle in place of its square. */
+    var colourTriangle by mutableStateOf(false)
+
+    /** A picker plugin's Classic square, while one is on: its picture, and where touches land and the knob sits. */
+    var picker by mutableStateOf<ClassicPicker?>(null)
+
+    /** The accent a plugin gives the interface, if one does: drawn in place of the interface's blues. */
+    var accentGiven by mutableStateOf<Color?>(null)
+
+    /** [blue], one of the interface's own blues, or the accent a plugin gives in its place (its alpha kept). */
+    fun tinted(blue: Color): Color = accentGiven?.copy(alpha = blue.alpha) ?: blue
+
+    /** The accent [plugins] give, if any. */
+    fun accentOf(plugins: io.github.artcraftandroid.procraft.core.Plugins): Color? =
+        plugins.accentColour()?.let { Color(0xFF000000L or it.toLong()) }
+
+    val RowSelected: Color get() = tinted(Color(0xFF0076FD))
+    val Accent: Color get() = tinted(Color(0xFF0076FD))
+    val Text: Color get() = pick(0xFFFFFFFF, 0xFF222222)
+    val TextDim: Color get() = pick(0x99FFFFFF, 0x99000000)
+    val Disabled: Color get() = pick(0x4DFFFFFF, 0x4D000000)
+    val Divider: Color get() = pick(0x26FFFFFF, 0x1F000000)
+    val Surround = Color(0xFF1C1C1C)
+
+    // the bar across the top of the canvas
+    /** Translucent: #333333 over white, as the bar measures. */
+    // light, see-through enough to read 226 over the light surround and 235 over white
+    val Bar: Color get() = pick(0xE61C1C1C, 0xCFE6E6E6)
+    val BarText: Color get() = pick(0xFFAAAAAA, 0xFF3B3B3B)
+    val BarGlyph: Color get() = pick(0xFFC7C7C7, 0xFF373737)
+    val BarGlyphSelected: Color get() = tinted(Color(0xFF0076FD))
+    val ActionDisc: Color get() = pick(0xFF141414, 0xFFEDEDED)
+    val ActionGlyph: Color get() = pick(0xFF969696, 0xFF646464)
+    val ColorRing: Color get() = pick(0xFF969696, 0xFF696969)
+    val BarHeight = 44.dp
+    val BarMargin = 40.dp
+    val BarButtonWidth = 44.dp
+    val BarButtonHeight = 38.dp
+    val GalleryWidth = 58.dp
+    val ActionDiscSize = 32.dp
+    val ColorDot = 31.dp
+
+    // the panels hanging from the top bar
+    val PopoverFill: Color get() = pick(0xFF383838, 0xFFE6E6E6)
+    /** A panel's own material over the canvas: what is behind it shows through, blurred. */
+    val PopoverFrost: Color get() = pick(0xDE1E1E1E, 0xFFE6E6E6)
+    /**
+     * The gallery's popovers: their glass as it shows over the gallery's dark (nothing blurs what
+     * is behind them there, and unblurred it shows through too sharply).
+     */
+    val GalleryPopover: Color get() = pick(0xFF212121, 0xFFE6E6E6)
+    val PopoverShadow: Color get() = pick(0x38000000, 0x24000000)
+    val PopoverShadowRadius = 51.dp
+    val PopoverCorner = 35.dp
+    val PopoverGap = 12.dp
+    val ArrowHeight = 12.dp
+    val ArrowShift = 2.dp
+    val PanelTitle: Color get() = pick(0xFFC7C7C7, 0xFF393939)
+    val PanelGlyph: Color get() = pick(0xFFC8C8C8, 0xFF393939)
+    val ChevronDisc: Color get() = pick(0xFF4C4C4C, 0xFFCFCFCF)
+    val ChevronGlyph: Color get() = pick(0xFF2E2E2E, 0xFFE6E6E6)
+    // a little white over the panel, so they follow its frosting
+    val LayerRow: Color get() = pick(0x0DFFFFFF, 0xFFD8D8D8)
+    val BackgroundRow: Color get() = pick(0x0DFFFFFF, 0xFFD8D8D8)
+    val CheckFill: Color get() = pick(0xFFC7C7C7, 0xFF575757)
+    val ThumbBackground: Color get() = pick(0xFF4F4F4F, 0xFFC8C8C8)
+    /** A text layer's glyph on its thumbnail. */
+    val TextLayerGlyph: Color get() = pick(0xFFB8B8B8, 0xFF000000)
+    // the brush library is glass like the other panels: the sets on the panel's own frost, the
+    // brushes a shade darker, the set cells a little lighter (measured over white and over the
+    // dark surround: 58 / 31, 52 / 26, 64 / 42)
+    val SetColumn: Color get() = pick(0x00000000, 0xFFE6E6E6)
+    val SetCell: Color get() = pick(0x2E5B5B5B, 0xFFD7D7D7)
+    val BrushColumn: Color get() = pick(0x26000000, 0xFFE0E0E0)
+    val Grabber: Color get() = pick(0x7AC6C6C6, 0xFFB0B0B0)
+    val SwatchEdge: Color get() = pick(0xFF5A5A5A, 0xFFC0C0C0)
+    val SaturationGrey = Color(0xFF7F7F7F)
+    val ClearText: Color get() = pick(0xFFB5B5B5, 0xFF4A4A4A)
+    val EmptySwatch: Color get() = pick(0xFF2A2A2A, 0xFFD9D9D9)
+    val ValueGroup: Color get() = pick(0xFF434343, 0xFFD5D5D5)
+    val HexRow: Color get() = pick(0xFF414141, 0xFFD8D8D8)
+    val HexField: Color get() = pick(0xFF4B4B4B, 0xFFCFCFCF)
+    val MenuFill: Color get() = pick(0xFF5A5C5B, 0xFFF0F0F0)
+    /** A menu's words: white, black on the light interface's menus. */
+    val MenuInk: Color get() = pick(0xFFFFFFFF, 0xFF000000)
+    /** The small frosted menus: over the canvas what is behind shows through, blurred. */
+    val GlassMenu: Color get() = pick(0xCF313135, 0xFAF0F0F0)
+    /** A small menu over a panel: the panel can't show through blurred, so it is nearly solid, grey. */
+    val GlassMenuOverPanel: Color get() = pick(0xFA222222, 0xFAF0F0F0)
+    val GlassMenuEdge: Color get() = pick(0x24FFFFFF, 0x14000000)
+    val RadioRing: Color get() = pick(0xFF606060, 0xFFB0B0B0)
+    val MenuDanger: Color get() = pick(0xFFE84F51, 0xFFD93A3D)
+    val MenuLine: Color get() = pick(0x33FFFFFF, 0x26000000)
+    val MenuDisabled: Color get() = pick(0x66FFFFFF, 0x66000000)
+    val SliderRest: Color get() = pick(0xFF5A5A5A, 0xFFBEBEBE)
+    val EmptySlot: Color get() = pick(0xFF555555, 0xFFC8C8C8)
+    // a dark wash on the panel's glass (26 over the dark surround, 44 over white)
+    val ActionsGroup: Color get() = pick(0x420C0C0C, 0xFFE8E8E8)
+    // a faint lightening of whatever the glass shows (+5 over the dark surround, +8 over white)
+    val ActionsSeparator: Color get() = pick(0x06FFFFFF, 0xFFE2E2E2)
+    /** An Actions row's text: dimmer than the panel's title (#a8a8a8 against #c7c7c7). */
+    val ActionsRow: Color get() = pick(0xFFA8A8A8, 0xFF393939)
+    val ActionsDisabled: Color get() = pick(0xFF5E5E5E, 0xFFABABAB)
+    val TabIdle: Color get() = pick(0xFFA3A3A3, 0xFF404040)
+    val SwitchOff: Color get() = pick(0xFF747377, 0xFFA9A8AC)
+    val MessageBar: Color get() = pick(0xFF606060, 0xFFD0D0D0)
+    val MessageText: Color get() = pick(0xFFB5B5B5, 0xFF3B3B3B)
+    val LoupeEdge = Color(0xFF808080)
+    val SlideLabel: Color get() = pick(0xFFC1C1C1, 0xFF3D3D3D)
+    val SlideValue: Color get() = pick(0xFFEDEDED, 0xFF3D3D3D)
+    val SlideTrack: Color get() = pick(0xFF414141, 0xFFBEBEBE)
+    val SwitchFixed: Color get() = pick(0xFF404040, 0xFFD2D2D2)
+    val SwitchFixedKnob: Color get() = pick(0xFF525252, 0xFFE9E9E9)
+
+    /** The centre of tool button [index] (0 is the colour button, counting leftwards), from the bar's right edge. */
+    fun toolCentreFromRight(index: Int, barWidth: Dp): Dp {
+        val fit = barFit(barWidth)
+        return fit.margin + fit.button / 2 + (fit.button + fit.toolGap) * index
+    }
+
+    /** The centre of action button [index] (0 is actions, counting rightwards), from the bar's left edge. */
+    fun actionCentre(index: Int, barWidth: Dp): Dp {
+        val fit = barFit(barWidth)
+        return fit.margin + GalleryWidth + fit.actionGap + fit.button / 2 + (fit.button + fit.actionGap) * index
+    }
+
+    // the gallery; light, near white with dark grey inks and a frosted white capsule
+    val GalleryBackground: Color get() = pick(0xFF212121, 0xFFF0F0F0)
+    val GalleryTitle: Color get() = pick(0xFFF0F0F0, 0xFF3C3C3C)
+    val GalleryText: Color get() = pick(0xFFAAAAAA, 0xFF595959)
+    val GallerySize: Color get() = pick(0xFF666666, 0xFF6A6A6A)
+    val Capsule: Color get() = pick(0xFF1C1C1C, 0xF0F7F7F7)
+    val CapsuleEdge: Color get() = pick(0xFF393939, 0x0F000000)
+    val LightPanel = Color(0xFFD5D5D5)
+    val LightText = Color(0xFF393939)
+    val LightRowStrong = Color(0xFFE1E1E1)
+    val LightRow = Color(0xFFDEDEDE)
+    val LightSeparator = Color(0xFFD2D2D2)
+    val LightChip = Color(0xFFD6D6D6)
+
+    // the side bar
+    // the bar and the tracks translucent, each straight over what is behind (#2d2d2d and #676767
+    // over white); the thumbs opaque (#a6a6a6 over white and over the dark surround alike)
+    val SideBar: Color get() = pick(0xE7171717, 0xCFE5E5E5)
+    val SliderTrack: Color get() = pick(0xC93E3E3E, 0xBFF0F0F0)
+    // a lighter rim round each track, more of what is behind showing through it (#5a5a5a over the
+    // dark surround, #969696 over white)
+    val SliderRim: Color get() = pick(0xB96E6E6E, 0xFFE9E9E9)
+    val SliderRimWidth = 0.8.dp
+    val SliderThumb: Color get() = pick(0xFFA6A6A6, 0xFFF8F8F8)
+    val SideGlyph: Color get() = pick(0xFF969696, 0xFF646464)
+    val SideGlyphDisabled: Color get() = pick(0x1AFFFFFF, 0x33000000)
+    val SideBarWidth = 51.dp
+    val SideBarHeight = 519.dp
+    val SideBarCorner = 20.dp
+    /** Where the side bar's centre sits, as a fraction of the screen height. */
+    const val SIDE_BAR_CENTRE = 0.5234f
+    /** Left under the side bar in a window too short for its measured tracks, and how short they go. */
+    private val ShortSideBarFoot = 17.dp
+    private val ShortestTrack = 44.dp
+    val SliderWidth = 40.dp
+    val SliderHeight = 170.dp
+    val SliderCorner = 13.dp
+    val ThumbWidth = 32.dp
+    val ThumbHeight = 18.dp
+    val ThumbInset = 4.dp
+    val ModifySize = 22.5.dp
+    val ModifyStroke = 2.4.dp
+    val ModifyCorner = 6.dp
+
+    /**
+     * The gaps between the tool buttons and between the action buttons for a bar [width] wide:
+     * the room left after both margins picks one of five steps.
+     */
+    private fun barGaps(width: Dp): Pair<Dp, Dp> {
+        val room = width - BarMargin * 2
+        return when {
+            room < 435.dp -> 2.dp to 4.dp
+            room < 530.dp -> 8.dp to 14.dp
+            room < 625.dp -> 26.dp to 14.dp
+            room < 730.dp -> 8.dp to 14.dp
+            else -> 26.dp to 14.dp
+        }
+    }
+
+    /** The top bar's spacing: its margins, the gaps between its tool and action buttons, and how wide those are. */
+    data class BarFit(val margin: Dp, val toolGap: Dp, val actionGap: Dp, val button: Dp) {
+        /** The width it takes for the bar's two ends not to meet: Gallery and four actions, five tools. */
+        val needs: Dp get() = margin * 2 + GalleryWidth + (button + actionGap) * 4 + button * 5 + toolGap * 4
+    }
+
+    /** Tighter and tighter, for windows too narrow for the measured steps. */
+    private val NarrowBars = listOf(
+        BarFit(BarMargin, 8.dp, 14.dp, BarButtonWidth),
+        BarFit(BarMargin, 2.dp, 4.dp, BarButtonWidth),
+        BarFit(16.dp, 2.dp, 4.dp, BarButtonWidth),
+        BarFit(8.dp, 0.dp, 0.dp, BarButtonWidth),
+        BarFit(8.dp, 0.dp, 0.dp, 36.dp),
+        BarFit(4.dp, 0.dp, 0.dp, 32.dp),
+    )
+
+    /**
+     * The spacing of a top bar [width] wide: the measured step for that width, or where its two
+     * ends would run into each other (a narrow window, as in split screen) the first of
+     * [NarrowBars] that keeps them apart.
+     */
+    fun barFit(width: Dp): BarFit {
+        val (tool, action) = barGaps(width)
+        val measured = BarFit(BarMargin, tool, action, BarButtonWidth)
+        return if (measured.needs <= width) measured else NarrowBars.firstOrNull { it.needs <= width } ?: NarrowBars.last()
+    }
+
+    /** Where the side bar goes: its top, and how long each of its two tracks is. */
+    data class SideBarFit(val top: Dp, val track: Dp)
+
+    /**
+     * The side bar in a window [height] tall: at [SIDE_BAR_CENTRE] with its measured tracks wherever
+     * that clears the top bar; in a shorter window (split screen) just under the top bar, its tracks
+     * giving up what it is short of, so that all of it can be reached.
+     */
+    fun sideBarFit(height: Dp): SideBarFit {
+        val top = height * SIDE_BAR_CENTRE - SideBarHeight / 2
+        if (top >= BarHeight) return SideBarFit(top, SliderHeight)
+        val rest = SideBarHeight - SliderHeight * 2
+        return SideBarFit(BarHeight, ((height - BarHeight - ShortSideBarFoot - rest) / 2).coerceIn(ShortestTrack, SliderHeight))
+    }
+}
+
+/**
+ * The open canvas's colour space: its colours (0xRRGGBB values) are Display P3 numbers or sRGB
+ * ones. The window is in wide colour, so P3 colours show as they are.
+ */
+object CanvasSpace {
+    var p3 by mutableStateOf(false)
+        private set
+
+    /**
+     * How the canvas shows a colour of its own, when not as its numbers say: as a CMYK canvas's
+     * press prints it, or an imported profile's colour in Display P3.
+     */
+    private var shown by mutableStateOf<((Int) -> Int)?>(null)
+    private val seen = HashMap<Int, Int>()
+    private val displayP3 by lazy { android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.DISPLAY_P3) }
+
+    /** The canvas's colours are Display P3 numbers (else sRGB), shown through [shown] if given. */
+    fun set(p3: Boolean, shown: ((Int) -> Int)? = null) {
+        seen.clear()
+        this.p3 = p3
+        this.shown = shown
+    }
+
+    /** A canvas colour, in the canvas's space. */
+    fun color(rgb: Int): Color {
+        val f = shown
+        val c = if (f == null) rgb else seen.getOrPut(rgb) { f(rgb) }
+        return if (p3) {
+            Color(((c shr 16) and 0xFF) / 255f, ((c shr 8) and 0xFF) / 255f, (c and 0xFF) / 255f, 1f, androidx.compose.ui.graphics.colorspace.ColorSpaces.DisplayP3)
+        } else {
+            Color(0xFF000000 or c.toLong())
+        }
+    }
+
+    /** [bitmap], of the canvas's colours, marked with the canvas's space (on Android 9, a copy so marked). */
+    fun tag(bitmap: android.graphics.Bitmap): android.graphics.Bitmap {
+        if (!p3) return bitmap
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            bitmap.setColorSpace(displayP3)
+            return bitmap
+        }
+        // a bitmap's space can't be changed before Android 10: its pixels go into one made in it
+        val config = bitmap.config ?: android.graphics.Bitmap.Config.ARGB_8888
+        val tagged = android.graphics.Bitmap.createBitmap(bitmap.width, bitmap.height, config, true, displayP3)
+        val pixels = java.nio.ByteBuffer.allocate(bitmap.byteCount)
+        bitmap.copyPixelsToBuffer(pixels)
+        pixels.rewind()
+        tagged.copyPixelsFromBuffer(pixels)
+        return tagged
+    }
+}
+
+/**
+ * A picker plugin's Classic square: [pick] gives the saturation and brightness at a point and [point] where they sit
+ * (points 0..1 across and down); [picture] draws it for a hue, a side in pixels, premultiplied RGBA (none if it
+ * couldn't be drawn: its plugin goes off).
+ */
+class ClassicPicker(
+    val pick: (Float, Float) -> List<Float>?,
+    val point: (Float, Float) -> List<Float>?,
+    val picture: (Float, Int) -> ByteArray?,
+)

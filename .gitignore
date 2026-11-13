@@ -5,3 +5,7 @@
 .DS_Store
 .claude/
 local.properties
+
+# Vendored ProCraft build outputs
+/third_party/procraft/target/
+/third_party/procraft/android/app/build/

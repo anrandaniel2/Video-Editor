@@ -1,0 +1,553 @@
+package io.github.artcraftandroid.procraft.ui
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.artcraftandroid.procraft.canvas.CanvasViewModel
+import io.github.artcraftandroid.procraft.canvas.TextRenderer
+import io.github.artcraftandroid.procraft.core.TextAlignment
+import io.github.artcraftandroid.procraft.core.TextInfo
+import kotlin.math.roundToInt
+
+private val SheetFill get() = if (Pc.light) Color(0xFFF3F6F7) else Color(0xFF535353)
+private val SheetBar get() = if (Pc.light) Color(0xFFF3F6F7) else Color(0xFF4F4F4F)
+private val SheetCapsule get() = if (Pc.light) Color(0xFFFBFBFB) else Color(0xFF3E3E3E)
+private val CardFill get() = if (Pc.light) Color(0xFFFAFAFA) else Color(0xFF373737)
+private val CardCorner = 22.dp
+private val ButtonFill get() = if (Pc.light) Color(0xFFE6E6E6) else Color(0xFF474747)
+private val SegmentTrack get() = if (Pc.light) Color(0xFFE3E3E3) else Color(0xFF646464)
+private val CapsuleInk get() = if (Pc.light) Color(0xFF565656) else Color(0xFFC5C5C5)
+private val KeyboardDisc get() = if (Pc.light) Color(0xFFFBFBFB) else Color(0xFF393939)
+private val KeyboardBar get() = if (Pc.light) Color(0xFFE9ECED) else Color(0xFF2B2B2B)
+private val DoneBlue get() = Pc.tinted(Color(0xFF0190FF))
+private val BoxLine get() = Pc.tinted(Color(0xFF0076FD))
+/** The box's outline and the dots on its sides (as measured, a lighter blue than the caret's). */
+private val BoxOutline = Color(0xFF0184FF)
+/** A side's dot: how wide it is, and how near a finger takes it. */
+private val SideDot = 7.5.dp
+private val SideReach = 20.dp
+/** Fingers tapped outside the box this quickly (ms) undo or redo, as on the canvas. */
+private const val EditTapMs = 300L
+/** The sheet's words: white, black on the light interface. */
+// a design row's track and the middle tick of one that runs both ways
+private val DesignTrack get() = if (Pc.light) Color(0xFFE3E3E3) else Color(0xFF5A5A5A)
+private val DesignTick get() = if (Pc.light) Color(0xFFC8C8C8) else Color(0xFF8A8A8A)
+private val SheetInk get() = if (Pc.light) Color.Black else Color.White
+
+/**
+ * Text being edited: its box drawn over the canvas, a hidden field the keyboard types into, and a
+ * bar above the keyboard with the style sheet's button and Done. Tapping outside the box keeps the
+ * text.
+ */
+@Composable
+fun BoxScope.TextEditor(vm: CanvasViewModel) {
+    val info = vm.textInfo ?: return
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val box by rememberUpdatedState(windowBox(vm, info))
+    // a tap outside the box ends the edit, keeping it; dragging inside it moves the text, and
+    // dragging a side's dot (past the touch slop) moves that side: the box's width
+    Box(Modifier.fillMaxSize().pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown()
+            vm.textSideAt(down.position, SideReach.toPx())?.let { side ->
+                down.consume()
+                var dragging = false
+                while (true) {
+                    val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                    if (!dragging && (c.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                        dragging = vm.beginTextSide(side, down.position)
+                    }
+                    if (dragging) vm.dragTextSide(c.position)
+                    c.consume()
+                    // after the move: a finger's lift can carry its last one
+                    if (!c.pressed) break
+                }
+                if (dragging) vm.endTextSide() else {
+                    // a tap on the dot is a tap on the text
+                    vm.textKeyboard = true
+                    focus.requestFocus()
+                    keyboard?.show()
+                }
+                return@awaitEachGesture
+            }
+            if (!box.contains(down.position)) {
+                // one finger there ends the edit, keeping it; two tapped undo and three redo
+                // inside it (a width changed goes back a step at a time), as on the canvas
+                var most = 1
+                var moved = false
+                var lastAt = down.uptimeMillis
+                // where each finger came down
+                val from = mutableMapOf(down.id to down.position)
+                while (true) {
+                    val e = awaitPointerEvent()
+                    most = maxOf(most, e.changes.count { it.pressed })
+                    for (c in e.changes) {
+                        val at = from.getOrPut(c.id) { c.position }
+                        moved = moved || (c.position - at).getDistance() > viewConfiguration.touchSlop
+                        lastAt = maxOf(lastAt, c.uptimeMillis)
+                    }
+                    if (e.changes.none { it.pressed }) break
+                }
+                val tapped = !moved && lastAt - down.uptimeMillis <= EditTapMs
+                when {
+                    most == 1 -> vm.endText(true)
+                    most == 2 && tapped -> vm.undo()
+                    most >= 3 && tapped -> vm.redo()
+                }
+                return@awaitEachGesture
+            }
+            // a touch on the text brings the keyboard back if it was put away
+            vm.textKeyboard = true
+            focus.requestFocus()
+            keyboard?.show()
+            var last = down.position
+            while (true) {
+                val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                if (!c.pressed) break
+                vm.moveText(last, c.position)
+                last = c.position
+                c.consume()
+            }
+        }
+    })
+    TextBox(vm, info)
+    // undo and redo are the app's, not the field's (a width change goes back a step at a time)
+    BasicTextField(
+        vm.textField, vm::changeTextField,
+        Modifier.size(1.dp).alpha(0f).focusRequester(focus).onPreviewKeyEvent { e ->
+            val z = e.type == KeyEventType.KeyDown && e.key == Key.Z && (e.isCtrlPressed || e.isMetaPressed)
+            if (z) { if (e.isShiftPressed) vm.redo() else vm.undo() }
+            z
+        },
+    )
+    LaunchedEffect(vm.textStyleOpen, vm.textKeyboard) {
+        if (vm.textStyleOpen || !vm.textKeyboard) keyboard?.hide() else {
+            focus.requestFocus()
+            keyboard?.show()
+        }
+    }
+    // the bar rides on the keyboard: put away, it goes with it
+    val keyboardUp = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current) > 0
+    Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().windowInsetsPadding(WindowInsets.ime)) {
+        if (vm.textStyleOpen) TextStyleSheet(vm, info) else if (keyboardUp) TextBar(vm)
+    }
+}
+
+/** A stroke on a text layer: it takes paint once rasterized. */
+@Composable
+fun RasterizePrompt(vm: CanvasViewModel) {
+    Alert(
+        if (vm.askRasterize) Unit else null,
+        title = { "Rasterize this text layer?" },
+        message = { "Its text can't be edited afterwards; you can paint on it." },
+        action = "Rasterize",
+        destructive = false,
+        onCancel = { vm.askRasterize = false },
+        onAction = {
+            vm.askRasterize = false
+            vm.layers.firstOrNull { it.current }?.let(vm::rasterize)
+        },
+    )
+}
+
+/** The text's box in the window, as the smallest upright rectangle around it. */
+private fun windowBox(vm: CanvasViewModel, info: TextInfo): androidx.compose.ui.geometry.Rect {
+    val b = TextRenderer.bounds(info)
+    val corners = listOf(Offset(b.left, b.top), Offset(b.right, b.top), Offset(b.right, b.bottom), Offset(b.left, b.bottom)).map(vm::canvasToWindow)
+    return androidx.compose.ui.geometry.Rect(corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y })
+}
+
+/** The text's box: a thin blue line around where it is drawn, a dot at the middle of each side (dragged, its width). */
+@Composable
+private fun TextBox(vm: CanvasViewModel, info: TextInfo) {
+    val box = remember(info) { TextRenderer.bounds(info) }
+    val corners = listOf(Offset(box.left, box.top), Offset(box.right, box.top), Offset(box.right, box.bottom), Offset(box.left, box.bottom)).map(vm::canvasToWindow)
+    val selection = vm.textField.selection
+    val length = info.text.length
+    val (start, end) = selection.min.coerceIn(0, length) to selection.max.coerceIn(0, length)
+    // the caret at each end, and the chosen letters ringed (the core's, on the canvas)
+    val caretStart = remember(info, start) { TextRenderer.caret(info, start) }
+    val caretEnd = remember(info, end) { TextRenderer.caret(info, end) }
+    val chosen = remember(info, start, end) {
+        if (info.vertical || start == end) null
+        else TextRenderer.chosen(info, start, end, BoxLine.toArgb())?.let { p ->
+            val bitmap = android.graphics.Bitmap.createBitmap(p.width.toInt(), p.height.toInt(), android.graphics.Bitmap.Config.ARGB_8888)
+            bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(p.rgba))
+            Triple(bitmap, p.x.toFloat(), p.y.toFloat())
+        }
+    }
+    Canvas(Modifier.fillMaxSize()) {
+        val path = Path().apply {
+            moveTo(corners[0].x, corners[0].y)
+            corners.drop(1).forEach { lineTo(it.x, it.y) }
+            close()
+        }
+        drawPath(path, BoxOutline, style = Stroke(1.dp.toPx()))
+        for (side in listOf(corners[0] + (corners[3] - corners[0]) / 2f, corners[1] + (corners[2] - corners[1]) / 2f)) {
+            drawCircle(BoxOutline, SideDot.toPx() / 2f, side)
+        }
+        // the caret, or the selected letters ringed in blue with a handle at each end (the text as
+        // the core lays it out; vertical text spreads its letters apart, so it shows none)
+        if (info.vertical) return@Canvas
+        val m = vm.viewMatrix
+        val toWindow = android.graphics.Matrix().apply { setValues(floatArrayOf(m[0], m[2], m[4], m[1], m[3], m[5], 0f, 0f, 1f)) }
+        fun at(caret: FloatArray?, bottom: Boolean): Offset? = caret?.let { vm.canvasToWindow(Offset(it[0], if (bottom) it[2] else it[1])) }
+        if (start == end) {
+            val (top, bottom) = (at(caretStart, false) ?: return@Canvas) to (at(caretStart, true) ?: return@Canvas)
+            drawLine(BoxLine, top, bottom, 2.dp.toPx())
+            return@Canvas
+        }
+        chosen?.let { (bitmap, x, y) ->
+            drawIntoCanvas { c ->
+                val canvas = c.nativeCanvas
+                canvas.save()
+                canvas.concat(toWindow)
+                canvas.drawBitmap(bitmap, x, y, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+                canvas.restore()
+            }
+        }
+        val top = at(caretStart, false) ?: return@Canvas
+        val bottom = at(caretEnd, true) ?: return@Canvas
+        drawLine(BoxLine, top, at(caretStart, true) ?: top, 2.dp.toPx())
+        drawLine(BoxLine, at(caretEnd, false) ?: bottom, bottom, 2.dp.toPx())
+        drawCircle(BoxLine, 6.dp.toPx(), top)
+        drawCircle(BoxLine, 6.dp.toPx(), bottom)
+    }
+}
+
+/** Above the keyboard: Edit style on the right. */
+@Composable
+private fun TextBar(vm: CanvasViewModel) {
+    Row(Modifier.fillMaxWidth().height(44.dp).background(KeyboardBar).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.weight(1f))
+        Text("Edit style", color = SheetInk, fontSize = 15.sp, modifier = Modifier.clickable { vm.openTextStyle() }.padding(8.dp))
+    }
+}
+
+/**
+ * The style sheet in the keyboard's place: a bar (the keyboard back, cut, copy and paste, import
+ * a font, Cancel, Done); then Typeface (fonts and styles, each name in its own face) or Design
+ * (size, spacing, opacity, and the attributes), switched at the bottom.
+ */
+@Composable
+private fun TextStyleSheet(vm: CanvasViewModel, info: TextInfo) {
+    var page by remember { mutableIntStateOf(0) }
+    val sheetWide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp >= WIDE_SHEET
+    val importFont = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) vm.importFonts(uris)
+    }
+    // wide, the cards end 33 above the bottom
+    Column(
+        Modifier.fillMaxWidth().height(if (sheetWide) 521.dp else 561.dp).background(SheetFill)
+            // a touch on the sheet between its controls stays in it: it doesn't end the editing
+            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown().consume() } },
+    ) {
+        Row(Modifier.fillMaxWidth().height(62.dp).background(SheetBar).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            SheetIcon(PcIcons.Keyboard, "Keyboard", Modifier.size(44.dp).clip(CircleShape).background(KeyboardDisc), 40.dp) { vm.textStyleOpen = false }
+            Spacer(Modifier.width(13.dp))
+            Row(Modifier.height(40.dp).clip(RoundedCornerShape(12.dp)).background(SheetCapsule)) {
+                SheetIcon(PcIcons.TextCut, "Cut", Modifier.size(41.dp, 40.dp), 40.dp) { vm.copyText(cut = true) }
+                Spacer(Modifier.width(7.dp))
+                SheetIcon(PcIcons.TextCopy, "Copy", Modifier.size(41.dp, 40.dp), 40.dp) { vm.copyText(cut = false) }
+                Spacer(Modifier.width(7.dp))
+                SheetIcon(PcIcons.TextPaste, "Paste", Modifier.size(41.dp, 40.dp), 40.dp) { vm.pasteText() }
+            }
+            Spacer(Modifier.weight(1f))
+            Row(Modifier.height(43.dp).clip(CircleShape).background(SheetCapsule), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Import", color = CapsuleInk, fontSize = 15.sp,
+                    modifier = Modifier.clickable { importFont.launch(arrayOf("font/ttf", "font/otf", "font/sfnt", "font/collection", "application/font-sfnt", "application/x-font-ttf", "application/x-font-otf", "application/octet-stream")) }.padding(horizontal = 14.dp),
+                )
+                Text("Cancel", color = CapsuleInk, fontSize = 15.sp, modifier = Modifier.clickable { vm.cancelTextStyle() }.padding(horizontal = 14.dp))
+            }
+            Spacer(Modifier.width(13.dp))
+            Box(Modifier.size(44.dp, 45.dp).clip(CircleShape).background(DoneBlue).clickable { vm.endText(true) }, contentAlignment = Alignment.Center) {
+                Icon(PcIcons.DoneTick, contentDescription = "Done", tint = Color.White, modifier = Modifier.requiredSize(40.dp))
+            }
+        }
+        // wide (landscape), the four cards side by side; narrow, Typeface or Design, switched below
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val wide = maxWidth >= WIDE_SHEET
+            Row(Modifier.fillMaxSize().padding(horizontal = 10.dp)) {
+                if (wide) {
+                    FontCard(vm, info, Modifier.weight(263.5f))
+                    Spacer(Modifier.width(2.dp))
+                    StyleCard(vm, info, Modifier.weight(184.5f))
+                    Spacer(Modifier.width(5.dp))
+                    DesignCard(vm, info, Modifier.weight(328f))
+                    Spacer(Modifier.width(5.dp))
+                    AttributesCard(vm, info, Modifier.weight(325f), wide = true)
+                } else if (page == 0) {
+                    FontCard(vm, info, Modifier.weight(424.5f))
+                    Spacer(Modifier.width(2.dp))
+                    StyleCard(vm, info, Modifier.weight(297.5f))
+                } else {
+                    DesignCard(vm, info, Modifier.weight(584f))
+                    Spacer(Modifier.width(5.dp))
+                    AttributesCard(vm, info, Modifier.weight(135f), wide = false)
+                }
+            }
+        }
+        if (sheetWide) Spacer(Modifier.height(33.dp))
+        // Typeface | Design, when the cards don't all fit
+        if (!sheetWide) Box(Modifier.fillMaxWidth().height(81.dp).background(SheetFill)) {
+            Row(
+                Modifier.align(Alignment.TopCenter).padding(top = 11.dp).height(34.dp).clip(CircleShape).background(SegmentTrack).padding(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                for ((i, label) in listOf("Typeface", "Design").withIndex()) {
+                    Box(
+                        Modifier.width(156.dp).height(30.dp).clip(CircleShape).background(if (i == page) Pc.Accent else Color.Transparent).clickable { page = i },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(label, color = if (i == page) Color.White else CapsuleInk, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Below this width the sheet shows its cards in two pages. */
+private val WIDE_SHEET = 900.dp
+
+@Composable
+private fun FontCard(vm: CanvasViewModel, info: TextInfo, modifier: Modifier) {
+    // Font and Style are one card split by a line: square where they meet
+    Card("Font", modifier, RoundedCornerShape(topStart = CardCorner, bottomStart = CardCorner)) {
+        LazyColumn(Modifier.padding(start = 10.dp, end = 17.dp), contentPadding = PaddingValues(top = 6.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            items(TextRenderer.families) { f ->
+                Cell(f.name, f.family == info.font, TextRenderer.typeface(f.family, "Regular")) { vm.changeText { it.copy(font = f.family) } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StyleCard(vm: CanvasViewModel, info: TextInfo, modifier: Modifier) {
+    Card("Style", modifier, RoundedCornerShape(topEnd = CardCorner, bottomEnd = CardCorner)) {
+        LazyColumn(Modifier.padding(start = 10.dp, end = 17.dp), contentPadding = PaddingValues(top = 6.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            items(TextRenderer.styles) { st ->
+                Cell(st.name, st.name == info.style, TextRenderer.typeface(info.font, st.name)) { vm.changeText { it.copy(style = st.name) } }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DesignCard(vm: CanvasViewModel, info: TextInfo, modifier: Modifier) {
+    val dpi = vm.canvasDpi()
+    val pt = { px: Float -> px * 72f / dpi }
+    Card("Design", modifier) {
+        Column(Modifier.padding(horizontal = 4.dp)) {
+            DesignRow("Size", sizeToSlider(info.size), "%.1fpt".format(pt(info.size)), fromMiddle = false) { v -> vm.changeText { it.copy(size = sliderToSize(v)) } }
+            DesignRow("Kerning", info.kerning / 2f + 0.5f, "%.1f%%".format(info.kerning * 100f)) { v -> vm.changeText { it.copy(kerning = v * 2f - 1f) } }
+            DesignRow("Tracking", info.tracking / 2f + 0.5f, "%.1f%%".format(info.tracking * 100f)) { v -> vm.changeText { it.copy(tracking = v * 2f - 1f) } }
+            DesignRow("Leading", info.leading / 2f + 0.5f, "${pt(info.leading * info.size).roundToInt()}pt") { v -> vm.changeText { it.copy(leading = v * 2f - 1f) } }
+            DesignRow("Baseline", info.baseline / 2f + 0.5f, "${pt(info.baseline * info.size).roundToInt()}pt") { v -> vm.changeText { it.copy(baseline = v * 2f - 1f) } }
+            DesignRow("Opacity", info.opacity, "%.1f%%".format(info.opacity * 100f), fromMiddle = false) { v -> vm.changeText { it.copy(opacity = v) } }
+        }
+    }
+}
+
+/**
+ * Alignment, underline, outline, vertical and all caps: wide, the four alignments in a row and the
+ * other three in a row under them; narrow, the alignments two by two and the others one a row.
+ */
+@Composable
+private fun AttributesCard(vm: CanvasViewModel, info: TextInfo, modifier: Modifier, wide: Boolean) {
+    val aligns = listOf(
+        TextAlignment.LEFT to PcIcons.AlignLeft, TextAlignment.CENTER to PcIcons.AlignCenter,
+        TextAlignment.RIGHT to PcIcons.AlignRight, TextAlignment.JUSTIFY to PcIcons.AlignJustify,
+    )
+    // the buttons 36 tall, but the alignments 35 when two by two
+    val gridTall = if (wide) 36.dp else 35.dp
+    Card("Attributes", modifier) {
+        Column(
+            Modifier.padding(start = if (wide) 10.dp else 6.5.dp, end = if (wide) 10.dp else 6.5.dp, top = if (wide) 6.dp else 7.dp),
+            verticalArrangement = Arrangement.spacedBy(if (wide) 20.dp else 4.dp),
+        ) {
+            for (row in aligns.chunked(if (wide) 4 else 2)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for ((a, icon) in row) Attribute(icon, a.name, info.align == a, Modifier.weight(1f), 32.dp, gridTall) { vm.changeText { it.copy(align = a) } }
+                }
+            }
+            if (!wide) Spacer(Modifier.height(13.dp))
+            val looks: @Composable (Modifier, Modifier, Modifier) -> Unit = { u, o, v ->
+                Attribute(PcIcons.TextUnderline, "Underline", info.underline, u, 38.dp, 36.dp) { vm.changeText { it.copy(underline = !it.underline) } }
+                Attribute(PcIcons.TextOutline, "Outline", info.outline, o, 38.dp, 36.dp) { vm.changeText { it.copy(outline = !it.outline) } }
+                Attribute(PcIcons.TextVertical, "Vertical", info.vertical, v, 41.dp, 36.dp) { vm.changeText { it.copy(vertical = !it.vertical) } }
+            }
+            if (wide) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { looks(Modifier.weight(94f), Modifier.weight(94f), Modifier.weight(111f)) }
+            } else {
+                looks(Modifier.fillMaxWidth(), Modifier.fillMaxWidth(), Modifier.fillMaxWidth())
+                Spacer(Modifier.height(16.dp))
+            }
+            Row(Modifier.padding(top = if (wide) 4.dp else 0.dp).clickable { vm.changeText { it.copy(allCaps = !it.allCaps) } }, verticalAlignment = Alignment.CenterVertically) {
+                // two serif capitals all but touching
+                Text("TT", color = SheetInk, fontSize = 26.5.sp, fontFamily = FontFamily.Serif, letterSpacing = (-0.5).sp, modifier = Modifier.padding(start = 10.dp).width(50.5.dp))
+                if (wide) Spacer(Modifier.weight(1f))
+                Switch(info.allCaps, enabled = true)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetIcon(icon: ImageVector, label: String, modifier: Modifier, iconSize: Dp, onClick: () -> Unit) {
+    Box(modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        // drawn in a padded frame, shown [iconSize] across
+        Icon(icon, contentDescription = label, tint = CapsuleInk, modifier = Modifier.requiredSize(iconSize))
+    }
+}
+
+@Composable
+private fun Card(title: String, modifier: Modifier, shape: RoundedCornerShape = RoundedCornerShape(CardCorner), content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier.fillMaxHeight().clip(shape).background(CardFill)) {
+        Text(title, color = SheetInk, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, top = 16.5.dp, bottom = 9.dp))
+        content()
+    }
+}
+
+/** A font or style: its name drawn in that face, the chosen one a blue cell. */
+@Composable
+private fun Cell(name: String, selected: Boolean, face: android.graphics.Typeface, onClick: () -> Unit) {
+    val family = remember(face) { FontFamily(face) }
+    Box(
+        Modifier.fillMaxWidth().height(33.dp).background(if (selected) Pc.Accent else Color.Transparent).clickable(onClick = onClick).padding(start = 12.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(name, color = if (selected) Color.White else SheetInk, fontSize = 15.sp, fontFamily = family, maxLines = 1)
+    }
+}
+
+/** An attribute's button: its icon, blue when on. */
+@Composable
+private fun Attribute(icon: ImageVector, label: String, on: Boolean, modifier: Modifier, iconSize: Dp, tall: Dp, onClick: () -> Unit) {
+    Box(
+        modifier.height(tall).clip(RoundedCornerShape(8.dp)).background(if (on) Pc.Accent else ButtonFill).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = if (on) Color.White else SheetInk, modifier = Modifier.requiredSize(iconSize))
+    }
+}
+
+/** A design setting: its name, its value in a pill, and a thin bar under them (filled from the left, or a tick in the middle). */
+@Composable
+private fun DesignRow(label: String, value: Float, shown: String, fromMiddle: Boolean = true, onChange: (Float) -> Unit) {
+    val change by rememberUpdatedState(onChange)
+    Column(Modifier.fillMaxWidth().height(58.5.dp).padding(horizontal = 16.dp)) {
+        Row(Modifier.fillMaxWidth().padding(top = 1.5.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = SheetInk, fontSize = 15.sp, modifier = Modifier.weight(1f))
+            Box(Modifier.height(24.dp).clip(CircleShape).background(ButtonFill).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+                Text(shown, color = SheetInk, fontSize = 13.sp)
+            }
+        }
+        Box(
+            Modifier.fillMaxWidth().height(20.dp).pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    change((down.position.x / size.width).coerceIn(0f, 1f))
+                    while (true) {
+                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                        if (!c.pressed) break
+                        change((c.position.x / size.width).coerceIn(0f, 1f))
+                        c.consume()
+                    }
+                }
+            }.drawBehind {
+                val y = size.height / 2f
+                val h = 2.dp.toPx()
+                val v = value.coerceIn(0f, 1f)
+                drawRoundRect(DesignTrack, Offset(0f, y - h / 2f), Size(size.width, h), CornerRadius(h / 2f))
+                if (fromMiddle) {
+                    drawLine(DesignTick, Offset(size.width / 2f, y - 5.dp.toPx()), Offset(size.width / 2f, y + 5.dp.toPx()), 1.dp.toPx())
+                } else {
+                    drawRoundRect(Pc.Accent, Offset(0f, y - h / 2f), Size(size.width * v, h), CornerRadius(h / 2f))
+                }
+                val knob = Size(16.dp.toPx(), 10.dp.toPx())
+                val x = (size.width * v).coerceIn(knob.width / 2f, size.width - knob.width / 2f)
+                drawRoundRect(Color.White, Offset(x - knob.width / 2f, y - knob.height / 2f), knob, CornerRadius(knob.height / 2f))
+            },
+        )
+    }
+}
+
+/** The size slider runs 1 to 2000 pixels, finer at the small end. */
+private fun sliderToSize(v: Float) = 1f + 1999f * v * v
+
+private fun sizeToSlider(size: Float) = kotlin.math.sqrt(((size - 1f) / 1999f).coerceIn(0f, 1f))
