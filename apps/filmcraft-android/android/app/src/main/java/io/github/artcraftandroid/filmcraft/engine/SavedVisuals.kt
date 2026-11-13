@@ -66,7 +66,13 @@ internal class SavedVisuals(private val context: Context) {
     }
 
     fun duplicate(p: ProjectEntry) {
-        if (p.kind == "drawing") { store.duplicate(artwork(p)); return }
+        if (p.kind == "drawing") {
+            val before = artworks().map { it.dir }.toSet()
+            store.duplicate(artwork(p))
+            // A copy owns its own photo; never overwrite the original artwork's export.
+            artworks().filterNot { it.dir in before }.forEach { File(it.dir, ".filmcraft-photo").delete() }
+            return
+        }
         check(Build.VERSION.SDK_INT >= 29)
         val resolver = context.contentResolver
         val source = Uri.parse(p.sourceUri)
