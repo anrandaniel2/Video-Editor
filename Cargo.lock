@@ -872,9 +872,12 @@ dependencies = [
  "filmcraft-time",
  "filmcraft-tts",
  "log",
+ "png",
+ "roxmltree",
  "serde_json",
  "thiserror 2.0.21",
  "uniffi",
+ "zip",
  "zune-core",
  "zune-jpegxl",
 ]
@@ -2515,6 +2518,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3863,6 +3872,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c42e33efc22a0650c311c2ef19115ce232583abbe80850bc8b66509ebef02de0"
 dependencies = [
  "crc32fast",
+ "flate2",
  "indexmap",
  "memchr",
  "typed-path",

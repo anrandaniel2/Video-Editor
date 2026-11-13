@@ -252,6 +252,19 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
             }
         }
     }
+    var documentBusy by remember { mutableStateOf(false) }
+    var documentMessage by remember { mutableStateOf<String?>(null) }
+    var pendingDocument by remember { mutableStateOf<android.net.Uri?>(null) }
+    val saveDocument = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        if (uri != null) importScope.launch {
+            documentBusy = true
+            try { val bytes = view.encodeDocument(); writeDrawingResource(context, uri, bytes); documentMessage = "Layered drawing saved." }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { documentMessage = e.message ?: "Could not save the drawing." }
+            finally { documentBusy = false }
+        }
+    }
+    val openDocument = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> if (uri != null) pendingDocument = uri }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) importScope.launch {
             importing = true
@@ -274,18 +287,45 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
     var brush by remember { mutableStateOf("Pen") }
     var brushQuery by remember { mutableStateOf("") }
     var brushFamily by remember { mutableStateOf("All") }
+    var pickerRadius by remember { mutableFloatStateOf(0f) }
     var penPressure by remember { mutableStateOf(true) }
     var penCursor by remember { mutableStateOf(true) }
     var hardwareMsaa by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(Unit) { hardwareMsaa = withContext(Dispatchers.IO) { io.github.artcraftandroid.filmcraft.core.drawingHardwareMsaaAvailable() } }
     var stabilizer by remember { mutableFloatStateOf(0f) }
     var pressureResponse by remember { mutableFloatStateOf(1f) }
+    var wandContiguous by remember { mutableStateOf(true) }
+    var canvasMirrored by remember { mutableStateOf(false) }
+    var canvasChecker by remember { mutableStateOf(false) }
+    var canvasGrid by remember { mutableStateOf(false) }
+    var canvasGridSpacing by remember { mutableFloatStateOf(64f) }
+    var layerRename by remember { mutableStateOf("") }
+    var pendingLayerOpacity by remember { mutableFloatStateOf(1f) }
+    var confirmFlatten by remember { mutableStateOf(false) }
+    var mergeMode by remember { mutableIntStateOf(0) }
+    var selectionRadius by remember { mutableFloatStateOf(8f) }
+    var fillContiguous by remember { mutableStateOf(true) }
+    var fillMerged by remember { mutableStateOf(false) }
+    var fillGrow by remember { mutableFloatStateOf(0f) }
+    var gradientKind by remember { mutableIntStateOf(0) }
+    var gradientRepeat by remember { mutableIntStateOf(0) }
+    var gradientReverse by remember { mutableStateOf(false) }
+    var gradientTransparent by remember { mutableStateOf(false) }
+    var gradientEnd by remember { mutableIntStateOf(android.graphics.Color.WHITE) }
+    var gradientAngle by remember { mutableFloatStateOf(0f) }
+    var gradientExtent by remember { mutableFloatStateOf(.5f) }
+    var gradientX by remember { mutableFloatStateOf(.5f) }
+    var gradientY by remember { mutableFloatStateOf(.5f) }
     var filterOperation by remember { mutableStateOf("grayscale") }
     var filterAmount by remember { mutableFloatStateOf(.5f) }
     var rasterError by remember { mutableStateOf<String?>(null) }
     var symmetry by remember { mutableIntStateOf(0) }
     var shape by remember { mutableStateOf("Circle") }
     var revision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(view.layer, revision) {
+        layerRename = view.layerName(view.layer)
+        pendingLayerOpacity = view.layerOpacity(view.layer)
+    }
     val entrance = remember { Animatable(0f) }
     LaunchedEffect(Unit) { entrance.animateTo(1f, tween(420, easing = FastOutSlowInEasing)) }
     Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -305,6 +345,8 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                             DrawIcon(icon, if (name == "Brush") "Draw" else name, view.transformMode == null) { tool = name; view.tool = name; if (name == "Brush") menu = "Brushes"; if (name == "Shapes") menu = "Shapes"; if (name == "Fill") menu = "Fill" }
                         }
                     }
+                    DrawIcon(LucideIcons.FlipVertical2.glyph(), "Canvas and layer transforms", !view.operationBusy && view.transformMode == null) { rasterError = null; menu = "Canvas" }
+                    DrawIcon(LucideIcons.DrawLasso.glyph(), "Selection operations", !view.operationBusy && view.transformMode == null) { rasterError = null; menu = "Selection" }
                     DrawIcon(LucideIcons.SwatchBook.glyph(), "Layer filters", !view.operationBusy && view.transformMode == null) { rasterError = null; menu = "Filters" }
                     DrawIcon(LucideIcons.FlipHorizontal2.glyph(), "Painting symmetry", !view.operationBusy && view.transformMode == null) { menu = "Symmetry" }
                     DrawIcon(LucideIcons.Maximize.glyph(), "Transform current layer", view.transformMode == null) { selectedOnly = false; menu = "Transform" }
@@ -320,7 +362,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                     }
                 }
             }
-            if ((tool == "Lasso" || tool == "Magic wand") && view.transformMode == null) {
+            if (tool in listOf("Lasso", "Magic wand", "Rectangle selection", "Ellipse selection", "Polygon selection") && view.transformMode == null) {
                 DrawingGlass(view, Modifier.align(Alignment.TopCenter).padding(top = 54.dp, start = 72.dp, end = 8.dp).widthIn(max = 420.dp)) {
                     Row {
                         DrawIcon(LucideIcons.Copy.glyph(), "Copy selection", view.selection != null) { view.copySelection() }
@@ -329,12 +371,19 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                         DrawIcon(LucideIcons.Maximize.glyph(), "Transform selection", view.selection != null) { selectedOnly = true; menu = "Transform" }
                         DrawIcon(LucideIcons.CircleX.glyph(), "Clear selection", view.selection != null) { view.clearSelection(); revision++ }
                     }
-                    if (tool == "Lasso") Row {
-                        listOf("Add", "Subtract", "Replace").forEach { mode ->
+                    if (tool == "Polygon selection") Row {
+                        TextButton(enabled = view.polygonVertexCount >= 3, onClick = { view.commitPolygonSelection(); revision++ }) { Text("Apply polygon") }
+                        TextButton(enabled = view.polygonVertexCount > 0, onClick = { view.removePolygonVertex(); revision++ }) { Text("Undo vertex") }
+                        TextButton(onClick = { view.cancelPolygonSelection(); revision++ }) { Text("Cancel polygon") }
+                    }
+                    Row(Modifier.horizontalScroll(rememberScrollState())) {
+                        listOf("Add", "Subtract", "Intersect", "Replace").forEach { mode ->
                             TextButton(onClick = { selectionMode = mode; view.selectionMode = mode }) { Text(if (selectionMode == mode) "• $mode" else mode) }
                         }
-                    } else {
-                        Text("Tap touching same-color areas to add them. Tolerance ${tolerance.toInt()}", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    }
+                    if (tool == "Magic wand") {
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(wandContiguous, { wandContiguous = it; view.wandContiguous = it }); Text("Contiguous area only", color = Color.White) }
+                        Text("Tap to select matching colours. Tolerance ${tolerance.toInt()}", color = Color.White, style = MaterialTheme.typography.labelSmall)
                         Slider(tolerance, { tolerance = it; view.wandTolerance = it.toInt() }, valueRange = 0f..96f, modifier = Modifier.height(30.dp))
                     }
                     Text(if (view.selection == null) "Draw a selection to enable copy, move and transform." else "Selection ready", color = Color.White, style = MaterialTheme.typography.labelSmall)
@@ -348,15 +397,105 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f).padding(start = 8.dp, top = 8.dp)) {
                         Text(if (menu == "Brushes") "Draw" else menu!!, color = Color.White, style = MaterialTheme.typography.titleMedium)
-                        if (menu == "Brushes") Text(brush, color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.labelSmall)
+                        if (menu == "Brushes") Text(if (view.nativeBrushEnabled) "Native GPU dab engine" else brush, color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.labelSmall)
                     }
                     FcIconButton(LucideIcons.X.glyph(), "Close drawing menu", { if (view.transformMode != null) view.finishTransform(false); menu = null })
                 }
                 if (view.operationBusy) { Text("Processing in Rust…", color = Color.White); LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.White) }
                 rasterError?.let { Text(it, color = Color.White) }
                 when (menu) {
+                    "Resources" -> DrawingResourcePanel(color, { color = it; view.inkColor = it },
+                        capturePreset = { io.github.artcraftandroid.filmcraft.core.DrawingBrushPreset("Preset", brush, brushWidth, opacity, stabilizer, pressureResponse, penPressure, symmetry.toUInt()) },
+                        applyPreset = { preset ->
+                            check(!view.operationBusy && view.transformMode == null) { "Finish the active operation first." }
+                            require(preset.brush == "Pen" || DrawingBrushes.all.any { it.name == preset.brush }) { "This preset uses an unavailable brush." }
+                            view.nativeBrushEnabled = false; brush = preset.brush; view.brush = brush; tool = "Brush"; view.tool = tool
+                            brushWidth = preset.size; view.brushSize = brushWidth; opacity = preset.opacity; view.opacity = opacity
+                            stabilizer = preset.stabilization; view.stabilization = stabilizer
+                            pressureResponse = preset.pressureCurve; view.pressureCurve = pressureResponse
+                            penPressure = preset.usePressure; view.usePressure = penPressure
+                            symmetry = preset.symmetry.toInt(); view.symmetryMode = preset.symmetry; revision++
+                        })
+                    "OpenRaster" -> DrawingOpenRasterPanel(view)
+                    "Animation" -> DrawingAnimationPanel(view)
+                    "Native GPU brush" -> DrawingNativeBrushControls(view,
+                        activate = { enabled -> view.nativeBrushEnabled = enabled; tool = "Brush"; view.tool = tool; view.invalidate(); revision++ },
+                        change = { settings -> view.nativeBrushSettings = settings; symmetry = settings.symmetry.toInt(); view.symmetryMode = settings.symmetry; view.invalidate(); revision++ })
+                    "Assistants" -> DrawingAssistantPanel(view) { tool = "Assistant origin"; view.tool = tool; menu = null }
+                    "Retouch" -> DrawingRetouchPanel(view) { name -> tool = name; view.tool = name; menu = null }
+                    "Layer mask" -> DrawingMaskPanel(view) { reveal -> tool = if (reveal) "Reveal mask" else "Hide mask"; view.tool = tool; menu = null }
+                    "Adjustments" -> DrawingAdjustmentPanel(view)
+                    "Document geometry" -> DrawingDocumentTools(view)
+                    "Advanced filters" -> DrawingAdvancedFilters(view)
+                    "Document" -> Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState())) {
+                        Text("FilmCraft layered drawings (.fcdraw) preserve paint layers, names, visibility, opacity, blend modes, clipping, locks, transparency masks, active layer and canvas size. They are not Krita .kra files. Native GPU paint tiles retain float precision in version-four files. Undo history, selections and reference video frames are not saved. Compatibility pixel tools and animation frames currently use 8-bit pixels.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        OutlinedTextField(exportName, { exportName = it.take(80) }, label = { Text("Document name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Text("${view.canvasW} × ${view.canvasH} · ${view.layers} layers", color = Color.White)
+                        TextButton(enabled = !view.operationBusy && !documentBusy, onClick = { menu = "OpenRaster" }) { Text("OpenRaster layered interchange…") }
+                        TextButton(enabled = !view.operationBusy && !documentBusy, onClick = { menu = "Animation" }) { Text("Flipbook animation and onion skins…") }
+                        TextButton(enabled = !view.operationBusy && !documentBusy, onClick = { menu = "Document geometry" }) { Text("Document size and cropping…") }
+                        documentMessage?.let { Text(it, color = Color.White) }
+                        if (documentBusy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.White)
+                        TextButton(enabled = !documentBusy && !view.operationBusy && view.transformMode == null && exportName.isNotBlank(), onClick = {
+                            view.commitShapeDraft(); saveDocument.launch(exportName.trim().map { if (it in "\\/:*?\"<>|") '_' else it }.joinToString("").removeSuffix(".fcdraw") + ".fcdraw")
+                        }) { Text("Save layered drawing…") }
+                        TextButton(enabled = !documentBusy && !view.operationBusy && view.transformMode == null, onClick = { openDocument.launch("*/*") }) { Text("Open layered drawing…") }
+                        if (pendingDocument != null) {
+                            Text("Opening replaces this canvas and clears its undo history. Save your current drawing first if needed.", color = Color.White)
+                            Row {
+                                TextButton(onClick = { pendingDocument = null }) { Text("Cancel") }
+                                TextButton(enabled = !documentBusy && !view.operationBusy, onClick = { val uri = pendingDocument ?: return@TextButton; pendingDocument = null; importScope.launch {
+                                    documentBusy = true
+                                    try {
+                                        val bytes = readDrawingResource(context, uri, 96 * 1024 * 1024 + 8192)
+                                        view.openDocument(bytes); documentMessage = "Layered drawing opened."; revision++
+                                    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                    catch (e: Exception) { documentMessage = e.message ?: "Could not open the drawing." }
+                                    finally { documentBusy = false }
+                                } }) { Text("Replace canvas") }
+                            }
+                        }
+                    }
+                    "Picker" -> Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                        Text("Sample colour by touching or dragging on the canvas. Larger radii average a square patch. Merged sampling includes the reference frame and visible layer opacities.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Text("Sample radius ${pickerRadius.toInt()} px", color = Color.White)
+                        Slider(pickerRadius, { pickerRadius = it; view.pickerRadius = it.toInt() }, valueRange = 0f..32f)
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(currentOnly, { currentOnly = it; view.currentLayerOnly = it }); Text("Current layer only", color = Color.White) }
+                        TextButton(enabled = !view.operationBusy, onClick = { tool = "Color picker"; view.tool = tool; menu = null }) { Text("Pick from canvas") }
+                        TextButton(onClick = { tool = "Brush"; view.tool = tool; menu = "Brushes" }) { Text("Return to brush") }
+                    }
+                    "Selection" -> Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState())) {
+                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            listOf("Lasso", "Rectangle selection", "Ellipse selection", "Polygon selection", "Magic wand").forEach { name ->
+                                TextButton(enabled = !view.operationBusy, onClick = { tool = name; view.tool = name; menu = null }) { Text(name) }
+                            }
+                        }
+                        Text("Selection operations use a square radius in canvas pixels. An empty result remains an empty selection, not the whole canvas.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Row {
+                            TextButton(enabled = !view.operationBusy, onClick = { view.selectAll(); revision++ }) { Text("Select all") }
+                            TextButton(enabled = !view.operationBusy, onClick = { view.selectLayerOpacity(); revision++ }) { Text("From layer opacity") }
+                        }
+                        Text("Radius ${selectionRadius.toInt()} px", color = Color.White)
+                        Slider(selectionRadius, { selectionRadius = it }, valueRange = 1f..128f)
+                        listOf("invert" to "Invert", "grow" to "Grow", "shrink" to "Shrink", "border" to "Border").forEach { (id, name) ->
+                            TextButton(enabled = !view.operationBusy && (view.selection != null || id == "invert"), onClick = { importScope.launch {
+                                rasterError = null
+                                try { view.modifySelection(id, selectionRadius.toUInt()); revision++ }
+                                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                catch (e: Exception) { rasterError = e.message ?: "Selection operation failed" }
+                            } }) { Text(name) }
+                        }
+                        TextButton(enabled = !view.operationBusy && view.selection != null, onClick = { view.cutSelection(); revision++ }) { Text("Cut selected pixels") }
+                        TextButton(enabled = !view.operationBusy && view.selection != null, onClick = { view.eraseSelection(); revision++ }) { Text("Erase selected pixels") }
+                        TextButton(enabled = !view.operationBusy && view.selection != null, onClick = { view.clearSelection(); revision++ }) { Text("Deselect") }
+                    }
                     "Fill" -> {
-                        Text("Tap a connected area to fill it with the selected colour. The current selection limits the result.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Text("Tap the canvas to fill a matching region. Paint is composited into the current layer and restricted by the selection. Opacity uses the bottom slider.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(fillContiguous, { fillContiguous = it; view.fillContiguous = it }); Text("Contiguous region only", color = Color.White) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(fillMerged, { fillMerged = it; view.fillSampleMerged = it }); Text("Match visible merged image", color = Color.White) }
+                        Text("Grow matched region ${fillGrow.toInt()} px", color = Color.White)
+                        Slider(fillGrow, { fillGrow = it; view.fillGrow = it.toUInt() }, valueRange = 0f..32f)
+                        Text("Growth uses a square radius; it is not automatic gap closing. Merged matching includes the reference frame.", color = Color.White, style = MaterialTheme.typography.bodySmall)
                         Text("Tolerance ${tolerance.toInt()}", color = Color.White)
                         Slider(tolerance, { tolerance = it; view.wandTolerance = it.toInt() }, valueRange = 0f..96f)
                     }
@@ -365,13 +504,15 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                             SelectChip(name, symmetry == index, { symmetry = index; view.symmetryMode = index.toUInt(); view.invalidate() }, tag = "drawing_symmetry_$index")
                         }
                     }
+                    "Gradient" -> DrawingMultiGradientPanel(view, color)
+                    "Pattern fill" -> DrawingPatternPanel(view, color)
                     "Filters" -> Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                         Text("Applies to the active layer, or the selected part of it. Undo restores the previous pixels.", color = Color.White, style = MaterialTheme.typography.bodySmall)
-                        val filters = listOf("grayscale" to "Grayscale", "invert" to "Invert", "sepia" to "Sepia", "threshold" to "Threshold", "brightness" to "Brightness", "contrast" to "Contrast", "saturation" to "Saturation", "posterize" to "Posterize", "blur" to "Blur", "sharpen" to "Sharpen", "edges" to "Edge detection", "emboss" to "Emboss", "alpha-luma" to "Luminance to alpha", "opaque" to "Make opaque")
+                        val filters = listOf("grayscale" to "Grayscale", "invert" to "Invert", "sepia" to "Sepia", "threshold" to "Threshold", "brightness" to "Brightness", "contrast" to "Contrast", "saturation" to "Saturation", "posterize" to "Posterize", "blur" to "Blur", "sharpen" to "Sharpen", "edges" to "Edge detection", "emboss" to "Emboss", "alpha-luma" to "Luminance to alpha", "opaque" to "Make opaque", "pixelize" to "Pixelize", "gamma" to "Gamma", "grow-alpha" to "Grow alpha", "shrink-alpha" to "Shrink alpha", "auto-levels" to "Auto levels", "equalize" to "Equalize", "solarize" to "Solarize", "temperature" to "Temperature", "alpha-threshold" to "Alpha threshold", "red-channel" to "Red channel", "green-channel" to "Green channel", "blue-channel" to "Blue channel", "alpha-channel" to "Alpha channel")
                         Row(Modifier.horizontalScroll(rememberScrollState())) { filters.forEach { (id, name) ->
-                            SelectChip(name, filterOperation == id, { filterOperation = id; filterAmount = if (id == "contrast") .25f else .5f }, tag = "drawing_filter_$id")
+                            SelectChip(name, filterOperation == id, { filterOperation = id; filterAmount = when (id) { "contrast" -> .25f; "gamma" -> .9f / 2.9f; else -> .5f } }, tag = "drawing_filter_$id")
                         } }
-                        if (filterOperation !in listOf("grayscale", "invert", "sepia", "alpha-luma", "opaque")) {
+                        if (filterOperation !in listOf("grayscale", "invert", "sepia", "alpha-luma", "opaque", "auto-levels", "equalize", "red-channel", "green-channel", "blue-channel", "alpha-channel")) {
                             Text("Amount", color = Color.White); Slider(filterAmount, { filterAmount = it }, enabled = !view.operationBusy)
                         }
                         TextButton(onClick = { importScope.launch {
@@ -380,6 +521,12 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                             catch (e: kotlinx.coroutines.CancellationException) { throw e }
                             catch (e: Exception) { rasterError = e.message ?: "Filter failed" }
                         } }, enabled = !view.operationBusy) { Text("Apply filter") }
+                        TextButton(onClick = { menu = "Assistants" }, enabled = !view.operationBusy) { Text("Painting assistants…") }
+                        TextButton(onClick = { menu = "Retouch" }, enabled = !view.operationBusy) { Text("Clone stamp and retouch brushes…") }
+                        TextButton(onClick = { menu = "Advanced filters" }, enabled = !view.operationBusy) { Text("Blur, sharpening, edges and noise…") }
+                        TextButton(onClick = { menu = "Adjustments" }, enabled = !view.operationBusy) { Text("Colour adjustments and curves…") }
+                        TextButton(onClick = { menu = "Pattern fill" }, enabled = !view.operationBusy) { Text("Pattern fills…") }
+                        TextButton(onClick = { menu = "Gradient" }, enabled = !view.operationBusy) { Text("Paint gradient…") }
                         TextButton(onClick = { menu = "Colour blend" }, enabled = !view.operationBusy) { Text("Blend selected colour…") }
                     }
                     "Colour blend" -> Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
@@ -393,6 +540,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                         } }) { Text(name) } }
                     }
                     "Export" -> Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                        TextButton(onClick = { menu = "Document" }) { Text("Save / open layered drawing…") }
                         OutlinedTextField(exportName, { exportName = it.take(80) }, label = { Text("File name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         DrawingFormat.entries.forEach { format ->
                             TextButton(onClick = { exportFormat = format }) { Text("${if (exportFormat == format) "●" else "○"} Export to ${format.label}") }
@@ -407,7 +555,22 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                         }, enabled = exportName.isNotBlank() && !exporting && pendingExport == null) { Text(if (exporting) "Exporting…" else "Save file") }
                         TextButton(onClick = { view.commitShapeDraft(); ed.importDrawing(view.bitmap()) }, enabled = !exporting && ed.busy == null) { Text("Add to timeline") }
                     }
-                    "Colors" -> WheelPicker(color) { color = it; view.inkColor = it }
+                    "Colors" -> Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                        WheelPicker(color) { color = it; view.inkColor = it }
+                        Text(java.lang.String.format(java.util.Locale.ROOT, "#%06X", color and 0xFFFFFF), color = Color.White)
+                        listOf("Red", "Green", "Blue").forEachIndexed { index, name ->
+                            val components = intArrayOf(android.graphics.Color.red(color), android.graphics.Color.green(color), android.graphics.Color.blue(color))
+                            Text("$name ${components[index]}", color = Color.White)
+                            Slider(components[index].toFloat(), { value ->
+                                components[index] = value.toInt(); color = android.graphics.Color.rgb(components[0], components[1], components[2]); view.inkColor = color
+                            }, valueRange = 0f..255f)
+                        }
+                        Row {
+                            TextButton(onClick = { val previous = color; color = gradientEnd; gradientEnd = previous; view.inkColor = color }) { Text("Swap start / end colours") }
+                            TextButton(onClick = { menu = "Picker" }) { Text("Colour picker…") }
+                        }
+                        TextButton(onClick = { menu = "Resources" }) { Text("Saved colours and brush presets…") }
+                    }
                     "Shapes" -> {
                         Text("Drag circles, triangles and squares from their center. Rectangles: corner to corner.", color = Color.White, style = MaterialTheme.typography.bodySmall)
                         Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
@@ -415,6 +578,10 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                         }
                     }
                     "Brushes" -> Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                        TextButton(onClick = { menu = "Native GPU brush" }) { Text("Native GPU brush engine…") }
+                        TextButton(onClick = { menu = "Resources" }) { Text("Save / load brush presets…") }
+                        TextButton(onClick = { menu = "Assistants" }, enabled = !view.operationBusy) { Text("Painting assistants…") }
+                        TextButton(onClick = { menu = "Retouch" }, enabled = !view.operationBusy) { Text("Clone stamp and retouch brushes…") }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(penPressure, { penPressure = it; view.usePressure = it })
                             Text("Pen pressure · size & opacity", color = Color.White, style = MaterialTheme.typography.labelSmall)
@@ -423,7 +590,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                             Checkbox(penCursor, { penCursor = it; view.showPenCursor = it; view.invalidate() })
                             Text("Pen hover cursor", color = Color.White, style = MaterialTheme.typography.labelSmall)
                         }
-                        Text(when (hardwareMsaa) { true -> "Pen & eraser · GPU 4× MSAA"; false -> "GPU unavailable · software coverage"; null -> "Starting GPU canvas…" }, color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.labelSmall)
+                        Text(when (hardwareMsaa) { true -> "Pen, eraser & mask · GPU 4× MSAA"; false -> "GPU unavailable · software coverage"; null -> "Starting GPU canvas…" }, color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.labelSmall)
                         Text("Stroke control", color = Color.White, style = MaterialTheme.typography.labelLarge)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Stabilizer", color = Color.White, modifier = Modifier.width(100.dp), style = MaterialTheme.typography.labelSmall)
@@ -440,7 +607,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                         val shown = DrawingBrushes.all.filter { (brushFamily == "All" || it.family == brushFamily) && it.name.contains(brushQuery, true) }
                         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
                             items(shown, key = { it.name }) { preset ->
-                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (brush == preset.name) Color.White.copy(alpha = .12f) else Color.Transparent).clickable { brush = preset.name; view.brush = preset.name; tool = "Brush"; view.tool = tool; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(if (brush == preset.name) Color.White.copy(alpha = .12f) else Color.Transparent).clickable { view.nativeBrushEnabled = false; brush = preset.name; view.brush = preset.name; tool = "Brush"; view.tool = tool; menu = null }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(if (brush == preset.name) "• ${preset.name}" else preset.name, color = Color.White, modifier = Modifier.width(130.dp), style = MaterialTheme.typography.labelSmall)
                                     ComposeCanvas(Modifier.weight(1f).height(36.dp)) {
                                         drawIntoCanvas { canvas ->
@@ -462,8 +629,7 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                         } else {
                             Text("${view.transformMode} • drag ${if (view.transformMode == "Normal") "to move" else "control points"}", color = Color.White)
                             if (view.transformMode == "Normal") {
-                                Text("Scale ${(transformScale * 100).toInt()}%", color = Color.White)
-                                Slider(transformScale, { transformScale = it; view.setScale(it) }, valueRange = .1f..4f)
+                                DrawingAffineControls(view)
                             }
                             if (view.transformMode == "Mesh") {
                                 Text("Mesh divisions ${meshPoints.toInt()}", color = Color.White)
@@ -471,17 +637,94 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
                             }
                             Row {
                                 TextButton(onClick = { view.finishTransform(false); menu = null }) { Text("Cancel transform") }
-                                TextButton(onClick = { view.finishTransform(true); menu = null }) { Text("Apply") }
+                                TextButton(enabled = view.affineError == null, onClick = { view.finishTransform(true); menu = null }) { Text("Apply") }
                             }
                         }
                     }
-                    "Layers" -> {
+                    "Canvas" -> Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                        TextButton(enabled = !view.operationBusy && view.transformMode == null, onClick = { menu = "Document geometry" }) { Text("Resize, crop, trim and rotate layered image…") }
+                        TextButton(onClick = { menu = "Assistants" }, enabled = !view.operationBusy) { Text("Painting assistants…") }
+                        TextButton(onClick = { menu = "Animation" }, enabled = !view.operationBusy) { Text("Flipbook animation and onion skins…") }
+                        Text("View controls do not change exported pixels.", color = Color.White)
+                        Text("Zoom ${(view.canvasZoom * 100).toInt()}%", color = Color.White)
+                        Slider(view.canvasZoom, { view.setCanvasZoom(it); revision++ }, valueRange = .25f..8f)
+                        Text("Rotation ${view.canvasAngle.toInt()}°", color = Color.White)
+                        Slider(view.canvasAngle.coerceIn(-180f, 180f), { view.rotateCanvasView(it); revision++ }, valueRange = -180f..180f)
+                        TextButton(onClick = { view.resetCanvasView(); revision++ }) { Text("Reset view / fit canvas") }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(canvasMirrored, { canvasMirrored = it; view.mirrorCanvas = it; view.invalidate() }); Text("Mirror canvas view", color = Color.White) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(canvasChecker, { canvasChecker = it; view.showTransparency = it; view.invalidate() }); Text("Transparency checkerboard", color = Color.White) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(canvasGrid, { canvasGrid = it; view.showGrid = it; view.invalidate() }); Text("Grid overlay", color = Color.White) }
+                        if (canvasGrid) {
+                            Text("Grid spacing ${canvasGridSpacing.toInt()} px", color = Color.White)
+                            Slider(canvasGridSpacing, { canvasGridSpacing = it; view.gridSpacing = it; view.invalidate() }, valueRange = 8f..256f)
+                        }
+                        Text("Active layer pixel transforms", color = Color.White)
+                        listOf("flip-x" to "Flip horizontally", "flip-y" to "Flip vertically", "rotate-180" to "Rotate 180°", "offset-wrap" to "Offset / wrap half canvas").forEach { (id, name) ->
+                            TextButton(enabled = !view.operationBusy && view.transformMode == null, onClick = { importScope.launch {
+                                rasterError = null
+                                try { view.applyFilter(id, 0f); revision++ }
+                                catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                catch (e: Exception) { rasterError = e.message ?: "Transform failed" }
+                            } }) { Text(name) }
+                        }
+                    }
+                    "Layers" -> Column(Modifier.heightIn(max = 390.dp).verticalScroll(rememberScrollState())) {
+                        TextButton(onClick = { menu = "Document" }, enabled = !view.operationBusy) { Text("Save / open layered drawing…") }
                         TextButton(onClick = { view.addLayer() }, enabled = view.canAddLayer) { Text("+ Add layer") }
                         TextButton(onClick = { imagePicker.launch("image/*") }, enabled = view.canAddLayer && !importing) { Text(if (importing) "Importing…" else "Import picture") }
                         importError?.let { Text(it, color = Color.White) }
+                        Row {
+                            TextButton(enabled = view.canAddLayer, onClick = { view.duplicateLayer(); revision++ }) { Text("Duplicate") }
+                            TextButton(enabled = !view.operationBusy && view.layers > 1 && !view.layerLocked(view.layer), onClick = { view.deleteLayer(); revision++ }) { Text("Delete") }
+                        }
+                        Row {
+                            TextButton(enabled = !view.operationBusy && view.layer < view.layers - 1 && !view.layerLocked(view.layer), onClick = { view.moveLayer(1); revision++ }) { Text("Move up") }
+                            TextButton(enabled = !view.operationBusy && view.layer > 0 && !view.layerLocked(view.layer), onClick = { view.moveLayer(-1); revision++ }) { Text("Move down") }
+                        }
+                        OutlinedTextField(layerRename, { layerRename = it.take(80) }, label = { Text("Layer name") }, singleLine = true, enabled = !view.operationBusy, modifier = Modifier.fillMaxWidth())
+                        TextButton(enabled = !view.operationBusy && layerRename.isNotBlank(), onClick = { view.renameLayer(layerRename); revision++ }) { Text("Rename active layer") }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(view.layerLocked(view.layer), { view.setLayerFlag("locked", it); revision++ }, enabled = !view.operationBusy); Text("Paint lock", color = Color.White) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(view.layerAlphaLocked(view.layer), { view.setLayerFlag("alpha", it); revision++ }, enabled = !view.operationBusy); Text("Lock alpha / paint existing pixels only", color = Color.White) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(view.layerClipped(view.layer), { view.setLayerFlag("clip", it); revision++ }, enabled = !view.operationBusy); Text("Clip to layer below", color = Color.White) }
+                        if (view.layerClipped(view.layer)) Text("Uses the immediately lower layer's raw alpha, visibility and opacity. This is not group alpha inheritance.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        TextButton(enabled = !view.operationBusy && view.transformMode == null, onClick = { menu = "Layer mask" }) { Text(if (view.hasLayerMask(view.layer)) "Edit transparency mask…" else "Add transparency mask…") }
+                        Text("Layer blending · non-destructive", color = Color.White)
+                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            drawingLayerBlends.forEach { (id, name) -> SelectChip(name, view.layerBlendMode(view.layer) == id, { view.setLayerBlendMode(id); revision++ }, tag = "layer_blend_$id") }
+                        }
+                        Text("Layer opacity ${(pendingLayerOpacity * 100).toInt()}%", color = Color.White)
+                        Slider(pendingLayerOpacity, { pendingLayerOpacity = it }, onValueChangeFinished = { view.setLayerOpacity(pendingLayerOpacity); revision++ }, enabled = !view.operationBusy)
+                        Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            listOf(0 to "Normal", 3 to "Multiply", 8 to "Screen", 12 to "Overlay", 13 to "Soft light", 19 to "Difference").forEach { (id, name) ->
+                                SelectChip(name, mergeMode == id, { mergeMode = id }, tag = "merge_mode_$id")
+                            }
+                        }
+                        TextButton(enabled = !view.operationBusy && view.canMergeDown, onClick = { importScope.launch {
+                            rasterError = null
+                            try { view.mergeLayerDown(mergeMode.toUInt()); revision++ }
+                            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                            catch (e: Exception) { rasterError = e.message ?: "Merge failed" }
+                        } }) { Text("Merge into layer below") }
+                        if (!view.canMergeDown && view.layer > 0) Text("Pair merge requires two visible, unlocked, unclipped Normal layers. Flatten the full stack to bake other layer interactions.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                        TextButton(enabled = !view.operationBusy && view.layers > 1, onClick = { confirmFlatten = true }) { Text("Flatten visible paint…") }
+                        if (confirmFlatten) {
+                            Text("Replace the whole paint stack with its visible result? Hidden layers are discarded. Undo restores the stack. Reference frames are excluded.", color = Color.White)
+                            Row {
+                                TextButton(onClick = { confirmFlatten = false }) { Text("Cancel") }
+                                TextButton(enabled = !view.operationBusy, onClick = { confirmFlatten = false; importScope.launch {
+                                    rasterError = null
+                                    try { view.commitShapeDraft(); view.flattenDocument(); revision++ }
+                                    catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                    catch (e: Exception) { rasterError = e.message ?: "Flatten failed" }
+                                } }) { Text("Flatten") }
+                            }
+                        }
                         Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
                             (view.layers - 1 downTo 0).forEach { index ->
-                                TextButton(onClick = { view.layer = index; revision++ }) { Text("${if (view.layer == index) "●" else "○"} Layer ${index + 1}") }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(view.layerVisible(index), { view.toggleLayerVisibility(index); revision++ }, enabled = !view.operationBusy)
+                                    TextButton(enabled = !view.operationBusy, onClick = { view.layer = index; layerRename = view.layerName(index); pendingLayerOpacity = view.layerOpacity(index); revision++ }) { Text("${if (view.layer == index) "●" else "○"} ${view.layerName(index)}") }
+                                }
                             }
                         }
                     }
@@ -489,11 +732,11 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
             }
             DrawingGlass(view, Modifier.align(Alignment.BottomCenter).padding(horizontal = 10.dp, vertical = 8.dp).fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
-                    DrawIcon(LucideIcons.Paintbrush.glyph(), "Brushes", view.transformMode == null) { menu = if (menu == "Brushes") null else "Brushes" }
+                    DrawIcon(LucideIcons.Paintbrush.glyph(), "Brushes", !view.operationBusy && view.transformMode == null) { menu = if (menu == "Brushes") null else "Brushes" }
                     Box(Modifier.size(32.dp).clip(RoundedCornerShape(7.dp)).background(Color(color)).border(2.dp, Color.White, RoundedCornerShape(7.dp)).semantics { contentDescription = "Brush color" }.clickable(enabled = view.transformMode == null) { menu = if (menu == "Colors") null else "Colors" })
                     DrawIcon(LucideIcons.Undo2.glyph(), "Undo", revision >= 0 && view.canUndo) { view.undo() }
                     DrawIcon(LucideIcons.Redo2.glyph(), "Redo", revision >= 0 && view.canRedo) { view.redo() }
-                    DrawIcon(LucideIcons.Layers.glyph(), "Layers", view.transformMode == null) { menu = if (menu == "Layers") null else "Layers" }
+                    DrawIcon(LucideIcons.Layers.glyph(), "Layers", !view.operationBusy && view.transformMode == null) { layerRename = view.layerName(view.layer); pendingLayerOpacity = view.layerOpacity(view.layer); menu = if (menu == "Layers") null else "Layers" }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     GlyphIcon(LucideIcons.Paintbrush.glyph(), Color.White, size = 18.dp, description = "Brush size")
@@ -508,5 +751,5 @@ private fun DrawingPanelContent(ed: EditorController, close: () -> Unit) {
         }
     }
     // Touch edits update undo/redo availability without polling.
-    SideEffect { view.onEdit = { revision++ } }
+    SideEffect { view.onEdit = { revision++ }; view.onColorPicked = { color = it } }
 }

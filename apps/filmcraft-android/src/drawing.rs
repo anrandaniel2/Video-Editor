@@ -146,3 +146,15 @@ mod coverage_tests {
         assert!(drawing_stroke_coverage(vec![DrawingStrokePoint { x: f32::NAN, y: 0.0, radius: 1.0 }], 8, 8).is_none());
     }
 }
+
+/// Initialized off the Android UI thread: includes a real render/resolve/readback probe.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct DrawingHardwareStatus {
+    pub available:bool,pub adapter:String,pub backend:String,pub samples:u32,
+    pub sample_rate_shading:bool,pub max_texture_dimension:u32,pub message:String,
+}
+#[uniffi::export]
+pub fn drawing_gpu_status()->DrawingHardwareStatus {
+    let status=filmcraft_gpu::drawing::status();
+    DrawingHardwareStatus {available:status.verified,adapter:status.adapter,backend:status.backend,samples:if status.verified {4} else {0},sample_rate_shading:status.sample_rate,max_texture_dimension:status.max_dimension,message:status.detail}
+}
