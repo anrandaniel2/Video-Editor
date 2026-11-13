@@ -39,7 +39,7 @@ internal fun LightGizmoOverlay(ed: EditorController, fw: Float, fh: Float) {
                     ?.takeIf { (g(it).centre - down.position).getDistance() < 22.dp.toPx() }
                 if (hit != null) {
                     ed.stop(); ed.selectedLightId = hit.id; down.consume(); active = axis
-                    var current = hit; var previous = down.position
+                    var current: SceneLight = requireNotNull(hit); var previous = down.position
                     var total = Offset.Zero; var changed = false
                     val token = "light-gizmo:${java.util.UUID.randomUUID()}"
                     while (true) {
