@@ -44,12 +44,9 @@ internal fun ProcraftHostServices(vm: CanvasViewModel) {
         }
         val memory = object : ComponentCallbacks2 {
             override fun onConfigurationChanged(newConfig: Configuration) = Unit
-            override fun onLowMemory() { vm.trimBrushPreviews(); vm.session?.trimMemory() }
+            override fun onLowMemory() { vm.session?.trimMemory() }
             override fun onTrimMemory(level: Int) {
-                if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-                    vm.trimBrushPreviews()
-                    vm.session?.trimMemory()
-                }
+                if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) vm.session?.trimMemory()
             }
         }
         owner.lifecycle.addObserver(observer)

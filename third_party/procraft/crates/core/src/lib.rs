@@ -1247,8 +1247,6 @@ impl Shared {
 /// A canvas being painted: the document, the brush, the input and the renderer.
 #[derive(uniffi::Object)]
 pub struct CanvasSession {
-    /// One preview canvas per session, including library and studio callers.
-    preview_render: parking_lot::Mutex<()>,
     pub(crate) shared: Arc<Shared>,
     /// Itself, for what it hands plugins told of an event.
     me: std::sync::Weak<CanvasSession>,
@@ -1436,7 +1434,6 @@ impl CanvasSession {
             reference_picture: None,
         };
         Arc::new_cyclic(|me| CanvasSession {
-            preview_render: parking_lot::Mutex::new(()),
             me: me.clone(),
             shared: Arc::new(Shared {
                 state: parking_lot::Mutex::new(state),
@@ -1987,7 +1984,6 @@ impl CanvasSession {
     pub fn release_canvas(&self) {
         let mut st = self.shared.lock();
         st.closed = true;
-        st.preview = None;
         st.canvas = None;
         st.pending_pixels.clear();
         st.scene = None;
