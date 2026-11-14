@@ -950,34 +950,7 @@ private val BlendGlyphInk = Color(0xFF808080)
 /** A thin blue slider with a white knob, set by dragging anywhere along it. */
 @Composable
 internal fun OpacitySlider(value: Float, onChange: (Float) -> Unit, onDone: () -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    val done by rememberUpdatedState(onDone)
-    Box(
-        Modifier.padding(horizontal = 13.dp, vertical = 2.dp).fillMaxWidth().height(16.dp)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    change((down.position.x / size.width).coerceIn(0f, 1f))
-                    while (true) {
-                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!c.pressed) break
-                        change((c.position.x / size.width).coerceIn(0f, 1f))
-                        c.consume()
-                    }
-                    done()
-                }
-            }
-            .drawBehind {
-                val y = size.height / 2f
-                val h = 3.dp.toPx()
-                drawRoundRect(Pc.SliderRest, Offset(0f, y - h / 2f), Size(size.width, h), CornerRadius(h / 2f))
-                drawRoundRect(Pc.Accent, Offset(0f, y - h / 2f), Size(size.width * value, h), CornerRadius(h / 2f))
-                val knob = Size(26.dp.toPx(), 15.dp.toPx())
-                val x = (size.width * value).coerceIn(knob.width / 2f, size.width - knob.width / 2f)
-                drawRoundRect(Color.White, Offset(x - knob.width / 2f, y - knob.height / 2f), knob, CornerRadius(knob.height / 2f))
-            },
-    )
+    StudioSlider("Opacity", value, Shown.PERCENT, onDone = onDone, onChange = onChange)
 }
 /**
  * The current layer's options, left of the panel and centred on its row. What doesn't apply to

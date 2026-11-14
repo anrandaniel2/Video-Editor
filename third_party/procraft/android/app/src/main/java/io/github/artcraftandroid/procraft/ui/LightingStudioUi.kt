@@ -294,39 +294,8 @@ private fun level(v: Float) = when {
  */
 @Composable
 private fun LightSlider(label: String, value: String, fraction: Float, track: Brush, knob: Color, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    val current by rememberUpdatedState(fraction)
-    Box(Modifier.fillMaxWidth().height(56.dp)) {
-        Text(label, color = DimInk, fontSize = 17.sp, maxLines = 1, modifier = Modifier.padding(start = 16.dp, top = 6.dp))
-        Text(value, color = Color.White, fontSize = 17.sp, maxLines = 1, modifier = Modifier.align(Alignment.TopEnd).padding(end = 16.dp, top = 6.dp))
-        Canvas(
-            Modifier.fillMaxWidth().height(24.dp).align(Alignment.BottomStart).pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    val travel = size.width - 2 * 18.5.dp.toPx()
-                    var last = down.position.x
-                    while (true) {
-                        val ev = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!ev.pressed) break
-                        val moved = (ev.position.x - last) / travel
-                        last = ev.position.x
-                        change((current + moved).coerceIn(0f, 1f))
-                        ev.consume()
-                    }
-                }
-            },
-        ) {
-            val y = size.height / 2f
-            val inset = 14.dp.toPx()
-            val thick = 3.dp.toPx()
-            drawRoundRect(track, Offset(inset, y - thick / 2f), Size(size.width - 2 * inset, thick), CornerRadius(thick / 2f))
-            val ends = 18.5.dp.toPx()
-            val x = ends + (size.width - 2 * ends) * fraction.coerceIn(0f, 1f)
-            val (w, h) = 16.dp.toPx() to 10.dp.toPx()
-            drawRoundRect(knob, Offset(x - w / 2f, y - h / 2f), Size(w, h), CornerRadius(h / 2f))
-        }
-    }
+    StudioSlider(label, fraction, Shown.PERCENT, valueText = value,
+        numberSpec = StudioNumberSpec(0.0, if (label == "Hue") 360.0 else 100.0), onChange = onChange)
 }
 
 /** One of the bar's capsule buttons, lit while what it opened is showing. */
@@ -385,48 +354,7 @@ private fun EnvironmentPopover(vm: CanvasViewModel, modifier: Modifier) {
  */
 @Composable
 private fun ExposureSlider(value: Float, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    val current by rememberUpdatedState(value)
-    val shown = when {
-        value <= 0f -> "Min"
-        value >= MOST_EXPOSURE -> "Max"
-        else -> "${(value * 100f).roundToInt()}%"
-    }
-    Box(Modifier.fillMaxWidth().height(84.dp).clip(RoundedCornerShape(14.dp)).background(GroupFill)) {
-        Text("Exposure", color = DimInk, fontSize = 17.sp, maxLines = 1, modifier = Modifier.padding(start = 16.dp, top = 19.dp))
-        Text(shown, color = Color.White, fontSize = 17.sp, maxLines = 1, modifier = Modifier.align(Alignment.TopEnd).padding(end = 16.dp, top = 19.dp))
-        Canvas(
-            Modifier.fillMaxWidth().height(30.dp).align(Alignment.BottomStart).offset(y = (-13).dp).pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    val travel = size.width - 2 * 18.5.dp.toPx()
-                    var last = down.position.x
-                    while (true) {
-                        val ev = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!ev.pressed) break
-                        val moved = (ev.position.x - last) / travel * MOST_EXPOSURE
-                        last = ev.position.x
-                        change((current + moved).coerceIn(0f, MOST_EXPOSURE))
-                        ev.consume()
-                    }
-                }
-            },
-        ) {
-            val y = size.height / 2f
-            val inset = 16.dp.toPx()
-            val track = 2.dp.toPx()
-            drawRoundRect(
-                Brush.horizontalGradient(listOf(Color.Black, Color.White), startX = inset, endX = size.width - inset),
-                Offset(inset, y - track / 2f),
-                Size(size.width - 2 * inset, track),
-                CornerRadius(track / 2f),
-            )
-            val ends = 18.5.dp.toPx()
-            val x = ends + (size.width - 2 * ends) * (value / MOST_EXPOSURE).coerceIn(0f, 1f)
-            val (w, h) = 16.dp.toPx() to 9.dp.toPx()
-            val grey = value.coerceIn(0f, 1f)
-            drawRoundRect(Color(grey, grey, grey), Offset(x - w / 2f, y - h / 2f), Size(w, h), CornerRadius(h / 2f))
-        }
-    }
+    StudioSlider("Exposure", (value / MOST_EXPOSURE).coerceIn(0f, 1f), Shown.PERCENT,
+        valueText = "${(value * 100).roundToInt()}%",
+        numberSpec = StudioNumberSpec(0.0, MOST_EXPOSURE * 100.0)) { onChange(it * MOST_EXPOSURE) }
 }

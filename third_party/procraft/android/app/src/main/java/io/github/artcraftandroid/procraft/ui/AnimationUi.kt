@@ -475,36 +475,12 @@ private val RowLineFill = Color(0x09FFFFFF)
 /** A setting's name and value over a bar dragged or tapped along. */
 @Composable
 private fun ValueSlider(label: String, value: String, fraction: Float, onEnd: () -> Unit = {}, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    val end by rememberUpdatedState(onEnd)
-    Column(Modifier.fillMaxWidth().height(55.dp).padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(top = 6.5.dp)) {
-            Text(label, color = Pc.SlideLabel, fontSize = 17.sp, modifier = Modifier.weight(1f), maxLines = 1)
-            Text(value, color = Pc.SlideValue, fontSize = 17.sp, maxLines = 1)
-        }
-        Box(
-            Modifier.fillMaxWidth().height(22.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        change((it.x / size.width).coerceIn(0f, 1f))
-                        end()
-                    }
-                }
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(onDragStart = { change((it.x / size.width).coerceIn(0f, 1f)) }, onDragEnd = { end() }, onDragCancel = { end() }) { c, _ ->
-                        c.consume()
-                        change((c.position.x / size.width).coerceIn(0f, 1f))
-                    }
-                }
-                .drawBehind {
-                    val y = size.height / 2f
-                    val h = 3.dp.toPx()
-                    val x = fraction.coerceIn(0f, 1f) * size.width
-                    drawRect(Pc.SlideTrack, Offset(0f, y - h / 2f), Size(size.width, h))
-                    drawRect(Pc.Accent, Offset(0f, y - h / 2f), Size(x, h))
-                    val knob = Size(16.dp.toPx(), 10.dp.toPx())
-                    drawRoundRect(Color.White, Offset((x - knob.width / 2f).coerceIn(0f, size.width - knob.width), y - knob.height / 2f), knob, CornerRadius(knob.height / 2f))
-                },
-        )
+    val (lo, hi) = when (label) {
+        "Frames Per Second" -> 1.0 to 60.0
+        "Onion skin frames" -> 0.0 to MAX_ONION.toDouble()
+        "Hold duration" -> 0.0 to CanvasViewModel.MAX_HOLD.toDouble()
+        else -> 0.0 to 100.0
     }
+    StudioSlider(label, fraction, Shown.PERCENT, valueText = value,
+        numberSpec = StudioNumberSpec(lo, hi), onDone = onEnd, onChange = onChange)
 }

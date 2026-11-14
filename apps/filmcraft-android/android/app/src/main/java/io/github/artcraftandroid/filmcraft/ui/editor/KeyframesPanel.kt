@@ -144,7 +144,7 @@ private fun AnimationSlider(label:String,value:Double,min:Double,max:Double,tag:
     val lo=minOf(min.takeIf { it.isFinite() } ?: -1000.0,safeValue)
     val hi=maxOf(max.takeIf { it.isFinite() } ?: 1000.0,safeValue,lo+0.01)
     SliderRow(label,"${kotlin.math.round(v*100)/100}", onLabelClick = onTitleClick, selected = selected) {
-        FcSlider(fraction=(((v.takeIf { it.isFinite() } ?: safeValue)-lo)/(hi-lo)).toFloat().coerceIn(0f,1f),onChange={f ->
+        FcSlider(numericRange=lo.toFloat()..hi.toFloat(),fraction=(((v.takeIf { it.isFinite() } ?: safeValue)-lo)/(hi-lo)).toFloat().coerceIn(0f,1f),onChange={f ->
             dragging=true;v=lo+f*(hi-lo);save(v,token)
         },onDone={dragging=false;token=java.util.UUID.randomUUID().toString()},description=label,tag="keyframes_slider_$tag")
     }

@@ -411,7 +411,5 @@ private fun Keypad(modifier: Modifier, wide: Boolean, room: Dp, unit: SizeUnit, 
 
 @Composable
 private fun Key(label: String, fill: Color, ink: Color, size: androidx.compose.ui.unit.TextUnit, width: Dp, height: Dp, onClick: () -> Unit) {
-    Box(Modifier.size(width, height).clip(RoundedCornerShape(8.dp)).background(fill).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Text(label, color = ink, fontSize = size)
-    }
+    KeypadKey(if (label == "Backspace") "⌫" else label, width, height, onClick)
 }

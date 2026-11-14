@@ -92,7 +92,7 @@ private class Toggle(val label: String, val checked: Boolean, val fixed: Boolean
 private class Heading(val label: String) : ActionRow
 
 /** A setting with its value on the right and a slider under its name, always shown. */
-private class Slide(val label: String, val value: String, val fraction: Float, val tall: Dp = 63.dp, val onDone: () -> Unit = {}, val onChange: (Float) -> Unit) : ActionRow
+private class Slide(val label: String, val value: String, val fraction: Float, val tall: Dp = 63.dp, val onDone: () -> Unit = {}, val numberSpec: StudioNumberSpec? = null, val onChange: (Float) -> Unit) : ActionRow
 
 /** The pages the panel shows: its tabs, or a page of settings reached from one of them. */
 private enum class ActionsPage { TABS, PRESSURE, CURSOR, PLUGINS }
@@ -303,6 +303,7 @@ fun ActionsPanel(vm: CanvasViewModel, arrowX: Dp, modifier: Modifier = Modifier)
                     "Rapid undo delay",
                     "%.2fs".format(vm.rapidUndoDelay),
                     (vm.rapidUndoDelay - CanvasViewModel.RAPID_UNDO_MIN_S) / (CanvasViewModel.RAPID_UNDO_MAX_S - CanvasViewModel.RAPID_UNDO_MIN_S),
+                    numberSpec = StudioNumberSpec(CanvasViewModel.RAPID_UNDO_MIN_S.toDouble(), CanvasViewModel.RAPID_UNDO_MAX_S.toDouble()),
                 ) { vm.changeRapidUndoDelay(CanvasViewModel.RAPID_UNDO_MIN_S + it * (CanvasViewModel.RAPID_UNDO_MAX_S - CanvasViewModel.RAPID_UNDO_MIN_S)) },
                 Slide("Selection mask visibility", "%.1f%%".format(vm.selectionVisibility * 100f), vm.selectionVisibility, onChange = vm::changeSelectionVisibility),
             ),
@@ -669,6 +670,7 @@ private fun PanelSliderRow(row: PanelRow.Slider, onSet: (Float) -> Unit) {
             row.label,
             shown,
             (value - row.least) / (row.most - row.least),
+            numberSpec = StudioNumberSpec(row.least.toDouble(), row.most.toDouble()),
             onDone = {
                 moved?.let(onSet)
                 moved = null
@@ -749,6 +751,8 @@ private fun PluginSliderRow(slider: PluginSlider, onSet: (PluginSlider, Float) -
             slider.label,
             pluginSliderShown(slider, value),
             pluginSliderAlong(slider, value),
+            numberSpec = StudioNumberSpec((slider.least * slider.shownTimes).toDouble(), (slider.most * slider.shownTimes).toDouble(),
+                toFraction = { pluginSliderAlong(slider, (it / slider.shownTimes).toFloat()) }),
             onDone = {
                 moved?.let { onSet(slider, it) }
                 moved = null
@@ -880,40 +884,8 @@ private fun PressurePage(vm: CanvasViewModel, onBack: () -> Unit) {
 /** A slider row: the name and value on top, the bar under them; drag or tap along it. */
 @Composable
 private fun SlideRow(row: Slide) {
-    val change by rememberUpdatedState(row.onChange)
-    val done by rememberUpdatedState(row.onDone)
-    Box(
-        Modifier.fillMaxWidth().height(row.tall)
-            .pointerInput(Unit) {
-                val inset = 16.dp.toPx()
-                fun at(x: Float) = ((x - inset) / (size.width - 2f * inset)).coerceIn(0f, 1f)
-                detectTapGestures {
-                    change(at(it.x))
-                    done()
-                }
-            }
-            .pointerInput(Unit) {
-                val inset = 16.dp.toPx()
-                fun at(x: Float) = ((x - inset) / (size.width - 2f * inset)).coerceIn(0f, 1f)
-                detectHorizontalDragGestures(onDragStart = { change(at(it.x)) }, onDragEnd = { done() }, onDragCancel = { done() }) { c, _ ->
-                    c.consume()
-                    change(at(c.position.x))
-                }
-            }
-            .drawBehind {
-                val inset = 16.dp.toPx()
-                val y = size.height - 17.5.dp.toPx()
-                val h = 3.dp.toPx()
-                val x = inset + row.fraction.coerceIn(0f, 1f) * (size.width - 2f * inset)
-                drawRect(Pc.SlideTrack, Offset(inset, y - h / 2f), Size(size.width - 2f * inset, h))
-                drawRect(Pc.Accent, Offset(inset, y - h / 2f), Size(x - inset, h))
-                val knob = Size(16.dp.toPx(), 10.dp.toPx())
-                drawRoundRect(Color.White, Offset(x - knob.width / 2f, y - knob.height / 2f), knob, CornerRadius(knob.height / 2f))
-            },
-    ) {
-        Text(row.label, color = Pc.SlideLabel, fontSize = 17.sp, maxLines = 1, modifier = Modifier.padding(start = 16.dp, top = 9.dp))
-        Text(row.value, color = Pc.SlideValue, fontSize = 17.sp, maxLines = 1, modifier = Modifier.align(Alignment.TopEnd).padding(end = 19.dp, top = 9.dp))
-    }
+    StudioSlider(row.label, row.fraction, Shown.PERCENT, valueText = row.value,
+        numberSpec = row.numberSpec, onDone = row.onDone, onChange = row.onChange)
 }
 
 /** How far a row with a private action slides open, that action's button and its look. */

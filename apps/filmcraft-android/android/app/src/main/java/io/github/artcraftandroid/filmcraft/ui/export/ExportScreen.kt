@@ -191,11 +191,17 @@ private fun SettingsSheet(vm: AppViewModel) {
                     SelectChip(label, s.shortSide == v, { vm.exportSettings = s.copy(shortSide = v) }, tag = "export_resolution_$label")
                 }
             }
+            io.github.artcraftandroid.procraft.ui.StudioNumericField("Resolution (short edge)", s.shortSide.toDouble(), 144.0, 4320.0, decimals = false, suffix = " px") {
+                vm.exportSettings = vm.exportSettings.copy(shortSide = it.toInt().toUInt())
+            }
             Spacer(Modifier.height(39.dp))
             Text("Frame rate", style = FcType.Label, color = Fc.Body)
             Spacer(Modifier.height(13.dp))
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (f in (listOf(s.fps, 24u, 25u, 30u, 50u, 60u, 90u, 120u).distinct().sorted())) SelectChip("$f", s.fps == f, { vm.exportSettings = s.copy(fps = f) }, tag = "export_fps_$f")
+            }
+            io.github.artcraftandroid.procraft.ui.StudioNumericField("Frame rate", s.fps.toDouble(), 1.0, 120.0, decimals = false, suffix = " fps") {
+                vm.exportSettings = vm.exportSettings.copy(fps = it.toInt().toUInt())
             }
             Spacer(Modifier.height(39.dp))
             Text("Quality", style = FcType.Label, color = Fc.Body)

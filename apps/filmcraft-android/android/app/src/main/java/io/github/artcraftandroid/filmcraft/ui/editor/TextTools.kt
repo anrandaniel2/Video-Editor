@@ -444,6 +444,7 @@ private fun LayoutTab(st: TextStyle, apply: (TextStyle, Boolean) -> Unit) {
         SliderRow("Text width", "") {
             Spacer(Modifier.height(8.dp))
             FcSlider(
+                numericRange = 10f..100f,
                 fraction = (width - 0.1f) / 0.9f,
                 onChange = { f -> width = Math.round((0.1f + f * 0.9f) * 100) / 100f; apply(st.copy(width = width.toDouble()), true) },
                 description = "Text width",

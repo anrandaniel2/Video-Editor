@@ -164,11 +164,5 @@ private fun NumberField(text: String, chosen: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun NumericKey(label: String, fill: Color, width: Int, onClick: () -> Unit) {
-    Box(Modifier.size(width.dp, 48.dp).clip(RoundedCornerShape(9.dp)).background(fill).tap(onClick), contentAlignment = Alignment.Center) {
-        if (label == "⌫") {
-            Icon(PcIcons.Backspace, contentDescription = "Back space", tint = KeyInk, modifier = Modifier.size(22.dp))
-        } else {
-            Text(label, color = KeyInk, fontSize = if (label.length > 1) 15.sp else 22.sp)
-        }
-    }
+    KeypadKey(label, width.dp, 48.dp, onClick)
 }

@@ -1206,53 +1206,10 @@ internal fun shown(v: Float, max: Boolean = false) = when {
  * 0..1. A [chip] value sits on a rounded chip (one that can be typed: [onChip] opens its keypad).
  */
 @Composable
-internal fun OptionSlider(label: String, value: Float, shown: String, width: Dp, both: Boolean = false, labelColor: Color = HsbLabel, chip: Boolean = false, onChip: (() -> Unit)? = null, onLetGo: () -> Unit = {}, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    val letGo by rememberUpdatedState(onLetGo)
-    Column(Modifier.width(width).height(54.dp)) {
-        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 15.dp, top = 6.dp)) {
-            Text(label, color = labelColor, fontSize = 16.sp, maxLines = 1, modifier = Modifier.weight(1f))
-            if (chip) {
-                val typed = if (onChip != null) Modifier.tap(onChip) else Modifier
-                Box(Modifier.offset(x = 8.dp, y = (-4).dp).clip(RoundedCornerShape(14.dp)).background(ValueChip).then(typed).padding(horizontal = 12.dp, vertical = 3.dp)) {
-                    Text(shown, color = HsbValue, fontSize = 16.sp, maxLines = 1)
-                }
-            } else {
-                Text(shown, color = HsbValue, fontSize = 16.sp, maxLines = 1)
-            }
-        }
-        Box(
-            Modifier.fillMaxWidth().height(24.dp).padding(start = 10.dp, end = 11.dp).pointerInput(both) {
-                fun at(x: Float): Float {
-                    val t = (x / size.width).coerceIn(0f, 1f)
-                    return if (both) t * 2f - 1f else t
-                }
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    while (true) {
-                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!c.pressed) break
-                        change(at(c.position.x))
-                        c.consume()
-                    }
-                    letGo()
-                }
-            }.drawBehind {
-                val y = size.height / 2f
-                val t = if (both) (value + 1f) / 2f else value
-                val x = size.width * t.coerceIn(0f, 1f)
-                val from = if (both) size.width / 2f else 0f
-                val line = 2.dp.toPx()
-                drawLine(GlitchTrack, Offset(0f, y), Offset(size.width, y), line, cap = StrokeCap.Round)
-                drawLine(Pc.Accent, Offset(from, y), Offset(x, y), line, cap = StrokeCap.Round)
-                if (both) drawLine(GlitchTick, Offset(from, y - 6.dp.toPx()), Offset(from, y + 6.dp.toPx()), 1.dp.toPx())
-                val knob = Size(17.dp.toPx(), 11.dp.toPx())
-                val kx = x.coerceIn(knob.width / 2, size.width - knob.width / 2)
-                drawRoundRect(Color(0x33000000), Offset(kx - knob.width / 2, y - knob.height / 2 + 0.5.dp.toPx()), knob, CornerRadius(knob.height / 2))
-                drawRoundRect(Color.White, Offset(kx - knob.width / 2, y - knob.height / 2), knob, CornerRadius(knob.height / 2))
-            },
-        )
+internal fun OptionSlider(label: String, value: Float, shown: String, width: Dp, both: Boolean = false, labelColor: Color = HsbLabel, chip: Boolean = false, onChip: (() -> Unit)? = null, onLetGo: () -> Unit = {}, numberSpec: StudioNumberSpec? = null, onChange: (Float) -> Unit) {
+    Box(Modifier.width(width)) {
+        StudioSlider(label, value, if (both) Shown.BOTH else Shown.PERCENT, valueText = shown,
+            numberSpec = numberSpec, onDone = onLetGo, onChange = onChange)
     }
 }
 
@@ -1401,6 +1358,8 @@ private fun PluginFilterSlider(vm: CanvasViewModel, slider: PluginSlider) {
         pluginSliderShown(slider, slider.value),
         500.dp,
         onLetGo = { vm.letGoPluginFilter(slider.key) },
+        numberSpec = StudioNumberSpec((slider.least * slider.shownTimes).toDouble(), (slider.most * slider.shownTimes).toDouble(),
+            toFraction = { pluginSliderAlong(slider, (it / slider.shownTimes).toFloat()) }),
     ) { along -> vm.setPluginFilterSlider(slider.key, pluginSliderAt(slider, along)) }
 }
 

@@ -529,6 +529,7 @@ private fun AdvancedSlider(
     var token by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     SliderRow(label, "${round(v * 10.0) / 10.0}") {
         FcSlider(
+            numericRange = min.toFloat()..max.toFloat(),
             fraction = ((v - min) / (max - min)).toFloat(),
             onChange = { f ->
                 val raw = min + f.coerceIn(0f, 1f).toDouble() * (max - min)

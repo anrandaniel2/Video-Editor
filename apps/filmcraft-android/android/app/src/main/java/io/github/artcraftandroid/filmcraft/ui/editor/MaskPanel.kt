@@ -157,6 +157,7 @@ private fun MaskSlider(
     var token by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     SliderRow(label, display(v)) {
         FcSlider(
+            numericRange = min.toFloat()..max.toFloat(),
             fraction = ((v - min) / (max - min)).toFloat(),
             onChange = { f ->
                 val raw = min + f.coerceIn(0f, 1f).toDouble() * (max - min)

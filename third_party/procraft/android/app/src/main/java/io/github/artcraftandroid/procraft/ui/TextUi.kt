@@ -412,11 +412,11 @@ private fun DesignCard(vm: CanvasViewModel, info: TextInfo, modifier: Modifier) 
     val pt = { px: Float -> px * 72f / dpi }
     Card("Design", modifier) {
         Column(Modifier.padding(horizontal = 4.dp)) {
-            DesignRow("Size", sizeToSlider(info.size), "%.1fpt".format(pt(info.size)), fromMiddle = false) { v -> vm.changeText { it.copy(size = sliderToSize(v)) } }
+            DesignRow("Size", sizeToSlider(info.size), "%.1fpt".format(pt(info.size)), fromMiddle = false, numberSpec = StudioNumberSpec(pt(1f).toDouble(), pt(2000f).toDouble(), toFraction = { sizeToSlider((it * dpi / 72f).toFloat()) })) { v -> vm.changeText { it.copy(size = sliderToSize(v)) } }
             DesignRow("Kerning", info.kerning / 2f + 0.5f, "%.1f%%".format(info.kerning * 100f)) { v -> vm.changeText { it.copy(kerning = v * 2f - 1f) } }
             DesignRow("Tracking", info.tracking / 2f + 0.5f, "%.1f%%".format(info.tracking * 100f)) { v -> vm.changeText { it.copy(tracking = v * 2f - 1f) } }
-            DesignRow("Leading", info.leading / 2f + 0.5f, "${pt(info.leading * info.size).roundToInt()}pt") { v -> vm.changeText { it.copy(leading = v * 2f - 1f) } }
-            DesignRow("Baseline", info.baseline / 2f + 0.5f, "${pt(info.baseline * info.size).roundToInt()}pt") { v -> vm.changeText { it.copy(baseline = v * 2f - 1f) } }
+            DesignRow("Leading", info.leading / 2f + 0.5f, "${pt(info.leading * info.size).roundToInt()}pt", numberSpec = StudioNumberSpec(-pt(info.size).toDouble(), pt(info.size).toDouble())) { v -> vm.changeText { it.copy(leading = v * 2f - 1f) } }
+            DesignRow("Baseline", info.baseline / 2f + 0.5f, "${pt(info.baseline * info.size).roundToInt()}pt", numberSpec = StudioNumberSpec(-pt(info.size).toDouble(), pt(info.size).toDouble())) { v -> vm.changeText { it.copy(baseline = v * 2f - 1f) } }
             DesignRow("Opacity", info.opacity, "%.1f%%".format(info.opacity * 100f), fromMiddle = false) { v -> vm.changeText { it.copy(opacity = v) } }
         }
     }
@@ -507,44 +507,10 @@ private fun Attribute(icon: ImageVector, label: String, on: Boolean, modifier: M
 
 /** A design setting: its name, its value in a pill, and a thin bar under them (filled from the left, or a tick in the middle). */
 @Composable
-private fun DesignRow(label: String, value: Float, shown: String, fromMiddle: Boolean = true, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    Column(Modifier.fillMaxWidth().height(58.5.dp).padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(top = 1.5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, color = SheetInk, fontSize = 15.sp, modifier = Modifier.weight(1f))
-            Box(Modifier.height(24.dp).clip(CircleShape).background(ButtonFill).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
-                Text(shown, color = SheetInk, fontSize = 13.sp)
-            }
-        }
-        Box(
-            Modifier.fillMaxWidth().height(20.dp).pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    change((down.position.x / size.width).coerceIn(0f, 1f))
-                    while (true) {
-                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!c.pressed) break
-                        change((c.position.x / size.width).coerceIn(0f, 1f))
-                        c.consume()
-                    }
-                }
-            }.drawBehind {
-                val y = size.height / 2f
-                val h = 2.dp.toPx()
-                val v = value.coerceIn(0f, 1f)
-                drawRoundRect(DesignTrack, Offset(0f, y - h / 2f), Size(size.width, h), CornerRadius(h / 2f))
-                if (fromMiddle) {
-                    drawLine(DesignTick, Offset(size.width / 2f, y - 5.dp.toPx()), Offset(size.width / 2f, y + 5.dp.toPx()), 1.dp.toPx())
-                } else {
-                    drawRoundRect(Pc.Accent, Offset(0f, y - h / 2f), Size(size.width * v, h), CornerRadius(h / 2f))
-                }
-                val knob = Size(16.dp.toPx(), 10.dp.toPx())
-                val x = (size.width * v).coerceIn(knob.width / 2f, size.width - knob.width / 2f)
-                drawRoundRect(Color.White, Offset(x - knob.width / 2f, y - knob.height / 2f), knob, CornerRadius(knob.height / 2f))
-            },
-        )
-    }
+private fun DesignRow(label: String, value: Float, shown: String, fromMiddle: Boolean = true, numberSpec: StudioNumberSpec? = null, onChange: (Float) -> Unit) {
+    StudioSlider(label, if (fromMiddle) value * 2f - 1f else value,
+        if (fromMiddle) Shown.BOTH else Shown.PERCENT, valueText = shown,
+        numberSpec = numberSpec) { v -> onChange(if (fromMiddle) (v + 1f) / 2f else v) }
 }
 
 /** The size slider runs 1 to 2000 pixels, finer at the small end. */

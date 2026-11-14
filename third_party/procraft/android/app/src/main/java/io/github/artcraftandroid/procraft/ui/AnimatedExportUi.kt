@@ -327,46 +327,8 @@ private val SliderTrack get() = if (Pc.light) Color(0xFFDDDDDD) else Color(0xFF3
  */
 @Composable
 private fun FpsSlider(fraction: Float, value: String, onChange: (Float) -> Unit) {
-    val change by androidx.compose.runtime.rememberUpdatedState(onChange)
-    val current by androidx.compose.runtime.rememberUpdatedState(fraction)
-    Box(Modifier.fillMaxWidth().height(FpsRowHeight)) {
-        Text("Frames per second", color = RowInk, fontSize = 17.sp, maxLines = 1, modifier = Modifier.padding(start = FpsLabelX, top = FpsLabelY))
-        Text(value, color = RowInk, fontSize = 17.sp, maxLines = 1, modifier = Modifier.align(Alignment.TopEnd).padding(end = FpsValueRight, top = FpsLabelY))
-        androidx.compose.foundation.Canvas(
-            Modifier.fillMaxWidth().height(28.dp).offset(y = FpsTrackY - 14.dp).pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    val travel = size.width - 22.5.dp.toPx() - 23.dp.toPx()
-                    var last = down.position.x
-                    while (true) {
-                        val ev = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!ev.pressed) break
-                        change((current + (ev.position.x - last) / travel).coerceIn(0f, 1f))
-                        last = ev.position.x
-                        ev.consume()
-                    }
-                }
-            },
-        ) {
-            val y = size.height / 2f
-            val thick = 3.dp.toPx()
-            val (left, right) = 18.dp.toPx() to size.width - 18.dp.toPx()
-            // the knob's middle from 22.5 in to 23 in
-            val (x0, x1) = 22.5.dp.toPx() to size.width - 23.dp.toPx()
-            val x = x0 + (x1 - x0) * current.coerceIn(0f, 1f)
-            val corner = androidx.compose.ui.geometry.CornerRadius(thick / 2f)
-            drawRoundRect(FpsTrack, androidx.compose.ui.geometry.Offset(left, y - thick / 2f), androidx.compose.ui.geometry.Size(right - left, thick), corner)
-            drawRoundRect(Pc.Accent, androidx.compose.ui.geometry.Offset(left, y - thick / 2f), androidx.compose.ui.geometry.Size(x - left, thick), corner)
-            // 16 x 10, corners 4, over a faint shadow
-            val (w, h) = 16.dp.toPx() to 10.dp.toPx()
-            val knob = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color = android.graphics.Color.WHITE
-                setShadowLayer(1.5.dp.toPx(), 0f, 1.dp.toPx(), 0x30000000)
-            }
-            drawContext.canvas.nativeCanvas.drawRoundRect(x - w / 2f, y - h / 2f, x + w / 2f, y + h / 2f, 4.dp.toPx(), 4.dp.toPx(), knob)
-        }
-    }
+    StudioSlider("Frames per second", fraction, Shown.PERCENT, valueText = value,
+        numberSpec = StudioNumberSpec(1.0, 60.0, toFraction = { exportFpsFraction(it.toFloat()) }), onChange = onChange)
 }
 
 /**
@@ -399,36 +361,7 @@ private fun ChoiceRow(label: String, chosen: Boolean, onChoose: () -> Unit) {
 /** A setting from 0 to 1, 66 tall: its name and value over a track filled blue up to its white knob. */
 @Composable
 private fun TurntableSlider(label: String, value: String, fraction: Float, onChange: (Float) -> Unit) {
-    val change by androidx.compose.runtime.rememberUpdatedState(onChange)
-    val current by androidx.compose.runtime.rememberUpdatedState(fraction)
-    Box(Modifier.padding(start = 8.dp, end = 8.dp).fillMaxWidth().height(66.dp)) {
-        Text(label, color = RowInk, fontSize = 17.sp, maxLines = 1, modifier = Modifier.padding(start = 16.dp, top = 6.dp))
-        Text(value, color = RowInk, fontSize = 17.sp, maxLines = 1, modifier = Modifier.align(Alignment.TopEnd).padding(end = 16.dp, top = 6.dp))
-        androidx.compose.foundation.Canvas(
-            Modifier.fillMaxWidth().height(28.dp).align(Alignment.BottomStart).offset(y = (-8).dp).pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    val travel = size.width - 2 * 16.dp.toPx()
-                    var last = down.position.x
-                    while (true) {
-                        val ev = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!ev.pressed) break
-                        change((current + (ev.position.x - last) / travel).coerceIn(0f, 1f))
-                        last = ev.position.x
-                        ev.consume()
-                    }
-                }
-            },
-        ) {
-            val y = size.height / 2f
-            val inset = 16.dp.toPx()
-            val thick = 3.dp.toPx()
-            val x = inset + (size.width - 2 * inset) * current.coerceIn(0f, 1f)
-            drawRoundRect(SliderTrack, androidx.compose.ui.geometry.Offset(inset, y - thick / 2f), androidx.compose.ui.geometry.Size(size.width - 2 * inset, thick), androidx.compose.ui.geometry.CornerRadius(thick / 2f))
-            drawRoundRect(Pc.Accent, androidx.compose.ui.geometry.Offset(inset, y - thick / 2f), androidx.compose.ui.geometry.Size(x - inset, thick), androidx.compose.ui.geometry.CornerRadius(thick / 2f))
-            val (w, h) = 26.dp.toPx() to 16.dp.toPx()
-            drawRoundRect(Color.White, androidx.compose.ui.geometry.Offset(x - w / 2f, y - h / 2f), androidx.compose.ui.geometry.Size(w, h), androidx.compose.ui.geometry.CornerRadius(h / 2f))
-        }
-    }
+    val duration = label == "Animation duration"
+    StudioSlider(label, fraction, Shown.PERCENT, valueText = value,
+        numberSpec = StudioNumberSpec(if (duration) .5 else 0.0, if (duration) 5.0 else 100.0), onChange = onChange)
 }

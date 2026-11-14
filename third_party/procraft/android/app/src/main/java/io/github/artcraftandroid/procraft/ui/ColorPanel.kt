@@ -522,15 +522,15 @@ private fun Classic(c: ColorPick, compact: Boolean = false, square: Dp = 344.dp)
     SaturationBrightness(c, compact, square)
     if (compact) {
         // the hue only, 240 wide under the 248 square
-        Box(Modifier.padding(start = 10.dp, end = 10.dp).height(40.dp)) {
-            SliderRow(huePosition(HueControl.SLIDER, c.hue), SliderHues.map { hsvColor(it / 360f, 1f, 1f) }) { c.setHsv(hueAt(HueControl.SLIDER, it), c.saturation, c.brightness) }
+        Box(Modifier.padding(start = 10.dp, end = 10.dp).height(55.dp)) {
+            SliderRow(huePosition(HueControl.SLIDER, c.hue), SliderHues.map { hsvColor(it / 360f, 1f, 1f) }, label = "Hue") { c.setHsv(hueAt(HueControl.SLIDER, it), c.saturation, c.brightness) }
         }
         return
     }
     Column(Modifier.padding(horizontal = 20.dp)) {
         val pure = hsvColor(c.hue, 1f, 1f)
-        SliderRow(huePosition(HueControl.SLIDER, c.hue), SliderHues.map { hsvColor(it / 360f, 1f, 1f) }) { c.setHsv(hueAt(HueControl.SLIDER, it), c.saturation, c.brightness) }
-        SliderRow(c.saturation, listOf(Pc.SaturationGrey, pure)) { c.setHsv(c.hue, it, c.brightness) }
+        SliderRow(huePosition(HueControl.SLIDER, c.hue), SliderHues.map { hsvColor(it / 360f, 1f, 1f) }, label = "Hue") { c.setHsv(hueAt(HueControl.SLIDER, it), c.saturation, c.brightness) }
+        SliderRow(c.saturation, listOf(Pc.SaturationGrey, pure), label = "Saturation") { c.setHsv(c.hue, it, c.brightness) }
         SliderRow(c.brightness, BrightnessTrack) { c.setHsv(c.hue, c.saturation, it) }
     }
 }
@@ -753,20 +753,12 @@ private val BrightnessTrack = listOf(Color.Black, Color.White)
  * Touching anywhere on the row moves the pill there.
  */
 @Composable
-private fun SliderRow(value: Float, colours: List<Color>, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    Box(
-        Modifier.fillMaxWidth().height(36.dp)
-            .pointerInput(Unit) { track { x, _ -> change(x) } }
-            .drawBehind {
-                val trackH = 4.dp.toPx()
-                val y = size.height / 2f
-                drawRoundRect(Brush.horizontalGradient(oneSpace(colours)), Offset(0f, y - trackH / 2f), Size(size.width, trackH), CornerRadius(trackH / 2f))
-                val pill = Size(16.dp.toPx(), 10.dp.toPx())
-                val x = (value * size.width).coerceIn(pill.width / 2f, size.width - pill.width / 2f)
-                drawRoundRect(colourAlong(colours, value), Offset(x - pill.width / 2f, y - pill.height / 2f), pill, CornerRadius(pill.height / 2f))
-            },
-    )
+private fun SliderRow(value: Float, colours: List<Color>, label: String = "Brightness", onChange: (Float) -> Unit) {
+    val hue = label == "Hue"
+    StudioSlider(label, value, Shown.PERCENT, numberSpec = StudioNumberSpec(0.0, if (hue) 360.0 else 100.0,
+        toFraction = { if (hue) huePosition(HueControl.SLIDER, (it / 360.0).toFloat()) else (it / 100.0).toFloat() }),
+        valueText = if (hue) "${(hueAt(HueControl.SLIDER, value) * 360).roundToInt()}°" else "${(value * 100).roundToInt()}%",
+        onChange = onChange)
 }
 
 // The harmony disc is a hue/saturation wheel in Display P3 (the core's): on an sRGB canvas its
@@ -1200,17 +1192,17 @@ private fun CompactValue(c: ColorPick, group: Color = CompactGroup, field: Color
 /** One compact number slider, 216 wide: its letter, the track and the value. */
 @Composable
 private fun CompactValueRow(letter: String, value: Float, colours: List<Color>, shown: String, onChange: (Float) -> Unit) {
-    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(letter, color = Pc.PanelTitle, fontSize = 15.sp, modifier = Modifier.width(20.dp))
-        Box(Modifier.weight(1f)) { SliderRow(value, colours, onChange) }
-        Text(shown, color = Pc.PanelTitle, fontSize = 15.sp, maxLines = 1, textAlign = TextAlign.End, modifier = Modifier.width(48.dp))
-    }
+    val hi = when { shown.endsWith("°") -> 360.0; shown.endsWith("%") -> 100.0; else -> 255.0 }
+    StudioSlider(letter, value, Shown.PERCENT, valueText = shown,
+        numberSpec = StudioNumberSpec(0.0, hi, toFraction = {
+            if (hi == 360.0) huePosition(HueControl.SLIDER, (it / hi).toFloat()) else (it / hi).toFloat()
+        }), onChange = onChange)
 }
 
 @Composable
 private fun ValueGroup(modifier: Modifier = Modifier, short: Boolean = false, rows: @Composable () -> Unit) {
     // short, the rows are 51 apart instead of 53
-    if (short) ValueGroup(modifier, 151.dp, 7.dp, 3.dp, rows) else ValueGroup(modifier, 167.dp, 9.dp, 9.dp, rows)
+    if (short) ValueGroup(modifier, 185.dp, 7.dp, 3.dp, rows) else ValueGroup(modifier, 194.dp, 9.dp, 9.dp, rows)
 }
 
 /** A group of number sliders [height] tall, [gap] between rows, [top] above the first. */
@@ -1225,15 +1217,11 @@ private fun ValueGroup(modifier: Modifier = Modifier, height: Dp, gap: Dp, top: 
 /** One number slider: its letter, a track from 32 to 296 dp, and the value centred at 326.5. */
 @Composable
 private fun ValueRow(letter: String, value: Float, colours: List<Color>, shown: String, onChange: (Float) -> Unit) {
-    Box(Modifier.fillMaxWidth().height(44.dp)) {
-        Text(letter, color = Pc.PanelTitle, fontSize = 15.sp, modifier = Modifier.align(Alignment.CenterStart).padding(start = 13.dp))
-        Box(Modifier.padding(start = 32.dp).width(264.dp).align(Alignment.CenterStart)) {
-            SliderRow(value, colours, onChange)
-        }
-        Box(Modifier.align(Alignment.CenterStart).padding(start = 304.dp).width(45.dp), contentAlignment = Alignment.Center) {
-            Text(shown, color = Pc.PanelTitle, fontSize = 15.sp, maxLines = 1)
-        }
-    }
+    val hi = when { shown.endsWith("°") -> 360.0; shown.endsWith("%") -> 100.0; else -> 255.0 }
+    StudioSlider(letter, value, Shown.PERCENT, valueText = shown,
+        numberSpec = StudioNumberSpec(0.0, hi, toFraction = {
+            if (hi == 360.0) huePosition(HueControl.SLIDER, (it / hi).toFloat()) else (it / hi).toFloat()
+        }), onChange = onChange)
 }
 
 /**

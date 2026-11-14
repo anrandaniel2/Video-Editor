@@ -144,6 +144,7 @@ fun CaptionsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
             Spacer(Modifier.height(12.dp))
             SliderRow("Size", "${(l.scale * 100).roundToInt()}%") {
                 FcSlider(
+                    numericRange = 50f..200f,
                     fraction = ((l.scale - 0.5) / 1.5).toFloat(),
                     onChange = { f ->
                         val v = l.copy(scale = Math.round((0.5 + f * 1.5) * 20) / 20.0)
@@ -333,6 +334,7 @@ fun SpeechPanel(ed: EditorController, panel: Panel.Speech, close: () -> Unit, mo
         Spacer(Modifier.height(8.dp))
         SliderRow("Pace", "%.2f×".format(pace)) {
             FcSlider(
+                numericRange = .5f..2f,
                 fraction = ((pace - 0.5) / 1.5).toFloat(),
                 onChange = { f -> pace = Math.round((0.5 + f * 1.5) * 20) / 20.0 },
                 snapTo = 0.5f / 1.5f,
@@ -342,6 +344,7 @@ fun SpeechPanel(ed: EditorController, panel: Panel.Speech, close: () -> Unit, mo
         }
         SliderRow("Pitch", listOf("Lowest", "Low", "Normal", "High", "Highest")[pitch + 2]) {
             FcSlider(
+                numericRange = -2f..2f,
                 fraction = (pitch + 2) / 4f,
                 onChange = { f -> pitch = (f * 4).roundToInt() - 2 },
                 ticks = listOf(0.25f, 0.5f, 0.75f),

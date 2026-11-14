@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.procraft.ui.StudioRangeSlider as Slider
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll

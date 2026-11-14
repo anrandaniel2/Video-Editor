@@ -314,18 +314,10 @@ private fun SliderPanel(vm: CanvasViewModel, which: CanvasViewModel.SliderPanel,
             // a hairline rim, as measured (about 25 over the glass)
             .border(1.dp, Pc.GlassMenuEdge, RoundedCornerShape(22.dp)),
     ) {
-        Text(
-            androidx.compose.ui.text.buildAnnotatedString {
-                pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold))
-                append(if (size) "Size" else "Opacity")
-                pop()
-                append(" ${(value * 100f).roundToInt()}%")
-            },
-            color = SliderPanelInk,
-            fontSize = 19.sp,
-            maxLines = 1,
-            modifier = Modifier.offset(16.dp, 6.dp).height(32.dp).wrapContentHeight(Alignment.CenterVertically),
-        )
+        StudioNumericField(if (size) "Brush size" else "Brush opacity", value * 100.0, 0.0, 100.0,
+            modifier = Modifier.offset(6.dp, 4.dp).width(138.dp), suffix = "%") {
+            if (size) vm.changeSize((it / 100).toFloat()) else vm.changeOpacity((it / 100).toFloat())
+        }
         // read again as the notches change, so a value saved or taken away shows at once
         val notches = if (size) vm.sizeNotches else vm.opacityNotches
         val onNotch = androidx.compose.runtime.remember(notches, value) { vm.notchAt(size, value) != null }

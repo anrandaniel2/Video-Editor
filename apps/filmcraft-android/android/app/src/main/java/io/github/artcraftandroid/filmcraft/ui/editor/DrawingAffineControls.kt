@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.procraft.ui.StudioRangeSlider as Slider
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll

@@ -322,7 +322,7 @@ private fun GuideToolbar(vm: CanvasViewModel, modifier: Modifier, onChip: () -> 
                 OptionSlider("Thickness", g.thickness, shown(g.thickness, max = true), slider) { vm.setGuideLook(thickness = it) }
                 when (g.kind) {
                     GuideType.GRID, GuideType.ISOMETRIC ->
-                        OptionSlider("Grid size", sizeToSlider(g.size), g.sizeLabel, slider, chip = true, onChip = onChip) { vm.setGuideLook(size = sliderToSize(it)) }
+                        OptionSlider("Grid size", sizeToSlider(g.size), g.sizeLabel, slider, chip = true, onChip = onChip, numberSpec = StudioNumberSpec(10.0, 500.0, toFraction = { sizeToSlider(it.toFloat()) })) { vm.setGuideLook(size = sliderToSize(it)) }
                     GuideType.SYMMETRY -> Box(
                         Modifier.size(slider, 40.dp).clip(RoundedCornerShape(20.dp)).background(Color(0xFF303030)).tap { vm.symmetryOptionsOpen = !vm.symmetryOptionsOpen },
                         contentAlignment = Alignment.Center,
@@ -351,7 +351,7 @@ private fun GuideToolbar(vm: CanvasViewModel, modifier: Modifier, onChip: () -> 
         Row(Modifier.width(620.dp).height(54.dp), horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
             when (g.kind) {
                 GuideType.GRID, GuideType.ISOMETRIC -> {
-                    OptionSlider("Grid size", sizeToSlider(g.size), g.sizeLabel, 300.dp, chip = true, onChip = onChip) { vm.setGuideLook(size = sliderToSize(it)) }
+                    OptionSlider("Grid size", sizeToSlider(g.size), g.sizeLabel, 300.dp, chip = true, onChip = onChip, numberSpec = StudioNumberSpec(10.0, 500.0, toFraction = { sizeToSlider(it.toFloat()) })) { vm.setGuideLook(size = sliderToSize(it)) }
                     AssistedSwitch(vm, g.assisted)
                 }
                 GuideType.PERSPECTIVE -> AssistedSwitch(vm, g.assisted)

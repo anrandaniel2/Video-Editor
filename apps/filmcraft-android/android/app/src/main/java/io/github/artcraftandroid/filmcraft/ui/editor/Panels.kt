@@ -136,6 +136,9 @@ private fun SpeedPanel(ed: EditorController, c: ClipInfo, close: () -> Unit, mod
             }
         }
         FcSlider(
+            numericRange = SPEEDS.first().toFloat()..SPEEDS.last().toFloat(),
+            numberFromFraction = { TimelineMath.piecewise(it, SPEEDS) },
+            fractionFromNumber = { TimelineMath.piecewiseFraction(it, SPEEDS) },
             fraction = TimelineMath.piecewiseFraction(speed, SPEEDS),
             onChange = { f -> speed = Math.round(TimelineMath.piecewise(f, SPEEDS) * 100) / 100.0 },
             onDone = { ed.setSpeed(speed, true) },
@@ -175,6 +178,7 @@ private fun VolumePanel(ed: EditorController, c: ClipInfo, close: () -> Unit, mo
         Text("${Math.round(v * 100)}%", style = FcType.Value, color = Fc.Secondary, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding))
         Spacer(Modifier.height(4.5.dp))
         FcSlider(
+            numericRange = 0f..200f,
             fraction = (v / 2.0).toFloat(),
             onChange = { f -> v = Math.round(f * 200) / 100.0; ed.setVolume(v) },
             enabled = !c.muted,
@@ -197,6 +201,7 @@ private fun FadePanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modi
         Spacer(Modifier.height(5.dp))
         SliderRow("Fade in", TimelineMath.seconds1(fadeIn)) {
             FcSlider(
+                numericRange = 0f..(max.toFloat() / TPS),
                 fraction = fadeIn.toFloat() / max,
                 onChange = { f -> fadeIn = (f * max / tenth).toLong() * tenth },
                 onDone = { ed.setFades(fadeIn, fadeOut) },
@@ -207,6 +212,7 @@ private fun FadePanel(ed: EditorController, c: ClipInfo, close: () -> Unit, modi
         Spacer(Modifier.height(40.dp))
         SliderRow("Fade out", TimelineMath.seconds1(fadeOut)) {
             FcSlider(
+                numericRange = 0f..(max.toFloat() / TPS),
                 fraction = fadeOut.toFloat() / max,
                 onChange = { f -> fadeOut = (f * max / tenth).toLong() * tenth },
                 onDone = { ed.setFades(fadeIn, fadeOut) },
@@ -314,6 +320,7 @@ private fun LookPanel(ed: EditorController, c: ClipInfo, filters: Boolean, close
             val max = if (filters) 200.0 else 100.0
             SliderRow("Intensity", "${Math.round(amount)}") {
                 FcSlider(
+                    numericRange = 0f..max.toFloat(),
                     fraction = (amount / max).toFloat(),
                     onChange = { f -> amount = Math.round(f * max).toDouble(); apply(current, amount, true) },
                     snapTo = if (filters) 0.5f else null,
@@ -405,6 +412,7 @@ private fun TransitionPanel(ed: EditorController, panel: Panel.Transitions, clos
             Spacer(Modifier.height(12.dp))
             SliderRow("Duration", "%.1fs".format(seconds)) {
                 FcSlider(
+                    numericRange = .1f..max.toFloat(),
                     fraction = ((seconds - 0.1) / (max - 0.1).coerceAtLeast(0.01)).toFloat(),
                     onChange = { f -> seconds = Math.round((0.1 + f * (max - 0.1)) * 10) / 10.0 },
                     onDone = { ed.setTransitionDuration(current.id, seconds) },

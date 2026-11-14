@@ -245,68 +245,32 @@ fun FcSlider(
     snapTo: Float? = null,
     description: String = "",
     tag: String? = null,
+    numericRange: ClosedFloatingPointRange<Float> = 0f..100f,
+    numberFromFraction: ((Float) -> Double)? = null,
+    fractionFromNumber: ((Double) -> Float)? = null,
 ) {
-    val safeFraction = fraction.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+    val safe = fraction.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+    val row = LocalSliderRow.current
+    val min = numericRange.start.toDouble(); val max = numericRange.endInclusive.toDouble()
     val change by rememberUpdatedState(onChange)
     val done by rememberUpdatedState(onDone)
-    val haptic = LocalHapticFeedback.current
-    var snapped by remember { mutableStateOf(false) }
-    Canvas(
-        modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .then(if (tag != null) Modifier.testTag(tag) else Modifier)
-            .semantics {
-                contentDescription = description
-                progressBarRangeInfo = ProgressBarRangeInfo(safeFraction, 0f..1f)
-                if (enabled) setProgress { v -> change(v.coerceIn(0f, 1f)); done(); true }
-            }
-            .pointerInput(enabled) {
-                if (!enabled) return@pointerInput
-                val pad = 10.dp.toPx()
-                fun at(x: Float): Float {
-                    val f = ((x - pad) / (size.width - 2 * pad).coerceAtLeast(1f)).coerceIn(0f, 1f)
-                    val s = snapTo
-                    if (s != null && kotlin.math.abs(f - s) < 0.015f) {
-                        if (!snapped) haptic.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                        snapped = true
-                        return s
-                    }
-                    snapped = false
-                    return f
-                }
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    change(at(down.position.x))
-                    horizontalDrag(down.id) { c ->
-                        c.consume()
-                        change(at(c.position.x))
-                    }
-                    done()
-                }
-            },
-    ) {
-        val pad = 10.dp.toPx()
-        val y = size.height / 2f
-        val track = 4.dp.toPx()
-        val w = (size.width - 2 * pad).coerceAtLeast(0f)
-        val x = pad + w * safeFraction
-        val r = CornerRadius(2.dp.toPx())
-        when (look) {
-            SliderLook.Standard -> {
-                drawRoundRect(if (enabled) Fc.SliderOff else Fc.SliderDisabled, Offset(pad, y - track / 2), Size(w, track), r)
-                if (enabled) drawRoundRect(Fc.SliderOn, Offset(pad, y - track / 2), Size(x - pad, track), r)
-                for (t in ticks) {
-                    val tx = pad + w * t
-                    drawRect(if (x >= tx) Fc.SliderOn else Fc.SliderOff, Offset(tx - 0.5.dp.toPx(), y - track / 2), Size(1.dp.toPx(), track))
-                }
-                drawRoundRect(if (enabled) Color.White else Fc.SliderOff, Offset(x - 6.dp.toPx(), y - 12.dp.toPx()), Size(12.dp.toPx(), 24.dp.toPx()), CornerRadius(4.dp.toPx()))
-            }
-            SliderLook.Opacity -> {
-                drawRoundRect(Brush.horizontalGradient(listOf(Color.Black, Fc.Title), startX = pad, endX = pad + w), Offset(pad, y - track / 2), Size(w, track), r)
-                drawCircle(Fc.Chip, 10.dp.toPx(), Offset(x, y))
-                drawCircle(Fc.Divider, 9.dp.toPx(), Offset(x, y), style = Stroke(2.dp.toPx()))
-            }
+    val number = numberFromFraction?.invoke(safe) ?: (min + safe * (max - min))
+    val shown = row?.value?.takeIf { it.isNotBlank() } ?: ("%.3f".format(java.util.Locale.ROOT, number).trimEnd('0').trimEnd('.'))
+    Box(modifier.then(if (tag != null) Modifier.testTag(tag) else Modifier).semantics {
+        contentDescription = description
+        progressBarRangeInfo = ProgressBarRangeInfo(safe, 0f..1f)
+        if (enabled) setProgress { v -> change(v.coerceIn(0f, 1f)); done(); true }
+    }) {
+        io.github.artcraftandroid.procraft.ui.StudioSlider(
+            label = row?.label ?: description.ifBlank { "Value" }, value = safe,
+            shown = io.github.artcraftandroid.procraft.ui.Shown.PERCENT, enabled = enabled,
+            valueText = shown, onLabelClick = row?.onLabelClick,
+            numberSpec = io.github.artcraftandroid.procraft.ui.StudioNumberSpec(min, max, toFraction = {
+                fractionFromNumber?.invoke(it) ?: ((it - min) / (max - min)).toFloat()
+            }), onDone = { done() },
+        ) { f ->
+            val snap = snapTo
+            change(if (snap != null && kotlin.math.abs(f - snap) < .015f) snap else f)
         }
     }
 }
@@ -451,16 +415,13 @@ fun PresetTile(name: String, selected: Boolean, onClick: () -> Unit, tag: String
 @Composable
 fun SliderRow(label: String, value: String, onLabelClick: (() -> Unit)? = null, selected: Boolean = false, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)
-        .clip(RoundedCornerShape(18.dp)).editorCard(18.dp).padding(horizontal = 14.dp, vertical = 10.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = FcType.Label, color = if (selected) Fc.AccentLight else Fc.Body,
-                modifier = Modifier.weight(1f).then(if (onLabelClick != null) Modifier.clickable(onClick = onLabelClick).padding(vertical = 8.dp) else Modifier))
-            Text(value, style = FcType.Value, color = Fc.Body,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Fc.Black).padding(horizontal = 10.dp, vertical = 5.dp))
-        }
-        content()
+        .editorCard(18.dp).then(if (selected) Modifier.border(1.dp, Fc.Accent, RoundedCornerShape(18.dp)) else Modifier).padding(horizontal = 4.dp, vertical = 6.dp)) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalSliderRow provides SliderRowInfo(label, value, onLabelClick)) { content() }
     }
 }
+
+private data class SliderRowInfo(val label: String, val value: String, val onLabelClick: (() -> Unit)?)
+private val LocalSliderRow = androidx.compose.runtime.staticCompositionLocalOf<SliderRowInfo?> { null }
 
 /** Shared by the video editor and drawing workspace so export controls remain identical. */
 @Composable

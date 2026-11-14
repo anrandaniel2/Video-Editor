@@ -189,60 +189,16 @@ private fun SwitchRow(label: String, on: Boolean, onChange: (Boolean) -> Unit) {
 /** A number typed into a capsule, its unit after it; done as it is typed. */
 @Composable
 private fun NumberField(value: String, unit: String?, modifier: Modifier, onChange: (String) -> Unit) {
-    var text by remember(value) { mutableStateOf(value) }
-    val style = TextStyle(color = SettingsInk, fontSize = 17.sp, textAlign = TextAlign.Center)
-    // as wide as its text (and the cursor), so the number and unit sit together in the middle
-    val measurer = rememberTextMeasurer()
-    val textWidth = with(LocalDensity.current) { measurer.measure(text, style).size.width.toDp() } + 2.dp
-    Row(modifier.height(40.dp).clip(CircleShape).background(FieldFill).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        BasicTextField(
-            text,
-            { t ->
-                text = t.filter { it.isDigit() || it == '.' }.take(7)
-                onChange(text)
-            },
-            singleLine = true,
-            textStyle = style,
-            cursorBrush = SolidColor(Color.White),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.width(textWidth),
-        )
-        if (unit != null) Text(" $unit", color = SettingsInk, fontSize = 17.sp)
-    }
+    StudioNumericField("Crop " + (unit ?: "value"), value.toDoubleOrNull() ?: 0.0, 0.0, 100000.0,
+        modifier = modifier, suffix = unit?.let { " $it" } ?: "") { onChange(it.toString()) }
 }
 
 /** The turn, -180 to 180 degrees, dragged anywhere along the bar; a tick marks no turn. */
 @Composable
 private fun RotationSlider(radians: Float, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
     val degrees = Math.toDegrees(radians.toDouble()).toFloat()
-    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-        Row {
-            Text("Rotation", color = SettingsInk, fontSize = 17.sp, modifier = Modifier.weight(1f))
-            Text("%.1f°".format(degrees), color = SettingsInk, fontSize = 17.sp)
-        }
-        Box(
-            Modifier.fillMaxWidth().height(22.dp).pointerInput(Unit) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    fun at(x: Float) = Math.toRadians(((x / size.width).coerceIn(0f, 1f) * 360f - 180f).let { if (abs(it) < 2f) 0f else it }.toDouble()).toFloat()
-                    change(at(down.position.x))
-                    while (true) {
-                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!c.pressed) break
-                        change(at(c.position.x))
-                        c.consume()
-                    }
-                }
-            }.drawBehind {
-                val y = size.height / 2f
-                val h = 3.dp.toPx()
-                drawRoundRect(if (Pc.light) Color(0xFFCFCFD1) else Color(0xFF555555), Offset(0f, y - h / 2f), Size(size.width, h), CornerRadius(h / 2f))
-                drawLine(Muted, Offset(size.width / 2f, y - 6.dp.toPx()), Offset(size.width / 2f, y + 6.dp.toPx()), 1.dp.toPx())
-                val knob = Size(26.dp.toPx(), 15.dp.toPx())
-                val x = (((degrees + 180f) / 360f).coerceIn(0f, 1f) * size.width).coerceIn(knob.width / 2f, size.width - knob.width / 2f)
-                drawRoundRect(Color.White, Offset(x - knob.width / 2f, y - knob.height / 2f), knob, CornerRadius(knob.height / 2f))
-            },
-        )
+    StudioSlider("Rotation", (degrees / 180f).coerceIn(-1f, 1f), Shown.BOTH,
+        valueText = "%.1f°".format(degrees), numberSpec = StudioNumberSpec(-180.0, 180.0)) {
+        onChange(Math.toRadians((it * 180f).toDouble()).toFloat())
     }
 }

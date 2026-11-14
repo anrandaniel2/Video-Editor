@@ -1117,31 +1117,7 @@ fun PadMenu(vm: CanvasViewModel, width: Dp) {
 /** The pad menu's thin slider: blue up to a white knob, jumping to the touch. */
 @Composable
 private fun PadSizeSlider(value: Float, onChange: (Float) -> Unit) {
-    val change by rememberUpdatedState(onChange)
-    Box(
-        Modifier.fillMaxWidth().height(28.dp).padding(horizontal = 10.dp).pointerInput(Unit) {
-            awaitEachGesture {
-                val down = awaitFirstDown()
-                down.consume()
-                change((down.position.x / size.width).coerceIn(0f, 1f))
-                while (true) {
-                    val ev = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                    if (!ev.pressed) break
-                    change((ev.position.x / size.width).coerceIn(0f, 1f))
-                    ev.consume()
-                }
-            }
-        }.drawBehind {
-            val y = size.height / 2f
-            val x = size.width * value.coerceIn(0f, 1f)
-            drawLine(Color(0xFFA9A9A9), Offset(0f, y), Offset(size.width, y), 3.dp.toPx(), cap = StrokeCap.Round)
-            drawLine(Pc.Accent, Offset(0f, y), Offset(x, y), 3.dp.toPx(), cap = StrokeCap.Round)
-            val knob = Size(28.dp.toPx(), 17.dp.toPx())
-            val kx = x.coerceIn(knob.width / 2, size.width - knob.width / 2)
-            drawRoundRect(Color(0x33000000), Offset(kx - knob.width / 2, y - knob.height / 2 + 1.dp.toPx()), knob, CornerRadius(knob.height / 2))
-            drawRoundRect(Color.White, Offset(kx - knob.width / 2, y - knob.height / 2), knob, CornerRadius(knob.height / 2))
-        },
-    )
+    StudioSlider("Preview size", value, Shown.PERCENT, onChange = onChange)
 }
 
 /**
@@ -1178,13 +1154,17 @@ private fun keypadExtras(vm: CanvasViewModel, key: String): KeypadExtras? {
 
 /** A labelled slider with its value in a pill: blue up to the knob, or out from the middle both ways. */
 @Composable
-internal fun StudioSlider(
+fun StudioSlider(
     label: String,
     value: Float,
     shown: Shown,
     most: Float = 16f,
     enabled: Boolean = true,
     extras: KeypadExtras? = null,
+    numberSpec: StudioNumberSpec? = null,
+    valueText: String? = null,
+    onLabelClick: (() -> Unit)? = null,
+    onDone: () -> Unit = {},
     onChange: (Float) -> Unit,
 ) {
     val change by rememberUpdatedState(onChange)
@@ -1192,12 +1172,13 @@ internal fun StudioSlider(
     val both = shown == Shown.BOTH || shown == Shown.FOLLOW || shown == Shown.GRADE
     // a tap on the value types it on a keypad beside it (the pill blue meanwhile)
     val typed = typedNumber(shown, most)
+    val done by rememberUpdatedState(onDone)
     var typing by remember { mutableStateOf(false) }
     var pill by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     Column(Modifier.fillMaxWidth().height(55.dp)) {
         // the name and value 2 below the top half's middle
         Row(Modifier.offset(y = 2.dp).fillMaxWidth().height(28.dp).padding(start = 10.dp, end = 3.5.dp), verticalAlignment = Alignment.CenterVertically) {
-            FittedLabel(label, Modifier.weight(1f).padding(end = 12.dp))
+            FittedLabel(label, Modifier.weight(1f).padding(end = 12.dp).then(if (onLabelClick != null) Modifier.tap(onClick = onLabelClick) else Modifier))
             // as wide as its words need, 13 either side, and never narrower than 73
             Box(
                 Modifier.height(28.dp).widthIn(min = 73.dp).onGloballyPositioned { pill = it.boundsInWindow() }.clip(RoundedCornerShape(14.dp))
@@ -1206,8 +1187,8 @@ internal fun StudioSlider(
                     .padding(horizontal = 13.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(shownValue(value, shown, most), color = if (typing) Color.White else if (enabled) StudioLabel else StudioValueOff, fontSize = 16.sp, maxLines = 1, softWrap = false)
-                if (typing) SliderKeypad(label, pill, typed, { change(it) }, extras) { typing = false }
+                Text(valueText ?: shownValue(value, shown, most), color = if (typing) Color.White else if (enabled) StudioLabel else StudioValueOff, fontSize = 16.sp, maxLines = 1, softWrap = false)
+                if (typing) SliderKeypad(label, pill, typed, { change(if (numberSpec != null && both) it * 2f - 1f else it) }, extras, numberSpec) { typing = false; done() }
             }
         }
         Box(
@@ -1218,7 +1199,7 @@ internal fun StudioSlider(
                     down.consume()
                     var last = down.position.x
                     var v = current
-                    while (true) {
+                    try { while (true) {
                         val ev = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
                         if (!ev.pressed) break
                         // relative: the knob follows the drag, as far as it travels
@@ -1228,7 +1209,7 @@ internal fun StudioSlider(
                         last = ev.position.x
                         change(v)
                         ev.consume()
-                    }
+                    } } finally { done() }
                 }
             }.drawBehind {
                 val y = size.height / 2f
@@ -1306,6 +1287,7 @@ private fun SliderKeypad(
     typed: Typed,
     onValue: (Float) -> Unit,
     extras: KeypadExtras?,
+    numberSpec: StudioNumberSpec? = null,
     onDismiss: () -> Unit,
 ) {
     // tabs over the keys when the slider has a pressure curve or a tilt of its own
@@ -1318,6 +1300,13 @@ private fun SliderKeypad(
     val height = keypadHeight(pages.size)
     var text by remember { mutableStateOf("") }
     fun type(next: String) {
+        if (numberSpec != null) {
+            if (!Regex("-?[0-9]*(\\.[0-9]*)?").matches(next) || next.length > 18) return
+            text = next
+            val n = next.toDoubleOrNull() ?: return
+            if (n.isFinite() && n in numberSpec.min..numberSpec.max) onValue(numberSpec.toFraction(n).coerceIn(0f, 1f))
+            return
+        }
         // a sign alone waits for its digits
         if (next == "-") {
             text = next
@@ -1334,15 +1323,30 @@ private fun SliderKeypad(
         val top = (middle - height / 2).coerceIn(2.dp, (screen - height - 2.dp).coerceAtLeast(2.dp))
         top to (middle - top)
     }
-    // the arrow's tip a little into the pill, the body 3 past its end
-    val offset = with(density) { androidx.compose.ui.unit.IntOffset((pill.width - (Pc.ArrowHeight - 3.dp).toPx()).roundToInt(), (top.toPx() - pill.top).roundToInt()) }
+    val root = androidx.compose.ui.platform.LocalView.current.rootView
+    val leftSide = with(density) { pill.right + KeypadWidth.toPx() + 16.dp.toPx() > root.width }
+    val position = remember(pill, density) { object : androidx.compose.ui.window.PopupPositionProvider {
+        override fun calculatePosition(anchorBounds: androidx.compose.ui.unit.IntRect,
+            windowSize: androidx.compose.ui.unit.IntSize, layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+            popupContentSize: androidx.compose.ui.unit.IntSize): androidx.compose.ui.unit.IntOffset {
+            val x = if (leftSide) anchorBounds.left - popupContentSize.width else anchorBounds.right
+            val y = anchorBounds.top + anchorBounds.height / 2 - popupContentSize.height / 2
+            return androidx.compose.ui.unit.IntOffset(x.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+                y.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)))
+        }
+    } }
     PcPopup(
-        offset = offset,
-        onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.PopupProperties(focusable = true, clippingEnabled = false),
+        popupPositionProvider = position,
+        onDismissRequest = {
+            if (numberSpec != null) text.toDoubleOrNull()?.takeIf { it.isFinite() }?.let {
+                onValue(numberSpec.toFraction(it.coerceIn(numberSpec.min, numberSpec.max)).coerceIn(0f, 1f))
+            }
+            onDismiss()
+        },
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true),
     ) {
-        Popover(KeypadWidth, arrowAt, Modifier.height(height), fill = KeypadFill, corner = 22.dp, side = ArrowSide.LEFT) {
-            Text(title, color = KeypadInk, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(start = 25.dp, top = 19.dp).height(if (pages.size > 1) 43.dp else 51.dp))
+        Popover(KeypadWidth, arrowAt, Modifier.height(height), fill = KeypadFill, corner = 22.dp, side = if (leftSide) ArrowSide.RIGHT else ArrowSide.LEFT) {
+            Text(if (numberSpec != null && text.isNotEmpty()) "$title: $text" else title, color = KeypadInk, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(start = 25.dp, top = 19.dp).height(if (pages.size > 1) 43.dp else 51.dp))
             if (pages.size > 1) {
                 KeypadTabRow(pages, page) { page = it }
                 Spacer(Modifier.height(12.dp))
@@ -1354,13 +1358,20 @@ private fun SliderKeypad(
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) { for (k in row) KeypadKey(k, 81.dp, keyHeight) { type(text + k) } }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (typed.signed) {
+                        if (numberSpec != null) {
+                            val signed = numberSpec.min < 0.0
+                            val keyWidth = if (signed && numberSpec.decimals) 59.5.dp else 81.dp
+                            if (signed) KeypadKey("-", keyWidth, keyHeight) { type(if (text.startsWith("-")) text.drop(1) else "-$text") }
+                            KeypadKey("0", keyWidth, keyHeight) { type(text + "0") }
+                            if (numberSpec.decimals) KeypadKey(".", keyWidth, keyHeight) { type(if (text.isEmpty() || text == "-") text + "0." else text + ".") }
+                            KeypadKey("⌫", keyWidth, keyHeight) { type(text.dropLast(1)) }
+                        } else if (typed.signed) {
                             KeypadKey("-", 81.dp, keyHeight) { type(if (text.startsWith("-")) text.drop(1) else "-$text") }
                             KeypadKey("0", 81.dp, keyHeight) { type(text + "0") }
                         } else {
                             KeypadKey("0", 166.dp, keyHeight) { type(text + "0") }
                         }
-                        KeypadKey("⌫", 81.dp, keyHeight) { type(text.dropLast(1)) }
+                        if (numberSpec == null) KeypadKey("⌫", 81.dp, keyHeight) { type(text.dropLast(1)) }
                     }
                 }
                 KeypadPage.PRESSURE -> if (extras != null) KeypadPressure(extras)
@@ -1452,12 +1463,12 @@ private fun KeypadTilt(extras: KeypadExtras) {
 }
 
 @Composable
-private fun KeypadKey(label: String, width: Dp, height: Dp = 66.dp, onClick: () -> Unit) {
+internal fun KeypadKey(label: String, width: Dp, height: Dp = 66.dp, onClick: () -> Unit) {
     Box(Modifier.size(width, height).clip(RoundedCornerShape(12.dp)).background(KeypadKey).tap(onClick = onClick), contentAlignment = Alignment.Center) {
         if (label == "⌫") {
             Icon(PcIcons.Backspace, contentDescription = "Back space", tint = KeypadInk, modifier = Modifier.size(26.dp))
         } else {
-            Text(label, color = KeypadInk, fontSize = 29.sp)
+            Text(label, color = KeypadInk, fontSize = if (label.length > 2) 15.sp else 29.sp)
         }
     }
 }
@@ -1809,3 +1820,52 @@ private val NodeMenuFill = Color(0xFF101010)
 private val NodeMenuHalo = 16.dp
 private val NodeMenuWidth = 70.dp
 private val NodeMenuRow = 36.dp
+
+/** Numeric ranges are in the field's real units, not the normalized slider's fractions. */
+class StudioNumberSpec(
+    val min: Double,
+    val max: Double,
+    val decimals: Boolean = true,
+    val toFraction: (Double) -> Float = { ((it - min) / (max - min).coerceAtLeast(1e-12)).toFloat() },
+)
+
+@Composable
+fun StudioNumericField(
+    label: String, value: Double, min: Double, max: Double,
+    modifier: Modifier = Modifier, decimals: Boolean = true, enabled: Boolean = true,
+    suffix: String = "", onDone: () -> Unit = {}, onChange: (Double) -> Unit,
+) {
+    var typing by remember { mutableStateOf(false) }
+    var bounds by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
+    val change by rememberUpdatedState(onChange)
+    val done by rememberUpdatedState(onDone)
+    val number = if (decimals) String.format(java.util.Locale.ROOT, "%.3f", value).trimEnd('0').trimEnd('.') else value.roundToInt().toString()
+    Box(modifier.height(36.dp).widthIn(min = 73.dp).onGloballyPositioned { bounds = it.boundsInWindow() }
+        .clip(RoundedCornerShape(14.dp)).background(if (typing) Pc.Accent else StudioPill)
+        .then(if (enabled) Modifier.tap { typing = true } else Modifier).padding(horizontal = 13.dp), contentAlignment = Alignment.Center) {
+        Text(number + suffix, color = if (enabled) StudioLabel else StudioValueOff, fontSize = 16.sp)
+        if (typing) SliderKeypad(label, bounds, Typed(100, min < 0) { it / 100f },
+            { change(min + it * (max - min)) }, null, StudioNumberSpec(min, max, decimals)) { typing = false; done() }
+    }
+}
+
+/** Material-compatible adapter for FilmCraft's remaining scalar settings. */
+@Composable
+fun StudioRangeSlider(
+    value: Float, onValueChange: (Float) -> Unit, modifier: Modifier = Modifier,
+    enabled: Boolean = true, valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    steps: Int = 0, onValueChangeFinished: (() -> Unit)? = null,
+) {
+    val lo = valueRange.start.toDouble(); val hi = valueRange.endInclusive.toDouble()
+    if (!lo.isFinite() || !hi.isFinite() || hi <= lo) return
+    val fraction = ((value - lo) / (hi - lo)).toFloat().coerceIn(0f, 1f)
+    Box(modifier) {
+        StudioSlider("Value", fraction, Shown.PERCENT, enabled = enabled,
+            numberSpec = StudioNumberSpec(lo, hi),
+            valueText = String.format(java.util.Locale.ROOT, "%.3f", value).trimEnd('0').trimEnd('.'),
+            onDone = { onValueChangeFinished?.invoke() }) { f ->
+            val t = if (steps > 0) (f * (steps + 1)).roundToInt().toFloat() / (steps + 1) else f
+            onValueChange((lo + t * (hi - lo)).toFloat())
+        }
+    }
+}

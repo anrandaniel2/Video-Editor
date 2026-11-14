@@ -221,7 +221,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                                 }
                                 if (exportFormat == DrawingFormat.JPEG || exportFormat == DrawingFormat.AVIF) {
                                     Text("Quality · $exportQuality%")
-                                    io.github.artcraftandroid.filmcraft.ui.FcSlider((exportQuality - 1) / 99f, { exportQuality = (it * 99 + 1).toInt() }, description = "Image quality")
+                                    io.github.artcraftandroid.filmcraft.ui.FcSlider((exportQuality - 1) / 99f, { exportQuality = (it * 99 + 1).toInt() }, description = "Image quality", numericRange = 1f..100f)
                                 } else Text("Lossless · full quality. PNG and JPEG XL preserve transparency.")
                                 if (exportFormat == DrawingFormat.JPEG) Text("JPEG uses a white background for transparent areas.")
                             }

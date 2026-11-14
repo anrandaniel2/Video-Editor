@@ -599,13 +599,9 @@ private fun SwitchRow(label: String, checked: Boolean, onToggle: () -> Unit) {
 
 @Composable
 internal fun SliderRow(label: String, value: Float, shown: String, onChange: (Float) -> Unit) {
-    Column(Modifier.fillMaxWidth().height(59.dp)) {
-        Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 13.dp, top = 9.dp)) {
-            MenuLabel(label, modifier = Modifier.weight(1f))
-            MenuLabel(shown)
-        }
-        MenuSlider(value, onChange, Modifier.padding(top = 9.dp))
-    }
+    val lo = if (label == "Distance") SNAP_DISTANCE_MIN.toDouble() else 0.0
+    val hi = if (label == "Distance") SNAP_DISTANCE_MAX.toDouble() else SNAP_VELOCITY_MAX.toDouble()
+    StudioSlider(label, value, Shown.PERCENT, valueText = shown, numberSpec = StudioNumberSpec(lo, hi), onChange = onChange)
 }
 
 /** A thin slider: blue up to a small white knob, grey after it. */

@@ -293,13 +293,9 @@ private fun RepeatPanel(
 
 @Composable
 private fun RepeatSlider(label: String, value: String, at: Float, onChange: (Float) -> Unit) {
-    Column(Modifier.width(301.dp).height(55.dp)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-            Text(label, color = RepeatLabel, fontSize = 15.sp, maxLines = 1, modifier = Modifier.weight(1f))
-            Text(value, color = RepeatLabel, fontSize = 15.sp, maxLines = 1)
-        }
-        SimpleSlider(at, onChange, Modifier.padding(horizontal = 16.dp))
-    }
+    val (lo, hi) = when (label) { "Grain scale" -> 1.0 to 4.0; "Rotate" -> 0.0 to 360.0; else -> 0.0 to 100.0 }
+    Box(Modifier.width(301.dp)) { StudioSlider(label, at, Shown.PERCENT, valueText = value,
+        numberSpec = StudioNumberSpec(lo, hi), onChange = onChange) }
 }
 
 @Composable
