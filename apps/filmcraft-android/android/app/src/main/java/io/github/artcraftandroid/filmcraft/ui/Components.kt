@@ -450,11 +450,12 @@ fun PresetTile(name: String, selected: Boolean, onClick: () -> Unit, tag: String
 
 /** A labelled slider row: name and value over the slider. */
 @Composable
-fun SliderRow(label: String, value: String, content: @Composable () -> Unit) {
+fun SliderRow(label: String, value: String, onLabelClick: (() -> Unit)? = null, selected: Boolean = false, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)
         .clip(RoundedCornerShape(18.dp)).background(Fc.Raised).padding(horizontal = 14.dp, vertical = 10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = FcType.Label, color = Fc.Body, modifier = Modifier.weight(1f))
+            Text(label, style = FcType.Label, color = if (selected) Fc.AccentLight else Fc.Body,
+                modifier = Modifier.weight(1f).then(if (onLabelClick != null) Modifier.clickable(onClick = onLabelClick).padding(vertical = 8.dp) else Modifier))
             Text(value, style = FcType.Value, color = Fc.Body,
                 modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Fc.Black).padding(horizontal = 10.dp, vertical = 5.dp))
         }

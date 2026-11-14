@@ -101,13 +101,17 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
        }
        if (clip != null && lane != null) {
         lanes.groupBy { it.group }.forEach { (group, properties) ->
-            item(key = "group:$group") { Text(group, style=FcType.Header, color=Fc.Title, modifier=Modifier.padding(16.dp)) }
+            if (properties.size != 1 || !properties.single().label.equals(group, ignoreCase = true)) {
+                item(key = "group:$group") { Text(group, style=FcType.Header, color=Fc.Title, modifier=Modifier.padding(16.dp)) }
+            }
             items(properties, key = { "property:${it.id}" }) { item ->
                 Column(Modifier.fillMaxWidth().padding(horizontal=12.dp, vertical=4.dp).background(Fc.Raised, androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).padding(vertical=10.dp)) {
-                    SelectChip(item.label + if (item.animated) " ◆" else "", item.id==lane.id, {laneId=item.id;selected=null}, tag="keyframes_property_${item.id}")
+                    val scalar = item.value is Number && (item.kind as? JSONObject)?.optJSONArray("Choice") == null
+                    if (!scalar) SelectChip(item.label + if (item.animated) " ◆" else "", item.id==lane.id, {laneId=item.id;selected=null}, tag="keyframes_property_${item.id}")
                     val selectedKey=if (item.id==lane.id) key else null
                     ValueEditor(selectedKey?.value ?: item.value,item.kind,item.param=="path" && item.mask!=null,item.label,item.id,
                         (ed.timeline?.width?.toDouble() ?: 1920.0) to (ed.timeline?.height?.toDouble() ?: 1080.0),
+                        selectProperty={laneId=item.id;selected=null}, propertySelected=item.id==lane.id, animated=item.animated,
                         editPath={if(selectedKey!=null) ed.seek(selectedKey.timeline,draft=false);ed.panel=Panel.Mask},
                         save={value,merge ->
                             val body=item.address(clip.id).put("value",value)
@@ -128,7 +132,7 @@ private const val TICKS = 254016000000.0
 private fun formatSeconds(seconds: Double) = "%.2f s".format(seconds)
 
 @Composable
-private fun AnimationSlider(label:String,value:Double,min:Double,max:Double,tag:String,save:(Double,String)->Unit) {
+private fun AnimationSlider(label:String,value:Double,min:Double,max:Double,tag:String,onTitleClick:(() -> Unit)? = null, selected:Boolean = false, save:(Double,String)->Unit) {
     var v by remember(tag) { mutableDoubleStateOf(value) }
     var dragging by remember(tag) { mutableStateOf(false) }
     var token by remember(tag) { mutableStateOf(java.util.UUID.randomUUID().toString()) }
@@ -138,7 +142,7 @@ private fun AnimationSlider(label:String,value:Double,min:Double,max:Double,tag:
     val safeValue = value.takeIf { it.isFinite() } ?: 0.0
     val lo=minOf(min.takeIf { it.isFinite() } ?: -1000.0,safeValue)
     val hi=maxOf(max.takeIf { it.isFinite() } ?: 1000.0,safeValue,lo+0.01)
-    SliderRow(label,"${kotlin.math.round(v*100)/100}") {
+    SliderRow(label,"${kotlin.math.round(v*100)/100}", onLabelClick = onTitleClick, selected = selected) {
         FcSlider(fraction=(((v.takeIf { it.isFinite() } ?: safeValue)-lo)/(hi-lo)).toFloat().coerceIn(0f,1f),onChange={f ->
             dragging=true;v=lo+f*(hi-lo);save(v,token)
         },onDone={dragging=false;token=java.util.UUID.randomUUID().toString()},description=label,tag="keyframes_slider_$tag")
@@ -146,7 +150,7 @@ private fun AnimationSlider(label:String,value:Double,min:Double,max:Double,tag:
 }
 
 @Composable
-private fun ValueEditor(value: Any, kind: Any?, path: Boolean, label:String, id:String, frame:Pair<Double,Double>, editPath: () -> Unit, save: (Any,String?) -> Unit) {
+private fun ValueEditor(value: Any, kind: Any?, path: Boolean, label:String, id:String, frame:Pair<Double,Double>, selectProperty: () -> Unit, propertySelected: Boolean, animated: Boolean, editPath: () -> Unit, save: (Any,String?) -> Unit) {
     if(path) {SelectChip("Edit mask path in preview",false,editPath,tag="keyframes_edit_path_$id");return}
     val options=(kind as? JSONObject)?.optJSONArray("Choice")
     if(options!=null) {
@@ -162,14 +166,14 @@ private fun ValueEditor(value: Any, kind: Any?, path: Boolean, label:String, id:
         val range=(kind as? JSONObject)?.optJSONObject("Float")
         val min=range?.optDouble("soft_min",0.0) ?: if(kind=="Angle") -360.0 else -1000.0
         val max=range?.optDouble("soft_max",100.0) ?: if(kind=="Angle") 360.0 else 1000.0
-        AnimationSlider(label,value.toDouble(),min,max,id) {v,token->save(v,token)}
+        AnimationSlider(label + if (animated) " ◆" else "",value.toDouble(),min,max,id,onTitleClick=selectProperty,selected=propertySelected) {v,token->save(v,token)}
     } else if(value is JSONArray && value.length() in listOf(2,4) && value.opt(0) is Number) {
         val color=value.length()==4
         val wheel=kind=="Wheel"
         (0 until value.length()).forEach {i ->
             val component=if(color) listOf("Red","Green","Blue","Alpha")[i] else listOf("X","Y")[i]
             val dimension=if(i==0) frame.first else frame.second
-            AnimationSlider("$label · $component",value.optDouble(i),if(color) 0.0 else if(wheel) -1.0 else -dimension,
+            AnimationSlider(component,value.optDouble(i),if(color) 0.0 else if(wheel) -1.0 else -dimension,
                 if(color||wheel) 1.0 else dimension*2,"${id}_$i") {v,token ->
                 val next=JSONArray(value.toString()).put(i,v);save(next,token)
             }
@@ -177,7 +181,7 @@ private fun ValueEditor(value: Any, kind: Any?, path: Boolean, label:String, id:
     } else if(value is String) {
         // Text content isn't a numeric value; numeric and color controls never use input boxes.
         var text by remember(id,value) {mutableStateOf(value)}
-        OutlinedTextField(value=text,onValueChange={text=it},label={Text(label)},modifier=Modifier.fillMaxWidth().padding(horizontal=12.dp))
+        OutlinedTextField(value=text,onValueChange={text=it},modifier=Modifier.fillMaxWidth().padding(horizontal=12.dp))
         SelectChip("Apply text",false,{save(text,null)},tag="keyframes_apply_text_$id")
     } else {
         Text("Edit this shape in its preview tool.",style=FcType.Caption,color=Fc.Detail,modifier=Modifier.padding(12.dp))
