@@ -21,8 +21,9 @@ on the module, so the release workflow's `assembleRelease` is what proves it com
   preview as straight sRGB RGBA8.
 - `android/bindgen` — new: `uniffi-bindgen` for the bridge, the same release as FilmCraft's own
   bindings (`0.32.2`), so the generated Kotlin matches the Kotlin it is compiled against.
-- `assets/fonts` — the four UI fonts `crates/text`'s build script deflates into the library
-  (`fonts::BUNDLED`); the build stops without them.
+- `assets/*` — the four UI fonts `crates/text`'s build script deflates into the library
+  (`fonts::BUNDLED`), the spell-check dictionary `spell.rs` includes, the app icons and the icon
+  set: the build stops without the first two, and keeping the rest keeps the tree upstream's.
 - Upstream `Cargo.toml` (workspace members trimmed), `Cargo.lock`, `clippy.toml`, `rustfmt.toml`,
   `README.md`, `ROADMAP.md`, `AGENTS.md`, licenses, NOTICE and ATTRIBUTION.
 
@@ -30,10 +31,9 @@ on the module, so the release workflow's `assembleRelease` is what proves it com
 
 - `crates/ui-egui` — the desktop (egui) front end. Android hosts its own Compose UI on the same
   engine; no crate in the kept set depends on it.
-- `apps/*` (the desktop app, the CLI and the web builds), `xtask`, `docs`, `book`,
-  `assets/app-icon`, `assets/dict`, `assets/icons`, `packaging`, `perf`, `scorecard`, `tests`,
-  `examples`, `contributors`, `scripts`. The `corpus/` test data is not vendored: those tests are
-  upstream's real-file suite and are not part of the app build.
+- `apps/*` (the desktop app, the CLI and the web builds), `xtask`, `docs`, `book`, `packaging`,
+  `perf`, `scorecard`, `tests`, `examples`, `contributors`, `scripts`. The `corpus/` test data is
+  not vendored: those tests are upstream's real-file suite and are not part of the app build.
 
 The dependency set is untouched: `craft-libs` (codecs, PSD, ICC, file formats), `wgpu` and the rest
 are fetched at build time at the revisions upstream pins.
