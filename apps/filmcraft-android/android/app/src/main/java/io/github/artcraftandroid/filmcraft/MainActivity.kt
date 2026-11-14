@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { for (r in vm.micRequests) askMicrophone(r) }
         lifecycleScope.launch {
             for (uri in vm.shareRequests) {
-                val send = Intent(Intent.ACTION_SEND).setType("video/mp4").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val send = Intent(Intent.ACTION_SEND).setType(contentResolver.getType(uri) ?: "application/octet-stream").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 launchSafely { startActivity(Intent.createChooser(send, null)) }
             }
         }
@@ -89,12 +89,13 @@ class MainActivity : ComponentActivity() {
         pending = r
         launchSafely {
             when (r.kind) {
+                PickKind.PictureFile -> openDocuments.launch(arrayOf("*/*"))
                 PickKind.Picture -> pickOneVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 PickKind.PhotosAndVideos -> pickVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                PickKind.ReplaceVisual -> pickOneVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                PickKind.ExtractAudioVideo -> pickOneVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
-                PickKind.FilesVisual -> openDocuments.launch(arrayOf("image/*", "video/*"))
-                PickKind.FilesAudio -> openDocuments.launch(arrayOf("audio/*"))
+                PickKind.ReplaceVisual -> openDocuments.launch(arrayOf("*/*"))
+                PickKind.ExtractAudioVideo -> openDocuments.launch(arrayOf("*/*"))
+                PickKind.FilesVisual -> openDocuments.launch(arrayOf("*/*"))
+                PickKind.FilesAudio -> openDocuments.launch(arrayOf("*/*"))
                 PickKind.Model -> openDocuments.launch(arrayOf("model/gltf-binary", "model/gltf+json", "application/octet-stream", "application/json"))
             }
         }

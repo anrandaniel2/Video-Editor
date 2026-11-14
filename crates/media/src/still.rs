@@ -3,12 +3,14 @@
 //! show their first frame.
 
 use std::sync::Arc;
+use image::ImageDecoder;
 
 use filmcraft_frame::VideoFrame;
 use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 
 use crate::{FrameRequest, MediaError, MediaInfo, MediaKind, MediaSource, Result, VideoStreamInfo};
 
+mod extended;
 pub mod dng;
 pub mod exr;
 pub mod hdr;
@@ -19,7 +21,8 @@ pub const DEFAULT_STILL_DURATION: Tick = Tick(5 * TICKS_PER_SECOND);
 
 /// Whether `b` (the contents of the file `name`) is a still image we decode.
 pub fn sniff(name: &str, b: &[u8]) -> bool {
-    crate::dpx::sniff(b)
+    extended::sniff(name, b)
+        || crate::dpx::sniff(b)
         || hdr::sniff(b)
         || crate::tga::sniff(name, b)
         || b.starts_with(b"\x89PNG")
@@ -56,6 +59,7 @@ pub fn decode_raster_with_limit(name: &str, bytes: &[u8], max_pixels: usize) -> 
             Ok(())
         }
     };
+    if let Some(decoded) = extended::decode(name, bytes, max_pixels) { return decoded; }
     if crate::dpx::sniff(bytes) {
         let r = crate::dpx::decode(name, bytes)?;
         check(r.width, r.height)?;
@@ -79,7 +83,12 @@ pub fn decode_raster_with_limit(name: &str, bytes: &[u8], max_pixels: usize) -> 
     limits.max_image_height = Some(16_384);
     limits.max_alloc = Some(max_pixels.saturating_mul(8).min(512 * 1024 * 1024) as u64);
     reader.limits(limits);
-    let img = reader.decode().map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
+    let mut decoder = reader.into_decoder().map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
+    let (width, height) = decoder.dimensions();
+    check(width, height)?;
+    let orientation = decoder.orientation().map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
+    let mut img = image::DynamicImage::from_decoder(decoder).map_err(|e| MediaError::Decode(format!("{name}: {e}")))?;
+    img.apply_orientation(orientation);
     let (width, height) = (img.width(), img.height());
     check(width, height)?;
     let has_alpha = img.color().has_alpha();

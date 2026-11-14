@@ -223,9 +223,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     }
 
     /** Import a photo into the layered drawing editor, not into a video timeline. */
-    fun importPicture() {
+    fun importPicture(fromFiles: Boolean = false) {
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
-        pick(PickKind.Picture) { uris ->
+        pick(if (fromFiles) PickKind.PictureFile else PickKind.Picture) { uris ->
             val uri = uris.firstOrNull() ?: return@pick
             viewModelScope.launch {
                 val (w, h) = withContext(Dispatchers.IO) { frameFor(uri) }

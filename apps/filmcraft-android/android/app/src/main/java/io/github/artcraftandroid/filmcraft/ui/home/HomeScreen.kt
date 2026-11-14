@@ -159,6 +159,7 @@ fun HomeScreen(vm: AppViewModel) {
                 DropdownMenuItem(text = { Text("New drawing") }, onClick = { newMenu = false; drawingSetup = true })
                 DropdownMenuItem(text = { Text("New video") }, onClick = { newMenu = false; vm.newProject(NewProject.Blank) })
                 DropdownMenuItem(text = { Text("Import picture") }, onClick = { newMenu = false; vm.importPicture() })
+                DropdownMenuItem(text = { Text("Import picture from files") }, onClick = { newMenu = false; vm.importPicture(fromFiles = true) })
                 DropdownMenuItem(text = { Text("Import photos and videos") }, onClick = { newMenu = false; vm.newProject(NewProject.PhotoLibrary) })
                 DropdownMenuItem(text = { Text("Import files") }, onClick = { newMenu = false; vm.newProject(NewProject.Files) })
             }

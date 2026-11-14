@@ -91,7 +91,8 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 vm.openArtwork(requireNotNull(ed.drawingArtwork))
                 snapshotFlow { vm.opening }.first { !it }
             } else if (ed.drawingPicture != null) {
-                vm.newFromPicture(requireNotNull(ed.drawingPicture))?.join()
+                input = withContext(Dispatchers.IO) { io.github.artcraftandroid.filmcraft.engine.MediaImports.preparePicture(context, requireNotNull(ed.drawingPicture)) }
+                vm.newFromPicture(Uri.fromFile(requireNotNull(input)))?.join()
             } else if (ed.drawingPreset != null) {
                 vm.newPresetArtwork(requireNotNull(ed.drawingPreset))
                 snapshotFlow { vm.opening }.first { !it }

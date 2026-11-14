@@ -168,6 +168,26 @@ pub fn encode_drawing_avif(rgba: Vec<u8>, width: u32, height: u32, quality: u8) 
         .map(|image| image.avif_file).map_err(|e| MobileError::Command(format!("AVIF: {e}")))
 }
 
+/// Bounded native picture fallback for formats Android's ImageDecoder cannot read.
+#[uniffi::export]
+pub fn decode_import_picture(path: String) -> Result<Frame, MobileError> {
+    let file = std::path::Path::new(&path);
+    let metadata = std::fs::metadata(file).map_err(|e| MobileError::Command(e.to_string()))?;
+    if metadata.len() > 128 * 1024 * 1024 { return Err(MobileError::Command("The image is larger than the 128 MB import limit.".into())); }
+    let bytes = std::fs::read(file).map_err(|e| MobileError::Command(e.to_string()))?;
+    let name = file.file_name().and_then(|s| s.to_str()).unwrap_or("image");
+    let image = filmcraft_media::still::decode_raster_with_limit(name, &bytes, 16_777_216).map_err(|e| MobileError::Command(e.to_string()))?;
+    Ok(Frame { width: image.width, height: image.height, time: 0, rgba: image.rgba })
+}
+
+/// Probe dimensions using the same streaming container readers as actual import, not Android's format whitelist.
+#[uniffi::export]
+pub fn probe_import_dimensions(path: String) -> Result<Vec<u32>, MobileError> {
+    let pool = filmcraft_engine::media_pool::MediaPool::default();
+    let source = pool.probe_file(&path, &filmcraft_engine::FsServices).map_err(|e| MobileError::Command(e.to_string()))?;
+    Ok(source.info().video.as_ref().map(|v| vec![v.width, v.height]).unwrap_or_default())
+}
+
 /// Ticks per second, for the UI's clock and labels.
 #[uniffi::export]
 pub fn ticks_per_second() -> i64 {

@@ -186,18 +186,23 @@ class Projects(private val context: Context) {
         val name = displayName(resolver, uri)
         val type = resolver.getType(uri) ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: ""
         val dir = p.mediaDir.apply { mkdirs() }
-        if (type.startsWith("image/")) {
+        val extension = name.substringAfterLast('.', "").lowercase()
+        // Leave native formats untouched: especially animated GIF/WebP/APNG, HDR plates and RAW.
+        // Only platform-only HEIF/AVIF need conversion for the Rust timeline decoder.
+        if (extension in MediaImports.platformImages || (type in setOf("image/heic", "image/heif", "image/avif"))) {
             val bitmap = decodeStill(resolver, uri)
-            val png = bitmap.hasAlpha()
+            val png = true // lossless normalization; do not introduce another JPEG generation
             val out = uniqueFile(dir, safeName(name).substringBeforeLast('.') + if (png) ".png" else ".jpg")
             out.outputStream().use { bitmap.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 92, it) }
             bitmap.recycle()
             return out
         }
         val out = uniqueFile(dir, safeName(name))
-        resolver.openInputStream(uri)?.use { input -> out.outputStream().use { input.copyTo(it) } }
-            ?: throw java.io.FileNotFoundException("The file could not be read.")
-        return out
+        try {
+            resolver.openInputStream(uri)?.use { input -> out.outputStream().use { input.copyTo(it) } }
+                ?: throw java.io.FileNotFoundException("The file could not be read.")
+            return out
+        } catch (e: Exception) { out.delete(); throw e }
     }
 
     private fun decodeStill(resolver: ContentResolver, uri: Uri): Bitmap {
@@ -216,7 +221,7 @@ class Projects(private val context: Context) {
 
     companion object {
         /** The longest side a picture is kept at. */
-        const val MAX_STILL = 4096
+        const val MAX_STILL = 8192
 
         fun displayName(resolver: ContentResolver, uri: Uri): String {
             val n = runCatching {

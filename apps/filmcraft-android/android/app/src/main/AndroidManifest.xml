@@ -38,6 +38,10 @@
                 <data android:scheme="file" />
                 <data android:mimeType="video/*" />
                 <data android:mimeType="image/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+                <data android:mimeType="application/mxf" />
+                <data android:mimeType="application/matroska" />
             </intent-filter>
             <!-- videos shared to FilmCraft -->
             <intent-filter android:label="@string/open_with">
@@ -46,6 +50,10 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="video/*" />
                 <data android:mimeType="image/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+                <data android:mimeType="application/mxf" />
+                <data android:mimeType="application/matroska" />
             </intent-filter>
         </activity>
 

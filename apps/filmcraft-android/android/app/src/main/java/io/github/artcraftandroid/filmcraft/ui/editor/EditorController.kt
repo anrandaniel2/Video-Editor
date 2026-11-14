@@ -104,7 +104,7 @@ interface EditorHost {
     fun requestMicrophone(onGranted: () -> Unit)
 }
 
-enum class PickKind { Picture, PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo, Model }
+enum class PickKind { Picture, PictureFile, PhotosAndVideos, FilesVisual, FilesAudio, ReplaceVisual, ExtractAudioVideo, Model }
 
 /** A scene light object: coloured, placeable in 3D, one of several (fields mirror the engine's `Light3D`). */
 data class SceneLight(
@@ -570,6 +570,10 @@ class EditorController(
                     host.tell("That file can't be added.")
                 } else {
                     engine.command {
+                        if (first && !audio && !overlay) {
+                            val dimensions = runCatching { io.github.artcraftandroid.filmcraft.core.probeImportDimensions(paths.first()) }.getOrNull()
+                            if (dimensions != null && dimensions.size >= 2 && dimensions[0] > 0u && dimensions[1] > 0u) setAspect(dimensions[0], dimensions[1])
+                        }
                         if (overlay) addOverlays(paths) else if (audio) addAudio(paths) else addMedia(paths)
                         if (first) forgetHistory()
                     }

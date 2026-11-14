@@ -17,7 +17,11 @@ filmcraft-dng = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "tiff", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "tiff", "bmp", "ico", "pnm", "qoi", "farbfeld", "dds", "exr", "hdr"] }
+
+# Native still decoders: no Android codec/plugin requirement.
+jxl-oxide = { version = "=0.12.6", features = ["image"] }
+resvg = { version = "=0.45.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 
 [dev-dependencies]
 filmcraft-testkit = { workspace = true }
