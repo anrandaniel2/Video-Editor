@@ -510,7 +510,7 @@ pub fn photo_auto_settings(pixels: Vec<u8>, width: u32, height: u32) -> Result<P
     let cast = mean_of(2) - mean_of(0);
 
     let settings = PhotoSettings {
-        exposure: ((0.46 / mean.max(0.03)).log2() * 0.7).clamp(-0.8, 0.8),
+        exposure: ((0.46 / mean.max(0.03)).log2() as f32 * 0.7).clamp(-0.8, 0.8),
         contrast: ((0.72 - f64::from(bright - dark)) as f32 * 1.6).clamp(-0.35, 0.55),
         highlights: 0.0,
         shadows: 0.0,
