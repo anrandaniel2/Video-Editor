@@ -106,8 +106,11 @@ jobs:
           rc=$?
           cat /tmp/android-build.log
           if [ "$rc" -ne 0 ]; then
-            tail -120 /tmp/android-build.log >> "$GITHUB_STEP_SUMMARY"
-            msg=$(tail -c 3500 /tmp/android-build.log | sed -z 's/%/%25/g; s/\n/%0A/g')
+            # The tail alone hides a failure that happened early (a second cargo workspace builds
+            # first): the first compiler error is what gets fixed, so it goes in the summary too.
+            { tail -120 /tmp/android-build.log; echo; echo "== first error =="; grep -m 1 -n -B 2 -A 22 -E '^error(\[|:)|What went wrong' /tmp/android-build.log; } >> "$GITHUB_STEP_SUMMARY"
+            first=$(grep -m 1 -B 2 -A 22 -E '^error(\[|:)|What went wrong' /tmp/android-build.log | head -c 2000 | sed -z 's/%/%25/g; s/\n/%0A/g')
+            msg="${first} … $(tail -c 1200 /tmp/android-build.log | sed -z 's/%/%25/g; s/\n/%0A/g')"
             echo "::error title=Android build failed::$msg"
             exit "$rc"
           fi
