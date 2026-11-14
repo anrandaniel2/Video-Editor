@@ -24,6 +24,7 @@ import io.github.artcraftandroid.filmcraft.engine.userMessage
 import io.github.artcraftandroid.filmcraft.ui.editor.EditorController
 import io.github.artcraftandroid.filmcraft.ui.editor.EditorHost
 import io.github.artcraftandroid.filmcraft.ui.editor.PickKind
+import io.github.artcraftandroid.filmcraft.ui.photocraft.PhotoCraftController
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,7 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** The screens. */
-enum class Screen { Home, Editor, Export, Settings, About, Licences }
+enum class Screen { Home, Editor, Export, Settings, About, Licences, PhotoCraft }
 
 /** How a new project starts. */
 enum class NewProject { PhotoLibrary, Files, Blank, Drawing, ExtractAudio }
@@ -66,6 +67,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     var projectList by mutableStateOf<List<ProjectEntry>>(emptyList())
         private set
     var editor by mutableStateOf<EditorController?>(null)
+        private set
+    /** The picture open in PhotoCraft, the dedicated photo editor; null on every other screen. */
+    var photoCraft by mutableStateOf<PhotoCraftController?>(null)
         private set
     var opening by mutableStateOf(false)
         private set
@@ -145,6 +149,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
                 if (editor?.drawingAnimationExport == true) editor?.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
                 Screen.Editor
             } else Screen.Home
+            Screen.PhotoCraft -> { closePhotoCraft(); Screen.Home }
             else -> Screen.Home
         }
     }
@@ -246,6 +251,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
                 }
             }
         }
+    }
+
+    // ---- PhotoCraft: the dedicated photo editor ----
+
+    /** Open a picture in PhotoCraft, from the photo library or from Files. */
+    fun editPhoto(fromFiles: Boolean = false) {
+        pick(if (fromFiles) PickKind.PictureFile else PickKind.Picture) { uris ->
+            val uri = uris.firstOrNull() ?: return@pick
+            openPhotoCraft(uri)
+        }
+    }
+
+    /** Edit one of the pictures Home lists (a PhotoCraft or drawing export). */
+    fun editSavedPhoto(p: ProjectEntry) {
+        val uri = p.sourceUri?.let(Uri::parse) ?: return
+        openPhotoCraft(uri)
+    }
+
+    private fun openPhotoCraft(uri: Uri) {
+        photoCraft?.close()
+        val controller = PhotoCraftController(getApplication<Application>(), viewModelScope, uri, ::tell) { closePhotoCraft() }
+        photoCraft = controller
+        screen = Screen.PhotoCraft
+        controller.load()
+    }
+
+    /** Leave PhotoCraft, releasing its decoded picture. */
+    fun closePhotoCraft() {
+        photoCraft?.close()
+        photoCraft = null
+        if (screen == Screen.PhotoCraft) screen = Screen.Home
+        refreshProjects()
     }
 
     fun openProject(p: ProjectEntry) {

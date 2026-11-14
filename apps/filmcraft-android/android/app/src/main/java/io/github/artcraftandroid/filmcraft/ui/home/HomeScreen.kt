@@ -113,6 +113,7 @@ fun HomeScreen(vm: AppViewModel) {
             item(span = { GridItemSpan(maxLineSpan) }) { HomeTopBar(vm) }
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    QuickTile(LucideIcons.WandSparkles.glyph(), "PhotoCraft", "open_photocraft") { vm.editPhoto() }
                     QuickTile(LucideIcons.Images.glyph(), "Import picture", "from_your_photo_library") { vm.importPicture() }
                     QuickTile(LucideIcons.FilePlus.glyph(), "From files", "new_from_files") { vm.newProject(NewProject.Files) }
                     QuickTile(LucideIcons.Paintbrush.glyph(), "New drawing", "create_drawing") { drawingSetup = true }
@@ -134,7 +135,7 @@ fun HomeScreen(vm: AppViewModel) {
                     GlyphIcon(LucideIcons.Images.glyph(), Fc.Secondary, size = 40.dp)
                     Spacer(Modifier.height(16.dp))
                     Text("Your creative library", style = FcType.Header, color = Fc.Title)
-                    Text("Videos, layered drawings and saved pictures appear here.", style = FcType.BodySmall, color = Fc.Secondary, textAlign = TextAlign.Center)
+                    Text("Videos, layered drawings, PhotoCraft photos and saved pictures appear here.", style = FcType.BodySmall, color = Fc.Secondary, textAlign = TextAlign.Center)
                 }
             }
             vm.engineProblem?.let { problem -> item(span = { GridItemSpan(maxLineSpan) }) {
@@ -157,6 +158,7 @@ fun HomeScreen(vm: AppViewModel) {
         ) {
             GlyphIcon(LucideIcons.Plus.glyph(), Color.White, size = 26.dp)
             DropdownMenu(newMenu, { newMenu = false }, containerColor = Fc.Panel) {
+                DropdownMenuItem(text = { Text("PhotoCraft") }, onClick = { newMenu = false; vm.editPhoto() })
                 DropdownMenuItem(text = { Text("New drawing") }, onClick = { newMenu = false; drawingSetup = true })
                 DropdownMenuItem(text = { Text("New video") }, onClick = { newMenu = false; vm.newProject(NewProject.Blank) })
                 DropdownMenuItem(text = { Text("Import picture") }, onClick = { newMenu = false; vm.importPicture() })
@@ -266,6 +268,9 @@ private fun ProjectCard(vm: AppViewModel, p: ProjectEntry) {
                 }
                 DropdownMenu(menu, { menu = false }, containerColor = Fc.Panel, shape = RoundedCornerShape(12.dp)) {
                     DropdownMenuItem(text = { Text("Rename", style = FcType.Label, color = Fc.Body) }, leadingIcon = { GlyphIcon(LucideIcons.Pencil.glyph(), Fc.Icon, size = 20.dp) }, onClick = { menu = false; vm.renaming = p })
+                    if (p.kind == "picture" && p.sourceUri != null) {
+                        DropdownMenuItem(text = { Text("Edit in PhotoCraft", style = FcType.Label, color = Fc.Body) }, leadingIcon = { GlyphIcon(LucideIcons.WandSparkles.glyph(), Fc.Icon, size = 20.dp) }, onClick = { menu = false; vm.editSavedPhoto(p) })
+                    }
                     DropdownMenuItem(text = { Text("Duplicate", style = FcType.Label, color = Fc.Body) }, leadingIcon = { GlyphIcon(LucideIcons.CopyPlus.glyph(), Fc.Icon, size = 20.dp) }, onClick = { menu = false; vm.duplicate(p) })
                     DropdownMenuItem(text = { Text("Delete", style = FcType.Label, color = Fc.Negative) }, leadingIcon = { GlyphIcon(LucideIcons.Trash2.glyph(), Fc.Negative, size = 20.dp) }, onClick = { menu = false; vm.deleting = p })
                 }

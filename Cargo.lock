@@ -860,6 +860,7 @@ name = "filmcraft-android"
 version = "0.13.0"
 dependencies = [
  "android_logger",
+ "filmcraft-color",
  "filmcraft-edit",
  "filmcraft-engine",
  "filmcraft-frame",

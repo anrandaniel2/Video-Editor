@@ -27,6 +27,7 @@ import io.github.artcraftandroid.filmcraft.ui.home.AboutScreen
 import io.github.artcraftandroid.filmcraft.ui.home.HomeScreen
 import io.github.artcraftandroid.filmcraft.ui.home.LicencesScreen
 import io.github.artcraftandroid.filmcraft.ui.home.SettingsScreen
+import io.github.artcraftandroid.filmcraft.ui.photocraft.PhotoCraftScreen
 
 /** The app: the current screen, and messages along the bottom. */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -52,6 +53,7 @@ fun AppRoot(vm: AppViewModel) {
             Screen.Home -> HomeScreen(vm)
             Screen.Editor -> if (ed != null) EditorScreen(ed) else HomeScreen(vm)
             Screen.Export -> ExportScreen(vm)
+            Screen.PhotoCraft -> vm.photoCraft?.let { PhotoCraftScreen(it) { vm.closePhotoCraft() } } ?: HomeScreen(vm)
             Screen.Settings -> SettingsScreen(vm)
             Screen.About -> AboutScreen(vm)
             Screen.Licences -> LicencesScreen(vm)

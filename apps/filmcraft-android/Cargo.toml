@@ -26,6 +26,8 @@ filmcraft-edit = { workspace = true }
 filmcraft-text = { workspace = true }
 filmcraft-geom = { workspace = true }
 filmcraft-frame = { workspace = true }
+# PhotoCraft's tone curve and saturation work in the same colour maths as the compositor.
+filmcraft-color = { workspace = true }
 # on-device captions (Whisper) and natural voices (Kokoro), both pure Rust on the CPU; the models
 # are downloaded by the app on first use, never shipped
 filmcraft-speech = { workspace = true, features = ["whisper"] }

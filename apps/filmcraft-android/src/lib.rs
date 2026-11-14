@@ -43,6 +43,7 @@ pub mod export;
 mod gpu_export;
 pub mod masks;
 pub mod model;
+pub mod photo;
 pub mod placement;
 pub mod presets;
 pub mod render;

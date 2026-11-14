@@ -29,6 +29,7 @@
   <a href="#text">Text</a> ·
   <a href="#captions-and-text-to-speech">Captions &amp; speech</a> ·
   <a href="#export-and-home">Export &amp; Home</a> ·
+  <a href="#photocraft">PhotoCraft</a> ·
   <a href="#sideways">Sideways</a> ·
   <a href="#planned-features">Planned features</a> ·
   <a href="#building-instructions">Building</a>
@@ -126,6 +127,30 @@ keeps the clip's masks.
 <td align="center"><sub>Home: four ways to start, then your projects</sub></td>
 </tr>
 </table>
+
+<br>
+
+## PhotoCraft
+
+**PhotoCraft** is the dedicated photo editor, opened from Home (**PhotoCraft**) or from any
+saved picture's menu (**Edit in PhotoCraft**). It is deliberately quieter than the video
+editor: the picture, one tool at a time under it, and Save.
+
+- **Adjust**, in three short tabs: *Light* (exposure, contrast, highlights, shadows, whites,
+  blacks), *Colour* (temperature, tint, vibrance, saturation) and *Detail* (clarity, sharpen,
+  vignette, grain, fade), over a live RGB histogram. **Auto** evens out the exposure and the
+  colour cast in one tap.
+- **Filters**: nine developed thumbnails (Punch, Film, Mono, Noir, Warm, Cool, Fade, Vivid and
+  the original), each with a strength slider.
+- **Crop**: quarter turns, both flips, and a crop frame with a locked ratio from 1:1 to 16:9.
+- Hold the split icon to compare with the picture as it was opened; undo and redo step through
+  every slider, filter, turn and frame.
+
+Every preview and every saved photo go through the same native pipeline
+(`apps/filmcraft-android/src/photo.rs`): the same settings, the same maths, at the preview's
+size for the screen and at the working picture's size for the file. Save writes a JPEG into
+`Pictures/FilmCraft` with the rest of the app's exported photos, where Home lists it as a
+picture.
 
 <br>
 

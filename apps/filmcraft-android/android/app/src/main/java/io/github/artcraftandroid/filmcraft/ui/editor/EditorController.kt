@@ -643,7 +643,15 @@ class EditorController(
     /** Home-created drawing, not an editing panel opened inside an existing project. */
     var standaloneDrawing = false
 
-    /** The caller keeps its save guard until both the file and timeline command succeed. */
+    /**
+     * Add a finished drawing to the timeline as an overlay at the playhead. The caller keeps its
+     * save guard until both the file and the timeline command succeed, then closes the drawing
+     * panel itself. This function must not close it: the panel's composition owns the coroutine that
+     * called us, so `panel = null` cancelled the refresh below halfway through. The timeline stayed
+     * at its old revision (no new renderer, no new frame) and the drawing looked like it had never
+     * been added. Everything from the native command to the refresh is therefore one
+     * non-cancellable step, and the panel stays up until it has finished.
+     */
     suspend fun importDrawing(bitmap: android.graphics.Bitmap) {
         busy = "Adding drawing…"
         var output: java.io.File? = null
@@ -657,17 +665,18 @@ class EditorController(
                 file.absolutePath
             }
             // Cancellation after a native command commits must not delete a file the timeline
-            // already references. Keep command completion and ownership transfer indivisible.
+            // already references, and the editor must show the new overlay before the panel that
+            // produced it goes away. Keep the command, the ownership transfer and the re-read of
+            // the timeline indivisible.
             withContext(kotlinx.coroutines.NonCancellable) {
                 engine.command { addDrawing(path) }
                 imported = true
+                refresh()
             }
-            panel = null
         } finally {
             if (!imported) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { output?.delete() }
             bitmap.recycle()
             busy = null
-            refresh()
         }
     }
 
