@@ -1,0 +1,8 @@
+asset:        hexagon.svg
+title:        Lucide icon "hexagon"
+author:       Lucide Contributors (portions Cole Bemis, Feather)
+source:       https://github.com/lucide-icons/lucide (icons/hexagon.svg)
+license:      ISC
+license-file: assets/icons/LICENSE-lucide.txt
+added:        2026-11-14 by the coding agent for Josh
+notes:        Unmodified. A UI icon of the Android app (apps/filmcraft-android), turned into Compose path data at build time.

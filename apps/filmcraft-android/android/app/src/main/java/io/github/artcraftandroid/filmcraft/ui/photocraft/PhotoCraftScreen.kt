@@ -53,6 +53,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -69,6 +71,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chrisbanes.haze.rememberHazeState
@@ -92,25 +95,11 @@ import io.github.artcraftandroid.filmcraft.ui.glyph
 import io.github.artcraftandroid.filmcraft.ui.lucide
 import kotlin.math.roundToInt
 
-/** The editor's three tools: the sheet under the picture shows one at a time. */
-private enum class PhotoTool(val label: String) {
-    Adjust("Adjust"),
-    Filters("Filters"),
-    Crop("Crop"),
-}
-
 private enum class AdjustTab(val label: String) {
     Light("Light"),
     Color("Color"),
     Detail("Detail"),
 }
-
-private val PhotoTool.glyph: Glyph
-    get() = when (this) {
-        PhotoTool.Adjust -> LucideIcons.WandSparkles.glyph()
-        PhotoTool.Filters -> LucideIcons.SwatchBook.glyph()
-        PhotoTool.Crop -> LucideIcons.Ratio.glyph()
-    }
 
 /** A before/after split, drawn on Lucide's 24-unit grid: no Lucide icon says "compare". */
 private val CompareGlyph: Glyph = lucide(
@@ -129,6 +118,8 @@ private val CompareGlyph: Glyph = lucide(
 fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
     var tool by remember { mutableStateOf(PhotoTool.Adjust) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    val values = remember { PhotoToolValues() }
+    val view = remember { PhotoViewState() }
     val requestClose: () -> Unit = {
         when {
             ed.saving -> Unit
@@ -149,12 +140,12 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                 PhotoCraftTopBar(ed, requestClose)
                 if (wide) {
                     Row(Modifier.weight(1f).fillMaxWidth()) {
-                        PhotoPreview(ed, tool, Modifier.weight(1f).fillMaxSize())
-                        PhotoToolDock(ed, tool, { tool = it }, Modifier.width(404.dp).fillMaxSize(), panelRoom)
+                        PhotoPreview(ed, tool, values, view, Modifier.weight(1f).fillMaxSize())
+                        PhotoToolDock(ed, tool, { tool = it }, values, view, Modifier.width(404.dp).fillMaxSize(), panelRoom)
                     }
                 } else {
-                    PhotoPreview(ed, tool, Modifier.weight(1f).fillMaxWidth())
-                    PhotoToolDock(ed, tool, { tool = it }, Modifier.fillMaxWidth(), panelRoom)
+                    PhotoPreview(ed, tool, values, view, Modifier.weight(1f).fillMaxWidth())
+                    PhotoToolDock(ed, tool, { tool = it }, values, view, Modifier.fillMaxWidth(), panelRoom)
                 }
             }
             if (ed.loading) {
@@ -267,14 +258,15 @@ private fun SavePill(saving: Boolean, onClick: () -> Unit) {
 // ---- preview ----
 
 @Composable
-private fun PhotoPreview(ed: PhotoCraftController, tool: PhotoTool, modifier: Modifier) {
-    var zoom by remember { mutableFloatStateOf(1f) }
-    var pan by remember { mutableStateOf(Offset.Zero) }
+private fun PhotoPreview(
+    ed: PhotoCraftController,
+    tool: PhotoTool,
+    values: PhotoToolValues,
+    view: PhotoViewState,
+    modifier: Modifier,
+) {
     LaunchedEffect(tool) {
-        if (tool == PhotoTool.Crop) {
-            zoom = 1f
-            pan = Offset.Zero
-        }
+        if (tool == PhotoTool.Crop) view.reset()
     }
     BoxWithConstraints(modifier.editorBackdropSource(), contentAlignment = Alignment.Center) {
         val image = ed.preview
@@ -285,15 +277,16 @@ private fun PhotoPreview(ed: PhotoCraftController, tool: PhotoTool, modifier: Mo
         val availableWidth = (maxWidth.value - 24f).coerceAtLeast(1f)
         val availableHeight = (maxHeight.value - 24f).coerceAtLeast(1f)
         val (imageWidth, imageHeight) = fitAspect(image.width.toFloat() / image.height.coerceAtLeast(1), availableWidth, availableHeight)
-        val gestures = if (tool == PhotoTool.Crop) Modifier else Modifier
+        val sampling = tool.panel == ToolPanel.Sample
+        val gestures = if (tool == PhotoTool.Crop || sampling) Modifier else Modifier
             .pointerInput(Unit) {
                 detectTransformGestures { _, movement, change, _ ->
-                    zoom = (zoom * change).coerceIn(1f, 6f)
-                    pan = if (zoom <= 1.001f) Offset.Zero else pan + movement
+                    view.zoom = (view.zoom * change).coerceIn(1f, 6f)
+                    view.pan = if (view.zoom <= 1.001f) Offset.Zero else view.pan + movement
                 }
             }
             .pointerInput(Unit) {
-                detectTapGestures(onDoubleTap = { zoom = 1f; pan = Offset.Zero })
+                detectTapGestures(onDoubleTap = { view.reset() })
             }
         Box(Modifier.size(imageWidth.dp, imageHeight.dp)) {
             Box(
@@ -301,10 +294,10 @@ private fun PhotoPreview(ed: PhotoCraftController, tool: PhotoTool, modifier: Mo
                     .fillMaxSize()
                     .clip(RoundedCornerShape(6.dp))
                     .graphicsLayer {
-                        scaleX = zoom
-                        scaleY = zoom
-                        translationX = pan.x
-                        translationY = pan.y
+                        scaleX = view.zoom
+                        scaleY = view.zoom
+                        translationX = view.pan.x
+                        translationY = view.pan.y
                     }
                     .then(gestures),
             ) {
@@ -317,9 +310,61 @@ private fun PhotoPreview(ed: PhotoCraftController, tool: PhotoTool, modifier: Mo
             }
             // The frame sits outside the clipped, zoomed layer so its corner handles stay whole.
             if (tool == PhotoTool.Crop) CropOverlay(ed, Modifier.fillMaxSize())
+            if (sampling) {
+                val grid = sampleGrid(tool, values)
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(tool, grid) {
+                            detectTapGestures { offset ->
+                                val picked = sampleColor(image, offset, size, grid)
+                                if (picked != null) view.addSample(picked)
+                            }
+                        }
+                        .semantics { contentDescription = "Tap the picture to sample its colour" },
+                )
+            }
         }
     }
 }
+
+/** How many pixels the eyedropper averages: the sampler's own option, 1 when it has none. */
+private fun sampleGrid(tool: PhotoTool, values: PhotoToolValues): Int {
+    val option = tool.options.filterIsInstance<ToolOption.Choice>().firstOrNull { it.key == "sample" } ?: return 1
+    return when (option.choices.getOrNull(values.choice(tool, option))) {
+        "3 × 3" -> 3
+        "5 × 5" -> 5
+        else -> 1
+    }
+}
+
+/** Reads the colour of the picture as it is drawn, averaged over a [grid]-wide square of pixels. */
+private fun sampleColor(image: ImageBitmap, offset: Offset, box: IntSize, grid: Int): Color? = runCatching {
+    val bitmap = image.asAndroidBitmap()
+    val x = (offset.x / box.width.coerceAtLeast(1) * bitmap.width).roundToInt().coerceIn(0, bitmap.width - 1)
+    val y = (offset.y / box.height.coerceAtLeast(1) * bitmap.height).roundToInt().coerceIn(0, bitmap.height - 1)
+    val half = grid / 2
+    var red = 0L
+    var green = 0L
+    var blue = 0L
+    var count = 0
+    for (dy in -half..half) {
+        for (dx in -half..half) {
+            val px = (x + dx).coerceIn(0, bitmap.width - 1)
+            val py = (y + dy).coerceIn(0, bitmap.height - 1)
+            val pixel = bitmap.getPixel(px, py)
+            red += (pixel shr 16) and 0xFF
+            green += (pixel shr 8) and 0xFF
+            blue += pixel and 0xFF
+            count++
+        }
+    }
+    if (count == 0) null else Color(
+        (red.toFloat() / count) / 255f,
+        (green.toFloat() / count) / 255f,
+        (blue.toFloat() / count) / 255f,
+    )
+}.getOrNull()
 
 /** The crop frame: the dimmed outside, the thirds, four handles and a draggable inside. */
 @Composable
@@ -418,6 +463,8 @@ private fun PhotoToolDock(
     ed: PhotoCraftController,
     tool: PhotoTool,
     onTool: (PhotoTool) -> Unit,
+    values: PhotoToolValues,
+    view: PhotoViewState,
     modifier: Modifier,
     panelRoom: Dp,
 ) {
@@ -428,38 +475,23 @@ private fun PhotoToolDock(
             .editorGlass(26.dp, material = Fc.Panel.copy(alpha = .92f))
             .padding(top = 6.dp),
     ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (option in PhotoTool.values()) {
-                PhotoToolTab(option, option == tool, { onTool(option) }, Modifier.weight(1f))
-            }
-        }
-        Box(Modifier.fillMaxWidth().heightIn(max = panelRoom.coerceAtLeast(180.dp))) {
-            when (tool) {
-                PhotoTool.Adjust -> AdjustPanel(ed)
-                PhotoTool.Filters -> FiltersPanel(ed)
-                PhotoTool.Crop -> CropPanel(ed)
+        // The rail, the flyout, the tool's name and its options share one bounded column, so an open
+        // flyout squeezes the options rather than the picture.
+        Column(Modifier.fillMaxWidth().heightIn(max = panelRoom.coerceAtLeast(240.dp))) {
+            ToolRail(tool, onTool)
+            ToolHeader(tool)
+            Box(Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                when (tool.panel) {
+                    ToolPanel.Adjust -> AdjustPanel(ed)
+                    ToolPanel.Filters -> FiltersPanel(ed)
+                    ToolPanel.Crop -> CropPanel(ed)
+                    ToolPanel.Sample -> SamplePanel(tool, values, view)
+                    ToolPanel.View -> ViewPanel(view)
+                    ToolPanel.Options -> ToolOptionsPanel(tool, values) { action -> runToolAction(ed, action) }
+                }
             }
         }
         Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
-    }
-}
-
-@Composable
-private fun PhotoToolTab(tool: PhotoTool, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .height(54.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (selected) Fc.Accent.copy(alpha = .16f) else Color.Transparent)
-            .clickable(role = Role.Button, onClick = onClick)
-            .testTag("photocraft_tool_${tool.name.lowercase()}")
-            .semantics { this.selected = selected },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        GlyphIcon(tool.glyph, if (selected) Fc.AccentLight else Fc.Icon, size = 20.dp)
-        Spacer(Modifier.height(2.dp))
-        Text(tool.label, style = FcType.ToolLabel, color = if (selected) Fc.AccentLight else Fc.Body, maxLines = 1)
     }
 }
 

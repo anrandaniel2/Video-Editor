@@ -143,6 +143,16 @@ editor: the picture, one tool at a time under it, and Save.
 - **Filters**: nine developed thumbnails (Punch, Film, Mono, Noir, Warm, Cool, Fade, Vivid and
   the original), each with a strength slider.
 - **Crop**: quarter turns, both flips, and a crop frame with a locked ratio from 1:1 to 16:9.
+- **The whole palette**, in nine groups on the rail: Tone, Navigate (move, hand, rotate view,
+  zoom, eyedropper, colour sampler, ruler), Select (marquees, the three lassos, object and quick
+  selection, magic wand), Frame (crop, perspective crop, slice, artboard, frame, transform),
+  Retouch (spot healing, healing, patch, content-aware move, red eye, blur, sharpen, smudge,
+  dodge, burn, sponge), Paint (brush, pencil, mixer, colour replacement, clone and pattern
+  stamps, history brushes, the three erasers), Fill (gradient, paint bucket), Vector (pens,
+  anchor points, the seven shapes, line) and Type (four type tools). Each of the 69 tools opens
+  its own options bar — size, opacity, hardness and flow, selection modes, tolerance, feather,
+  gradient style, shape sides, font and alignment — and the ones the native pipeline runs
+  (tone, crop, rotate, flip, the eyedropper, the view) act on the picture immediately.
 - Hold the split icon to compare with the picture as it was opened; undo and redo step through
   every slider, filter, turn and frame.
 
@@ -157,8 +167,8 @@ in `third_party/photocraft` and built for Android as the `:photocraft` library �
 model, layer stack, compositor, adjustment layers, type, vectors, brushes, selection and PSD
 reader are all there, behind a UniFFI bridge (`android/core`). See
 [`third_party/photocraft/FILMCRAFT-INTEGRATION.md`](third_party/photocraft/FILMCRAFT-INTEGRATION.md).
-The Compose screen above is the interim front end; its tools are being replaced by the vendored
-engine's.
+The Compose screen above is the interim front end: it carries the engine's full tool palette and
+its options, and the engine itself does the edits once the bridge is driven from the screen.
 
 <br>
 

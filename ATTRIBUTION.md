@@ -93,6 +93,61 @@ iconography, images or other Adobe assets; open licences only; every asset attri
 | `assets/icons/text-cursor-input.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/text-cursor-input.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `assets/icons/square-dashed.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/square-dashed.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `assets/icons/layers.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/layers.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/bandage.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/bandage.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/circle.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/circle.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/circle-dashed.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/circle-dashed.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/circle-minus.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/circle-minus.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/circle-plus.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/circle-plus.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/clock-arrow-down.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/clock-arrow-down.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/crop.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/crop.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/crosshair.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/crosshair.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/dot.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/dot.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/draw-blur.svg` | FilmCraft contributors | Original work: geometric UI icon for FilmCraft (no third-party artwork) | CC0-1.0 (`assets/icons/draw-blur.svg.attribution`) |
+| `assets/icons/draw-eraser.svg` | FilmCraft contributors | Original work: geometric UI icon for FilmCraft (no third-party artwork) | CC0-1.0 (`assets/icons/draw-eraser.svg.attribution`) |
+| `assets/icons/draw-lasso.svg` | FilmCraft contributors | Original work: geometric UI icon for FilmCraft (no third-party artwork) | CC0-1.0 (`assets/icons/draw-lasso.svg.attribution`) |
+| `assets/icons/draw-move.svg` | FilmCraft contributors | Original work: geometric UI icon for FilmCraft (no third-party artwork) | CC0-1.0 (`assets/icons/draw-move.svg.attribution`) |
+| `assets/icons/draw-smudge.svg` | FilmCraft contributors | Original work: geometric UI icon for FilmCraft (no third-party artwork) | CC0-1.0 (`assets/icons/draw-smudge.svg.attribution`) |
+| `assets/icons/droplets.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/droplets.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/eraser.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/eraser.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/eye.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/eye.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/flame.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/flame.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/focus.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/focus.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/frame.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/frame.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/grid-2x2.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/grid-2x2.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/hand.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/hand.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/hash.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/hash.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/hexagon.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/hexagon.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/lasso.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/lasso.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/lasso-select.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/lasso-select.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/magnet.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/magnet.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/minus.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/minus.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/mouse-pointer.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/mouse-pointer.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/mouse-pointer-2.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/mouse-pointer-2.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/move.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/move.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/paint-bucket.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/paint-bucket.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/panels-top-left.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/panels-top-left.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/pen-tool.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/pen-tool.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/pipette.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/pipette.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/puzzle.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/puzzle.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/rotate-cw.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/rotate-cw.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/ruler.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/ruler.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/scan.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/scan.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/shapes.svg` | FilmCraft contributors | Original work: geometric UI icon for FilmCraft (no third-party artwork) | CC0-1.0 (`assets/icons/shapes.svg.attribution`) |
+| `assets/icons/slice.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/slice.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/sparkles.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/sparkles.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/spline.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/spline.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/square.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/square.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/stamp.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/stamp.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/star.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/star.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/sticky-note.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/sticky-note.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/sun.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/sun.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/triangle.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/triangle.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/type-outline.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/type-outline.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/wand.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/wand.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/zoom-in.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/zoom-in.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/zoom-out.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/zoom-out.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/pen-line.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/pen-line.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
+| `assets/icons/scaling.svg` | Lucide Contributors (portions Cole Bemis, Feather) | https://github.com/lucide-icons/lucide (icons/scaling.svg) | ISC (`assets/icons/LICENSE-lucide.txt`) |
 | `docs/images/filmcraft-hero.png` | FilmCraft contributors | Original work: FilmCraft screenshot; NASA Apollo 11 film and TV footage (images.nasa.gov; US Government work, public domain; NASA does not endorse this project), subtitles from the NASA Apollo 11 air-to-ground transcript (public domain), CC0 Chopin (Musopen) | MIT OR Apache-2.0; footage and transcript public domain |
 | `docs/images/filmcraft-color.png` | FilmCraft contributors | Original work: FilmCraft screenshot; frames from Charade (1963, public domain) | MIT OR Apache-2.0; film frames public domain |
 | `docs/images/filmcraft-keyframes.png` | FilmCraft contributors | Original work: FilmCraft screenshot; frames from Night of the Living Dead (1968, public domain) | MIT OR Apache-2.0; film frames public domain |
