@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.filmcraft.ui.editorCard
 import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -210,7 +211,7 @@ fun VoiceoverPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                     Modifier
                         .size(64.dp)
                         .clip(CircleShape)
-                        .background(Fc.Raised)
+                        .editorCard(18.dp)
                         .clickable(role = Role.Button) {
                             when {
                                 recording -> stop()

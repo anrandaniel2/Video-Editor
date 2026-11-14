@@ -23,6 +23,7 @@ import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -167,18 +168,23 @@ private fun EditorWorkspace(ed: EditorController) {
         val inspectorHeight = maxHeight * if (wide) 0.80f else 0.62f
         Column(Modifier.fillMaxSize()) {
             WorkspaceBar(ed)
-            if (wide) {
-                Row(Modifier.weight(1f).fillMaxWidth()) {
-                    WorkspaceMonitor(ed, Modifier.weight(1f).fillMaxHeight())
-                    Column(Modifier.weight(1f).fillMaxHeight()) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val density = LocalDensity.current
+                val span = with(density) { (if (wide) maxWidth else maxHeight).toPx() }
+                val split = ed.workspaceSplit.coerceIn(.2f, .8f)
+                if (wide) Row(Modifier.fillMaxSize()) {
+                    WorkspaceMonitor(ed, Modifier.weight(split).fillMaxHeight())
+                    WorkspaceDivider(ed, true, span)
+                    Column(Modifier.weight(1f - split).fillMaxHeight()) {
                         TransportRow(ed)
                         Timeline(ed, Modifier.fillMaxWidth().weight(1f))
                     }
+                } else Column(Modifier.fillMaxSize()) {
+                    WorkspaceMonitor(ed, Modifier.weight(split).fillMaxWidth())
+                    WorkspaceDivider(ed, false, span)
+                    TransportRow(ed)
+                    Timeline(ed, Modifier.fillMaxWidth().weight(1f - split))
                 }
-            } else {
-                WorkspaceMonitor(ed, Modifier.weight(1f).fillMaxWidth())
-                TransportRow(ed)
-                Timeline(ed, Modifier.fillMaxWidth().height(174.dp))
             }
             val input = ed.panel as? Panel.TextInput
             if (input != null) TextInputStrip(ed, input) else EditorToolbar(ed)
@@ -192,11 +198,28 @@ private fun EditorWorkspace(ed: EditorController) {
     }
 }
 
+/** Dedicated divider hit target; monitor gestures cannot swallow workspace resizing. */
+@Composable
+private fun WorkspaceDivider(ed: EditorController, vertical: Boolean, span: Float) {
+    Box((if (vertical) Modifier.width(28.dp).fillMaxHeight() else Modifier.height(28.dp).fillMaxWidth())
+        .testTag("editor_workspace_resize")
+        .semantics { contentDescription = "Drag to resize video preview and editor workspace" }
+        .pointerInput(vertical, span) {
+            detectDragGestures { change, delta ->
+                change.consume()
+                ed.workspaceSplit = (ed.workspaceSplit + (if (vertical) delta.x else delta.y) / span.coerceAtLeast(1f)).coerceIn(.2f, .8f)
+            }
+        }, contentAlignment = Alignment.Center) {
+        Box((if (vertical) Modifier.width(4.dp).height(44.dp) else Modifier.width(44.dp).height(4.dp))
+            .clip(CircleShape).background(Fc.Detail))
+    }
+}
+
 @Composable
 private fun WorkspaceMonitor(ed: EditorController, modifier: Modifier) {
     Box(modifier.padding(horizontal = 12.dp, vertical = 8.dp).clip(RoundedCornerShape(20.dp)).background(Fc.Lane)) {
         Preview(ed, Modifier.fillMaxSize())
-        Column(Modifier.align(Alignment.CenterStart).padding(6.dp).clip(RoundedCornerShape(20.dp)).background(Fc.Black)) {
+        Column(Modifier.align(Alignment.CenterStart).padding(6.dp).editorGlass(20.dp)) {
             NativeAction(LucideIcons.Undo2.glyph(), "Undo", false) { ed.undo() }
             NativeAction(LucideIcons.Redo2.glyph(), "Redo", false) { ed.redo() }
         }

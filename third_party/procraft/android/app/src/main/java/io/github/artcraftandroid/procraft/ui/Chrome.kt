@@ -69,7 +69,7 @@ private fun Modifier.tap(enabled: Boolean = true, onClick: () -> Unit): Modifier
 @Composable
 fun TopBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier.fillMaxWidth().height(Pc.BarHeight).background(Pc.Bar)) {
-        val fit = Pc.barFit(maxWidth)
+        val fit = Pc.barFit(maxWidth, if (vm.hostClose != null) 6 else 5)
         Row(
             Modifier.align(Alignment.CenterStart).padding(start = fit.margin),
             horizontalArrangement = Arrangement.spacedBy(fit.actionGap),
@@ -101,16 +101,31 @@ fun TopBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
                 if (vm.adjustPencil) PcIcons.BrushPaintedOn else PcIcons.Brush,
                 "Paint",
                 fit.button,
-                selected = vm.adjustPencil || (!panelOpen && vm.tool == ToolKind.PAINT),
-                onHold = { vm.toolHeld(ToolKind.PAINT) },
+                selected = vm.adjustPencil || (!panelOpen && !vm.hostShapes && vm.tool == ToolKind.PAINT),
+                onHold = { vm.hostShapes = false; vm.endQuickShape(); vm.toolHeld(ToolKind.PAINT) },
             ) {
+                vm.hostShapes = false
+                vm.endQuickShape()
                 vm.toolPressed(ToolKind.PAINT)
             }
-            ToolButton(PcIcons.Smudge, "Smudge", fit.button, selected = !panelOpen && vm.tool == ToolKind.SMUDGE, onHold = { vm.toolHeld(ToolKind.SMUDGE) }) {
+            ToolButton(PcIcons.Smudge, "Smudge", fit.button, selected = !panelOpen && vm.tool == ToolKind.SMUDGE, onHold = { vm.hostShapes = false; vm.endQuickShape(); vm.toolHeld(ToolKind.SMUDGE) }) {
+                vm.hostShapes = false
+                vm.endQuickShape()
                 vm.toolPressed(ToolKind.SMUDGE)
             }
-            ToolButton(PcIcons.Erase, "Erase", fit.button, selected = !panelOpen && vm.tool == ToolKind.ERASE, onHold = { vm.toolHeld(ToolKind.ERASE) }) {
+            ToolButton(PcIcons.Erase, "Erase", fit.button, selected = !panelOpen && vm.tool == ToolKind.ERASE, onHold = { vm.hostShapes = false; vm.endQuickShape(); vm.toolHeld(ToolKind.ERASE) }) {
+                vm.hostShapes = false
+                vm.endQuickShape()
                 vm.toolPressed(ToolKind.ERASE)
+            }
+            if (vm.hostClose != null) ToolButton(PcIcons.GestureQuickShape, "Shapes", fit.button,
+                selected = vm.hostShapes, onHold = { vm.quickShapeLast(); vm.quickShapeEditing = true }) {
+                vm.hostShapes = !vm.hostShapes
+                if (vm.hostShapes) {
+                    if (vm.tool != ToolKind.PAINT) vm.toolPressed(ToolKind.PAINT)
+                    vm.closePanels()
+                    vm.showNotice("Shapes: draw a rough shape and lift; tap the shape name to edit.")
+                } else vm.endQuickShape()
             }
             ToolButton(PcIcons.Layers, "Layers", fit.button, selected = vm.panel == Panel.LAYERS) { vm.toggle(Panel.LAYERS) }
             ColorButton(vm, fit.button)

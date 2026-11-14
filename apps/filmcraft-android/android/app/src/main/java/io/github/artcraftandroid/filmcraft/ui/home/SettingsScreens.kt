@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.home
 
+import io.github.artcraftandroid.filmcraft.ui.editorCard
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -79,7 +80,7 @@ private fun Page(title: String, onClose: () -> Unit, tag: String, content: @Comp
 @Composable
 private fun Row48(label: String, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp).heightIn(min = 52.dp).clip(RoundedCornerShape(18.dp)).background(Fc.Raised).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).heightIn(min = 52.dp).clip(RoundedCornerShape(18.dp)).editorCard(18.dp).clickable(role = Role.Button, onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, style = FcType.Body, color = Fc.Body, modifier = Modifier.weight(1f))

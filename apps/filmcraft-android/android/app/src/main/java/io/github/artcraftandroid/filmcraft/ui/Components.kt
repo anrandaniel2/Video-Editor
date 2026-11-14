@@ -145,7 +145,7 @@ fun PanelAction(glyph: Glyph, description: String, onClick: () -> Unit, enabled:
             .size(width = 40.dp, height = 32.dp)
             .clip(CircleShape)
             // disabled: no pill, a dim icon
-            .then(if (enabled) Modifier.background(Fc.PillButton) else Modifier)
+            .then(if (enabled) Modifier.editorCard(20.dp) else Modifier)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics { contentDescription = description },
@@ -203,7 +203,7 @@ fun ToolPanel(
                         title.contains("light", true) -> LucideIcons.Sun.glyph()
                         else -> LucideIcons.WandSparkles.glyph()
                     }
-                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(Fc.Raised), contentAlignment = Alignment.Center) { GlyphIcon(toolIcon, Fc.Icon, size = 22.dp) }
+                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).editorCard(18.dp), contentAlignment = Alignment.Center) { GlyphIcon(toolIcon, Fc.Icon, size = 22.dp) }
                     Spacer(Modifier.width(12.dp))
                     Text(
                         title,
@@ -451,7 +451,7 @@ fun PresetTile(name: String, selected: Boolean, onClick: () -> Unit, tag: String
 @Composable
 fun SliderRow(label: String, value: String, onLabelClick: (() -> Unit)? = null, selected: Boolean = false, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)
-        .clip(RoundedCornerShape(18.dp)).background(Fc.Raised).padding(horizontal = 14.dp, vertical = 10.dp)) {
+        .clip(RoundedCornerShape(18.dp)).editorCard(18.dp).padding(horizontal = 14.dp, vertical = 10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = FcType.Label, color = if (selected) Fc.AccentLight else Fc.Body,
                 modifier = Modifier.weight(1f).then(if (onLabelClick != null) Modifier.clickable(onClick = onLabelClick).padding(vertical = 8.dp) else Modifier))

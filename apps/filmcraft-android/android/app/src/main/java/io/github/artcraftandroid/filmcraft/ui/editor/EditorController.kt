@@ -216,6 +216,7 @@ class EditorController(
     /** Timeline zoom; 0 until the timeline knows its width. */
     var pxPerSecond by mutableFloatStateOf(0f)
     /** The player's height (px) when the user has resized it, else 0 (55 % of the room). */
+    var workspaceSplit by mutableFloatStateOf(.55f)
     var playerHeight by mutableFloatStateOf(0f)
     /** The player's height (px) last laid out without a panel: kept while one is open. */
     var basePlayerPx = 0f

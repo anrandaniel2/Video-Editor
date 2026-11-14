@@ -133,14 +133,14 @@ object Pc {
     val SwitchFixedKnob: Color get() = pick(0xFF525252, 0xFFE9E9E9)
 
     /** The centre of tool button [index] (0 is the colour button, counting leftwards), from the bar's right edge. */
-    fun toolCentreFromRight(index: Int, barWidth: Dp): Dp {
-        val fit = barFit(barWidth)
+    fun toolCentreFromRight(index: Int, barWidth: Dp, tools: Int = 5): Dp {
+        val fit = barFit(barWidth, tools)
         return fit.margin + fit.button / 2 + (fit.button + fit.toolGap) * index
     }
 
     /** The centre of action button [index] (0 is actions, counting rightwards), from the bar's left edge. */
-    fun actionCentre(index: Int, barWidth: Dp): Dp {
-        val fit = barFit(barWidth)
+    fun actionCentre(index: Int, barWidth: Dp, tools: Int = 5): Dp {
+        val fit = barFit(barWidth, tools)
         return fit.margin + GalleryWidth + fit.actionGap + fit.button / 2 + (fit.button + fit.actionGap) * index
     }
 
@@ -224,10 +224,13 @@ object Pc {
      * ends would run into each other (a narrow window, as in split screen) the first of
      * [NarrowBars] that keeps them apart.
      */
-    fun barFit(width: Dp): BarFit {
+    fun barFit(width: Dp, tools: Int = 5): BarFit {
         val (tool, action) = barGaps(width)
         val measured = BarFit(BarMargin, tool, action, BarButtonWidth)
-        return if (measured.needs <= width) measured else NarrowBars.firstOrNull { it.needs <= width } ?: NarrowBars.last()
+        fun fits(fit: BarFit) = fit.needs + (fit.button + fit.toolGap) * (tools - 5) <= width
+        return if (fits(measured)) measured else NarrowBars.firstOrNull(::fits) ?: NarrowBars.last().let {
+            it.copy(button = ((width - it.margin * 2 - GalleryWidth) / (4 + tools)).coerceAtMost(it.button).coerceAtLeast(24.dp))
+        }
     }
 
     /** Where the side bar goes: its top, and how long each of its two tracks is. */

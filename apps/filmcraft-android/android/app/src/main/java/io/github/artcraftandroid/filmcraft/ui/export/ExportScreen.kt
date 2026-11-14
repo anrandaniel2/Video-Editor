@@ -1,5 +1,7 @@
 package io.github.artcraftandroid.filmcraft.ui.export
 
+import io.github.artcraftandroid.filmcraft.ui.editorBackdropSource
+import io.github.artcraftandroid.filmcraft.ui.editorCard
 import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
@@ -60,6 +62,13 @@ import kotlinx.coroutines.withContext
 /** Export: the poster, settings and the button; then progress, then the finished video. */
 @Composable
 fun ExportScreen(vm: AppViewModel) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        io.github.artcraftandroid.filmcraft.ui.LocalEditorBackdrop provides dev.chrisbanes.haze.rememberHazeState(),
+    ) { ExportContent(vm) }
+}
+
+@Composable
+private fun ExportContent(vm: AppViewModel) {
     val ed = vm.editor ?: return
     val phase = vm.exportPhase
     BackHandler {
@@ -103,7 +112,7 @@ fun ExportScreen(vm: AppViewModel) {
                 )
             }
             Box(Modifier.weight(1f).fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.aspectRatio(aspect, matchHeightConstraintsFirst = aspect < 1f).clip(RoundedCornerShape(20.dp)).background(Fc.Black)) {
+                Box(Modifier.aspectRatio(aspect, matchHeightConstraintsFirst = aspect < 1f).clip(RoundedCornerShape(20.dp)).editorBackdropSource().background(Fc.Black)) {
                     if (phase is ExportPhase.Done) {
                         AndroidView(
                             factory = { ctx ->
@@ -124,7 +133,7 @@ fun ExportScreen(vm: AppViewModel) {
                 when (phase) {
                     ExportPhase.Settings -> {
                         Row(
-                            Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(20.dp)).background(Fc.Raised).clickable(role = Role.Button) { vm.exportSheet = true }.padding(horizontal = 16.dp).testTag("export_settings_row"),
+                            Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(20.dp)).editorCard(18.dp).clickable(role = Role.Button) { vm.exportSheet = true }.padding(horizontal = 16.dp).testTag("export_settings_row"),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text("Export settings", style = FcType.Label, color = Fc.Body, modifier = Modifier.weight(1f))

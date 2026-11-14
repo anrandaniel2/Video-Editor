@@ -76,7 +76,7 @@ fun rememberEditorGlass(frame: ImageBitmap?): ImageBitmap? = remember(frame) {
 
 /** Paint the glass only: child text/icons and gesture targets are never blurred. */
 @Composable
-fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp = 6.dp, captureSurface: Boolean = true): Modifier {
+fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp = 6.dp, captureSurface: Boolean = true, material: Color = io.github.artcraftandroid.procraft.ui.Pc.PopoverFrost): Modifier {
     val state = LocalEditorBackdrop.current
     if (state != null) {
         val style = remember(blurRadius) {
@@ -89,10 +89,10 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp =
         // as a source: sibling/nested panels can otherwise form RenderNode dependency cycles.
         return clip(RoundedCornerShape(corner))
             .hazeEffect(state, style = style)
-            .background(io.github.artcraftandroid.procraft.ui.Pc.PopoverFrost)
+            .background(material)
     }
     val backdrop = LocalEditorGlass.current
-    if (backdrop == null) return clip(RoundedCornerShape(corner)).background(io.github.artcraftandroid.procraft.ui.Pc.PopoverFill)
+    if (backdrop == null) return clip(RoundedCornerShape(corner)).background(if (material == io.github.artcraftandroid.procraft.ui.Pc.PopoverFrost) io.github.artcraftandroid.procraft.ui.Pc.PopoverFill else material)
     var origin by remember { mutableStateOf(Offset.Zero) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     return onGloballyPositioned { coordinates ->
@@ -113,3 +113,12 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp =
         }
     }
 }
+
+/** Inner cards use ProCraft's light row material, not a second opaque popover wash.
+ * Haze samples the editor's real Compose source; native rememberFrost only works inside AppRoot.
+ */
+@Composable
+fun Modifier.editorCard(corner: Dp = 18.dp): Modifier = editorGlass(
+    corner, blurRadius = 4.dp, captureSurface = false,
+    material = io.github.artcraftandroid.procraft.ui.Pc.LayerRow,
+)

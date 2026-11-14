@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.home
 
+import io.github.artcraftandroid.filmcraft.ui.editorCard
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -200,7 +201,7 @@ private fun HomeTopBar(vm: AppViewModel) {
 
 @Composable
 private fun QuickTile(glyph: Glyph, label: String, tag: String, onClick: () -> Unit) {
-    Row(Modifier.clip(RoundedCornerShape(12.dp)).background(Fc.Raised).clickable(role = Role.Button, onClick = onClick)
+    Row(Modifier.clip(RoundedCornerShape(12.dp)).editorCard(18.dp).clickable(role = Role.Button, onClick = onClick)
         .padding(horizontal = 14.dp, vertical = 12.dp).testTag(tag), verticalAlignment = Alignment.CenterVertically) {
         GlyphIcon(glyph, Fc.Icon, size = 20.dp)
         Spacer(Modifier.width(8.dp))
@@ -241,7 +242,7 @@ private fun ProjectCard(vm: AppViewModel, p: ProjectEntry) {
             Modifier
                 .fillMaxWidth().aspectRatio(1f)
                 .clip(RoundedCornerShape(12.dp))
-                .background(Fc.Raised)
+                .editorCard(18.dp)
                 .clickable(role = Role.Button) { vm.openProject(p) }
                 .testTag("home_project_${p.id}"),
         ) {

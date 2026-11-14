@@ -197,16 +197,16 @@ fun AppRoot(vm: CanvasViewModel) {
                         Panel.LAYERS -> (if (vm.backgroundPicking) 376.dp else 384.dp) to 1
                         Panel.COLOR -> 376.dp to 0
                         Panel.BRUSHES -> 440.dp to when (vm.tool) {
-                            ToolKind.ERASE -> 2
-                            ToolKind.SMUDGE -> 3
-                            else -> 4
+                            ToolKind.ERASE -> if (vm.hostClose != null) 3 else 2
+                            ToolKind.SMUDGE -> if (vm.hostClose != null) 4 else 3
+                            else -> if (vm.hostClose != null) 5 else 4
                         }
                         Panel.ACTIONS -> 390.dp to 0
                         Panel.ADJUSTMENTS -> 330.dp to 1
                         Panel.NONE -> 0.dp to 0
                     }
                     val fromLeft = shown == Panel.ACTIONS || shown == Panel.ADJUSTMENTS
-                    val buttonX = if (fromLeft) Pc.actionCentre(button, maxWidth) else maxWidth - Pc.toolCentreFromRight(button, maxWidth)
+                    val buttonX = if (fromLeft) Pc.actionCentre(button, maxWidth, if (vm.hostClose != null) 6 else 5) else maxWidth - Pc.toolCentreFromRight(button, maxWidth, if (vm.hostClose != null) 6 else 5)
                     // panels keep clear of the side bar, on whichever side it is
                     val clear = if (vm.showSideBar) Pc.SideBarWidth + Pc.PopoverGap else Pc.PopoverGap
                     val place = if (vm.rightHanded) popoverPlace(width, buttonX, maxWidth, minRight = clear) else popoverPlace(width, buttonX, maxWidth, clear)

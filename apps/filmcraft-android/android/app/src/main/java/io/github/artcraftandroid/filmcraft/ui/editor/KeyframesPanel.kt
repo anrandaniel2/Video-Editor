@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.filmcraft.ui.editorCard
 import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -105,7 +106,7 @@ fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 item(key = "group:$group") { Text(group, style=FcType.Header, color=Fc.Title, modifier=Modifier.padding(16.dp)) }
             }
             items(properties, key = { "property:${it.id}" }) { item ->
-                Column(Modifier.fillMaxWidth().padding(horizontal=12.dp, vertical=4.dp).background(Fc.Raised, androidx.compose.foundation.shape.RoundedCornerShape(14.dp)).padding(vertical=10.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal=12.dp, vertical=4.dp).editorCard(14.dp).padding(vertical=10.dp)) {
                     val scalar = item.value is Number && (item.kind as? JSONObject)?.optJSONArray("Choice") == null
                     if (!scalar) SelectChip(item.label + if (item.animated) " ◆" else "", item.id==lane.id, {laneId=item.id;selected=null}, tag="keyframes_property_${item.id}")
                     val selectedKey=if (item.id==lane.id) key else null

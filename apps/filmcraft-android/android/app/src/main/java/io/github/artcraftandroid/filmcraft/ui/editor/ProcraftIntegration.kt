@@ -193,28 +193,13 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
             val window = (dialogView.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
             if (context.resources.configuration.isScreenWideColorGamut) window?.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
         }
-        CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+        CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr,
+            LocalBackdrops provides vm.backdrops,
+        ) {
             Box(Modifier.fillMaxSize().background(Color.Black).procraftKeys(vm, doubleTaps)) {
                 if (vm.session != null) {
                     AppRoot(vm)
-                    if (!vm.barsHidden) Column(
-                        Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (vm.animation != null) 170.dp else 18.dp)
-                            .then(rememberFrost(28.dp)).background(Pc.PopoverFrost).padding(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            io.github.artcraftandroid.filmcraft.ui.SelectChip("Draw", !vm.hostShapes, { vm.hostShapes = false; vm.endQuickShape() })
-                            io.github.artcraftandroid.filmcraft.ui.SelectChip("Shapes", vm.hostShapes, { vm.hostShapes = true; if (vm.tool != io.github.artcraftandroid.procraft.core.ToolKind.PAINT) vm.toolPressed(io.github.artcraftandroid.procraft.core.ToolKind.PAINT) })
-                        }
-                        if (vm.hostShapes) {
-                            Text("Draw a rough shape; ProCraft snaps it when you lift.", color = Color.White, style = MaterialTheme.typography.bodySmall)
-                            Text("Line, arc, curve, circle, ellipse, triangle, rectangle or square.", color = Color.White, style = MaterialTheme.typography.bodySmall)
-                            Row {
-                                TextButton(onClick = { vm.quickShapeLast(); vm.quickShapeEditing = true }) { Text("Edit last shape") }
-                                TextButton(onClick = { vm.endQuickShape() }) { Text("Done") }
-                            }
-                        }
-                    }
                 }
                 else Column(Modifier.fillMaxSize().padding(24.dp)) {
                     Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
@@ -249,11 +234,11 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .45f))) {
                         // Intercept input while the export snapshot is being saved.
                         BackHandler { }
-                        AlertDialog(onDismissRequest = {}, confirmButton = {}, text = { Text("Saving drawing…") })
+                        AlertDialog(modifier = Modifier.then(rememberFrost(35.dp)), containerColor = Pc.PopoverFrost, shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp), onDismissRequest = {}, confirmButton = {}, text = { Text("Saving drawing…") })
                     }
                 }
                 error?.let { message ->
-                    AlertDialog(onDismissRequest = { error = null }, title = { Text("Drawing") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } })
+                    AlertDialog(modifier = Modifier.then(rememberFrost(35.dp)), containerColor = Pc.PopoverFrost, shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp), onDismissRequest = { error = null }, title = { Text("Drawing") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } })
                 }
             }
         }

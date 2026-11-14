@@ -5,7 +5,6 @@ import android.net.Uri
 import android.widget.VideoView
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
-import io.github.artcraftandroid.procraft.ui.rememberFrost
 import io.github.artcraftandroid.procraft.ui.Pc
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -128,7 +127,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
         Box(Modifier.fillMaxSize().editorGlass(0.dp, layer = 4f, blurRadius = 4.dp, captureSurface = false)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = close))
         Column(Modifier.padding(16.dp).widthIn(max = 720.dp).fillMaxWidth().height(maxHeight * .88f)
-            .then(rememberFrost(35.dp)).background(Pc.PopoverFrost)
+            .editorGlass(35.dp, captureSurface = false)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
             .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -147,7 +146,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
                 if (resolving) { Text("Loading published download options…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(results, key = { it.id }) { asset ->
-                        Column(Modifier.fillMaxWidth().then(rememberFrost(24.dp)).background(Pc.PopoverFrost).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.fillMaxWidth().editorCard(24.dp).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (video && preview != asset.id) MixkitThumbnail(asset)
                                 Text(asset.title, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 if (video && preview == asset.id && previewUrl.isNotBlank()) AndroidView(factory = { ctx ->
@@ -200,8 +199,8 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
     val asset = selected
     val options = offer
     if (asset != null && options != null) AlertDialog(
-        modifier = Modifier.then(rememberFrost(35.dp)),
-        containerColor = Pc.PopoverFrost,
+        modifier = Modifier.editorGlass(35.dp, captureSurface = false),
+        containerColor = Color.Transparent,
         shape = RoundedCornerShape(35.dp),
         onDismissRequest = { if (!resolving) selected = null },
         title = { Text(if (video) "Import video" else "Import sound effect") },

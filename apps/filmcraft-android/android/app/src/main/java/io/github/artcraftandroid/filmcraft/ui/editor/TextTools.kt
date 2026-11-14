@@ -1,5 +1,6 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import io.github.artcraftandroid.filmcraft.ui.editorCard
 import android.content.ClipData
 import android.content.Context
 import androidx.compose.foundation.Canvas
@@ -341,7 +342,7 @@ private fun ColorTab(st: TextStyle, apply: (TextStyle, Boolean) -> Unit) {
         }
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(36.dp).clip(CircleShape).background(Fc.PillButton).clickable {
+                Modifier.size(36.dp).clip(CircleShape).editorCard(20.dp).clickable {
                     val c = current ?: return@clickable
                     if (c !in saved) {
                         saved.add(0, c)
