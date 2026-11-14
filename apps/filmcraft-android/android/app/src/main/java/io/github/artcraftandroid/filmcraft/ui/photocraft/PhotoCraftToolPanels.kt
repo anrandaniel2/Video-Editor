@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import io.github.artcraftandroid.filmcraft.ui.Fc
 import io.github.artcraftandroid.filmcraft.ui.FcSlider
 import io.github.artcraftandroid.filmcraft.ui.FcType
-import io.github.artcraftandroid.filmcraft.ui.Glyph
 import io.github.artcraftandroid.filmcraft.ui.GlyphIcon
 import io.github.artcraftandroid.filmcraft.ui.LucideIcons
 import io.github.artcraftandroid.filmcraft.ui.SelectChip
@@ -200,7 +199,7 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 for (option in pair) {
-                    SelectChip(option.label, values.switch(tool, option)) { values.setSwitch(tool, option, !values.switch(tool, option)) }
+                    SelectChip(option.label, values.switch(tool, option), { values.setSwitch(tool, option, !values.switch(tool, option)) })
                 }
             }
         }
@@ -240,7 +239,7 @@ private fun OptionChoice(tool: PhotoTool, option: ToolOption.Choice, values: Pho
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             option.choices.forEachIndexed { index, label ->
-                SelectChip(label, selected == index) { values.setChoice(tool, option, index) }
+                SelectChip(label, selected == index, { values.setChoice(tool, option, index) })
             }
         }
     }
@@ -304,9 +303,9 @@ internal fun SamplePanel(tool: PhotoTool, values: PhotoToolValues, view: PhotoVi
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (option in tool.options.filterIsInstance<ToolOption.Switch>()) {
-                SelectChip(option.label, values.switch(tool, option)) { values.setSwitch(tool, option, !values.switch(tool, option)) }
+                SelectChip(option.label, values.switch(tool, option), { values.setSwitch(tool, option, !values.switch(tool, option)) })
             }
-            SelectChip("Clear samples", false) { view.samples.clear() }
+            SelectChip("Clear samples", false, { view.samples.clear() })
         }
     }
 }
@@ -326,9 +325,9 @@ internal fun ViewPanel(view: PhotoViewState) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             for (step in listOf(1f, 2f, 4f, 8f)) {
-                SelectChip(if (step == 1f) "Fit" else "${(step * 100).roundToInt()}%", kotlin.math.abs(view.zoom - step) < 0.01f) { view.zoomTo(step) }
+                SelectChip(if (step == 1f) "Fit" else "${(step * 100).roundToInt()}%", kotlin.math.abs(view.zoom - step) < 0.01f, { view.zoomTo(step) })
             }
-            SelectChip("Reset view", false) { view.reset() }
+            SelectChip("Reset view", false, { view.reset() })
         }
         Text(
             "Drag with one finger to pan, pinch to zoom, double-tap to fit. The picture itself is untouched.",

@@ -111,8 +111,11 @@ jobs:
             # CARGO_TERM_COLOR=always is set for the job, so the log has escapes in it: strip them
             # before looking for a line that starts with `error`.
             sed -e 's/\x1b\[[0-9;]*m//g' /tmp/android-build.log > /tmp/android-build.plain.log
-            { tail -120 /tmp/android-build.plain.log; echo; echo "== first error =="; grep -m 1 -n -B 2 -A 22 -E 'error(\[|:)|What went wrong' /tmp/android-build.plain.log; } >> "$GITHUB_STEP_SUMMARY"
-            first=$(grep -m 1 -B 2 -A 22 -E 'error(\[|:)|What went wrong' /tmp/android-build.plain.log | head -c 2000 | sed -z 's/%/%25/g; s/\n/%0A/g')
+            # Every compiler diagnostic, not only the first: the Kotlin and Rust messages are one
+            # line each (`e: file:…`, `error[E…]: …`), so a run of them fits in one annotation.
+            { tail -120 /tmp/android-build.plain.log; echo; echo "== errors =="; grep -E '^e: |^error(\[[^]]*\])?:|What went wrong' /tmp/android-build.plain.log | head -40; } >> "$GITHUB_STEP_SUMMARY"
+            first=$(grep -E '^e: |^error(\[[^]]*\])?:|What went wrong' /tmp/android-build.plain.log | head -40 | head -c 3000 | sed -z 's/%/%25/g; s/\n/%0A/g')
+            [ -n "$first" ] || first=$(grep -m 1 -B 2 -A 22 -E 'error(\[|:)|What went wrong' /tmp/android-build.plain.log | head -c 2000 | sed -z 's/%/%25/g; s/\n/%0A/g')
             msg="${first} … $(tail -c 1200 /tmp/android-build.log | sed -z 's/%/%25/g; s/\n/%0A/g')"
             echo "::error title=Android build failed::$msg"
             exit "$rc"
