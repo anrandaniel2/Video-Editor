@@ -138,8 +138,8 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
     }
     BackHandler { requestClose() }
     // The crop frame is only meaningful while its tool is open; leaving applies it to the picture.
-    LaunchedEffect(tool) { ed.setCropMode(tool == PhotoTool.Crop) }
-    LaunchedEffect(tool) { if (tool == PhotoTool.Crop) ed.setCompare(false) }
+    LaunchedEffect(tool) { ed.cropTool(tool == PhotoTool.Crop) }
+    LaunchedEffect(tool) { if (tool == PhotoTool.Crop) ed.compareWithOriginal(false) }
 
     CompositionLocalProvider(LocalEditorBackdrop provides rememberHazeState()) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Fc.Black).testTag("screen_photocraft")) {
@@ -234,9 +234,9 @@ private fun CompareButton(ed: PhotoCraftController) {
             .background(if (ed.compare) Fc.Raised else Color.Transparent)
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
-                    ed.setCompare(true)
+                    ed.compareWithOriginal(true)
                     tryAwaitRelease()
-                    ed.setCompare(false)
+                    ed.compareWithOriginal(false)
                 })
             }
             .semantics { contentDescription = "Hold to compare with the original" },
@@ -622,8 +622,8 @@ private fun CropPanel(ed: PhotoCraftController) {
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            SelectChip("Free", ed.aspect == null, { ed.setAspect(null) })
-            for ((ratio, label) in CropRatios) SelectChip(label, ed.aspect == ratio, { ed.setAspect(ratio) })
+            SelectChip("Free", ed.aspect == null, { ed.lockAspect(null) })
+            for ((ratio, label) in CropRatios) SelectChip(label, ed.aspect == ratio, { ed.lockAspect(ratio) })
         }
         Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {

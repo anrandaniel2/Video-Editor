@@ -255,7 +255,7 @@ class PhotoCraftController(
     // ---- crop ----
 
     /** The Crop tool opening or closing: closing applies the frame, opening shows the whole picture. */
-    fun setCropMode(active: Boolean) {
+    fun cropTool(active: Boolean) {
         if (cropMode == active) return
         cropMode = active
         if (active && edits.crop == null) edits = edits.copy(crop = centeredCrop(aspect, imageAspect))
@@ -263,7 +263,7 @@ class PhotoCraftController(
         render(immediate = true)
     }
 
-    fun setAspect(value: Float?) {
+    fun lockAspect(value: Float?) {
         aspect = value
         if (value == null) return
         val frame = centeredCrop(value, imageAspect)
@@ -298,7 +298,7 @@ class PhotoCraftController(
 
     fun resetAll() = commit { PhotoEdits() }.also { aspect = null }
 
-    fun setCompare(on: Boolean) {
+    fun compareWithOriginal(on: Boolean) {
         if (compare == on) return
         compare = on
         render(immediate = true)
