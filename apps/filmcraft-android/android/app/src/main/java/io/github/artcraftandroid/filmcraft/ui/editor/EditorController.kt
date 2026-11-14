@@ -1372,6 +1372,32 @@ class EditorController(
 
     fun closeEditor() = host.close()
 
+    var drawingAnimationExport = false
+    private var drawingAnimationClip: ULong? = null
+
+    /** Move a lossless animated drawing into the same export pipeline as edited videos. */
+    suspend fun exportDrawingAnimation(source: java.io.File, fps: Int) {
+        val target = withContext(Dispatchers.IO) {
+            project.mediaDir.mkdirs()
+            java.io.File(project.mediaDir, "drawing-animation-${java.util.UUID.randomUUID()}.png").also { source.copyTo(it) }
+        }
+        try {
+            engine.command {
+                execute("sequence.settings", org.json.JSONObject().put("fps", fps.coerceIn(1, 120)).toString())
+                drawingAnimationClip?.let { deleteClip(it) }
+                drawingAnimationClip = addMedia(listOf(target.absolutePath)).firstOrNull()
+                forgetHistory()
+            }
+            refresh()
+            panel = null
+            drawingAnimationExport = true
+            host.export()
+        } catch (e: Exception) {
+            // Keep an already-inserted source for recovery if opening the exporter fails.
+            throw e
+        }
+    }
+
     // ---- export ----
 
     fun export() {

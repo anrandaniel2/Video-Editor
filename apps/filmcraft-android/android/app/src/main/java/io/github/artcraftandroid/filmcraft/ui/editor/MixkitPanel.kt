@@ -4,6 +4,9 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.widget.VideoView
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import io.github.artcraftandroid.procraft.ui.rememberFrost
+import io.github.artcraftandroid.procraft.ui.Pc
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -125,7 +128,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
         Box(Modifier.fillMaxSize().editorGlass(0.dp, layer = 4f, blurRadius = 4.dp, captureSurface = false)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = close))
         Column(Modifier.padding(16.dp).widthIn(max = 720.dp).fillMaxWidth().height(maxHeight * .88f)
-            .editorGlass(28.dp, layer = 5f, blurRadius = 6.dp, captureSurface = false)
+            .then(rememberFrost(35.dp)).background(Pc.PopoverFrost)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
             .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -135,7 +138,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
                 OutlinedTextField(query, { query = it }, singleLine = true, label = { Text("Browse category") }, placeholder = { Text(if (video) "Nature, city, aerial…" else "Whoosh, impact, cinematic…") }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     (if (video) listOf("All", "Nature", "City", "Aerial") else listOf("All", "Whoosh", "Impact", "Cinematic")).forEach { category ->
-                        TextButton(onClick = { query = if (category == "All") "" else category }) { Text(category) }
+                        SelectChip(category, query.equals(if (category == "All") "" else category, ignoreCase = true), { query = if (category == "All") "" else category })
                     }
                 }
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -144,7 +147,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
                 if (resolving) { Text("Loading published download options…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(results, key = { it.id }) { asset ->
-                        Column(Modifier.fillMaxWidth().editorGlass(20.dp, layer = 6f, blurRadius = 10.dp, captureSurface = false).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.fillMaxWidth().then(rememberFrost(24.dp)).background(Pc.PopoverFrost).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (video && preview != asset.id) MixkitThumbnail(asset)
                                 Text(asset.title, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 if (video && preview == asset.id && previewUrl.isNotBlank()) AndroidView(factory = { ctx ->
@@ -197,8 +200,9 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
     val asset = selected
     val options = offer
     if (asset != null && options != null) AlertDialog(
-        modifier = Modifier.editorGlass(24.dp, layer = 8f, blurRadius = 10.dp, captureSurface = false),
-        containerColor = Color.Transparent,
+        modifier = Modifier.then(rememberFrost(35.dp)),
+        containerColor = Pc.PopoverFrost,
+        shape = RoundedCornerShape(35.dp),
         onDismissRequest = { if (!resolving) selected = null },
         title = { Text(if (video) "Import video" else "Import sound effect") },
         text = {

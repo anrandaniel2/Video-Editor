@@ -7276,7 +7276,14 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** A stroke finished: its layer's thumbnail and the undo state changed. */
+    /** FilmCraft Shapes tab: use QuickShape's native recognition, brush rendering and handles. */
+    var hostShapes by mutableStateOf(false)
+
     fun strokeEnded() {
+        if (hostShapes && tool == ToolKind.PAINT && quickShape == null) {
+            quickShapeLast()
+            if (quickShape != null) quickShapeEditing = true
+        }
         // a snapped shape the pen moved: its handles where it now is
         if (quickShape != null) quickShape = session?.quickshapeInfo() ?: quickShape
         // a stroke on a locked or hidden layer, or a group, drew nothing: say why (text layers ask to rasterize instead)

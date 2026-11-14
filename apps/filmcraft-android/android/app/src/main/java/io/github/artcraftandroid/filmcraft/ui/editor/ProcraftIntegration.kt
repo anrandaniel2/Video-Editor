@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -130,6 +131,16 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
             scope.launch {
                 try {
                     vm.saveForHost()
+                    if (vm.session != null && standalone && vm.animation?.pages == false && vm.animationFrameCount() > 1) {
+                        // Lossless animated bridge, not a pre-encoded video: the editor's actual
+                        // renderer/encoder still owns output size, codec, quality and frame rate.
+                        val animated = vm.exportAnimation(CanvasViewModel.Animated.PNG, false, false, false, false, vm.artworkFps())
+                            ?: kotlin.error("Could not prepare animation frames.")
+                        try { ed.exportDrawingAnimation(animated, vm.artworkFps().toInt()) }
+                        finally { withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { animated.delete() } }
+                        completed = true
+                        return@launch
+                    }
                     if (vm.session != null) {
                         val file = vm.imageForHost() ?: kotlin.error("Could not export the drawing. Please try again.")
                         try {
@@ -166,7 +177,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
         }
     }
     val requestClose: () -> Unit = {
-        if (!saving && !completed) { if (standalone && vm.session != null) exportMenu = true else performClose() }
+        if (!saving && !completed) { if (standalone && vm.session != null && (vm.animation?.pages != false || vm.animationFrameCount() <= 1)) exportMenu = true else performClose() }
     }
     SideEffect { vm.hostClose = requestClose }
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -178,7 +189,27 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
         }
         CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
             Box(Modifier.fillMaxSize().background(Color.Black).procraftKeys(vm, doubleTaps)) {
-                if (vm.session != null) AppRoot(vm)
+                if (vm.session != null) {
+                    AppRoot(vm)
+                    if (!vm.barsHidden) Column(
+                        Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (vm.animation != null) 170.dp else 18.dp)
+                            .then(rememberFrost(28.dp)).background(Pc.PopoverFrost).padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            io.github.artcraftandroid.filmcraft.ui.SelectChip("Draw", !vm.hostShapes, { vm.hostShapes = false; vm.endQuickShape() })
+                            io.github.artcraftandroid.filmcraft.ui.SelectChip("Shapes", vm.hostShapes, { vm.hostShapes = true; if (vm.tool != io.github.artcraftandroid.procraft.core.ToolKind.PAINT) vm.toolPressed(io.github.artcraftandroid.procraft.core.ToolKind.PAINT) })
+                        }
+                        if (vm.hostShapes) {
+                            Text("Draw a rough shape; ProCraft snaps it when you lift.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                            Text("Line, arc, curve, circle, ellipse, triangle, rectangle or square.", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                            Row {
+                                TextButton(onClick = { vm.quickShapeLast(); vm.quickShapeEditing = true }) { Text("Edit last shape") }
+                                TextButton(onClick = { vm.endQuickShape() }) { Text("Done") }
+                            }
+                        }
+                    }
+                }
                 else Column(Modifier.fillMaxSize().padding(24.dp)) {
                     Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
                     TextButton(onClick = { if (standalone) ed.closeEditor() else close() }) { Text("Close") }

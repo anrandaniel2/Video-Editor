@@ -119,6 +119,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         val t = editor?.timeline
         val short = t?.let { minOf(it.width, it.height).toInt() } ?: 1080
         exportSettings = ExportSettings(if (short == 720 || short == 1080 || short == 2160) short.toUInt() else 1080u, 30u, ExportQuality.HIGH, io.github.artcraftandroid.filmcraft.core.VideoContainer.MP4, io.github.artcraftandroid.filmcraft.core.VideoCodec.H264)
+        if (editor?.drawingAnimationExport == true) {
+            val fps = (editor!!.rateNum / editor!!.rateDen.coerceAtLeast(1)).toInt().coerceIn(1, 120)
+            exportSettings = exportSettings.copy(fps = fps.toUInt())
+        }
         screen = Screen.Export
     }
 
@@ -137,7 +141,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
             Screen.About -> Screen.Settings
             Screen.Licences -> Screen.About
             Screen.Settings -> Screen.Home
-            Screen.Export -> if (editor != null) Screen.Editor else Screen.Home
+            Screen.Export -> if (editor != null) {
+                if (editor?.drawingAnimationExport == true) editor?.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
+                Screen.Editor
+            } else Screen.Home
             else -> Screen.Home
         }
     }
@@ -413,6 +420,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     }
 
     fun finishExport() {
+        if (editor?.drawingAnimationExport == true) { closeEditor(); return }
         exportPhase = ExportPhase.Settings
         screen = if (editor != null) Screen.Editor else Screen.Home
     }
