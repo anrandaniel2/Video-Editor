@@ -87,6 +87,12 @@ The release workflow builds it on every push to the working branch: run
 `crates/text`'s build script wants `assets/fonts`, `spell.rs` includes `assets/dict`, and the app's
 own Auto exposure and controller setters (see the commits).
 
+Run [43646451146](https://github.com/anrandaniel2/Video-Editor/actions/runs/43646451146) built the
+same APK with the Compose front end carrying the whole palette: 69 tools in nine groups, each with
+its own options bar, drawn from `ui/photocraft/PhotoCraftTools.kt`, plus 47 Lucide icons fetched into
+`assets/icons` so no tool borrows another's glyph. That run is also what caught `SelectChip`'s
+trailing-lambda trap: its last parameter is the tag, so the action has to go inside the parentheses.
+
 ## Device checks (once the Kotlin host lands)
 
 - Open a PSD with groups, an adjustment layer, a masked layer and type: the layer panel lists them
