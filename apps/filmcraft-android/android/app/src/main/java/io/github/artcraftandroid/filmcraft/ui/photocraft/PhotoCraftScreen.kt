@@ -147,9 +147,17 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
             val toggleGroup: (ToolGroup) -> Unit = { openGroup = if (openGroup == it) null else it }
             if (wide) {
                 Row(Modifier.fillMaxSize()) {
-                    GroupRail(tool.group, openGroup, toggleGroup, true, Modifier.width(64.dp).fillMaxHeight())
+                    // Two strips, like the reference: the groups on the darker one, the open group's
+                    // tools on the lighter one beside it.
+                    GroupRail(
+                        tool.group, openGroup, toggleGroup, true,
+                        Modifier.width(64.dp).fillMaxHeight().background(Fc.Panel.copy(alpha = .55f)),
+                    )
                     openGroup?.let { group ->
-                        ToolStrip(group, tool, choose, true, Modifier.width(54.dp).fillMaxHeight())
+                        ToolStrip(
+                            group, tool, choose, true,
+                            Modifier.width(54.dp).fillMaxHeight().background(Fc.Raised.copy(alpha = .45f)),
+                        )
                     }
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         PhotoPreview(ed, tool, values, view, Modifier.fillMaxSize().padding(top = 64.dp, bottom = 16.dp))
