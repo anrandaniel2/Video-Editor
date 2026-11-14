@@ -1,6 +1,7 @@
 package io.github.artcraftandroid.procraft.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
