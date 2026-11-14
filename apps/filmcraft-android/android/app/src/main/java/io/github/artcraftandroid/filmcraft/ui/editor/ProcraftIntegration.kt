@@ -65,8 +65,21 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     ProcraftHostServices(vm)
     val doubleTaps = remember { io.github.artcraftandroid.procraft.canvas.PenDoubleTaps() }
     val standalone = remember { ed.standaloneDrawing }
+    SideEffect { vm.hostTransient = !standalone }
     val blank = remember { ed.blankDrawing }
-    val frame = remember { ed.stop(); if (blank) null else ed.picture?.asAndroidBitmap()?.copy(Bitmap.Config.ARGB_8888, false) }
+    val frame = remember {
+        ed.stop()
+        if (blank) null else ed.picture?.asAndroidBitmap()?.let { source ->
+            val w = ed.timeline?.width?.toInt() ?: source.width
+            val h = ed.timeline?.height?.toInt() ?: source.height
+            Bitmap.createScaledBitmap(source, w, h, true).let { scaled ->
+                if (scaled === source) source.copy(Bitmap.Config.ARGB_8888, false) else scaled
+            }
+        }
+    }
+    var exportMenu by remember { mutableStateOf(false) }
+    var exportFormat by remember { mutableStateOf(DrawingFormat.PNG) }
+    var exportQuality by remember { mutableIntStateOf(95) }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var initialised by remember { mutableStateOf(false) }
@@ -94,7 +107,8 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
             }
             // Await the real opening job, rather than polling a non-observable session field.
             check(vm.session != null) { vm.message ?: "The drawing couldn't be opened." }
-            vm.artworkFolder()?.let { dir ->
+            if (!standalone) vm.prepareHostOverlay(frame != null)
+            if (standalone) vm.artworkFolder()?.let { dir ->
                 val (w, h) = vm.canvasSize()
                 ed.drawingArtwork = io.github.artcraftandroid.procraft.gallery.Artwork(dir, vm.artworkTitle(), w, h, System.currentTimeMillis())
             }
@@ -109,7 +123,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
         }
     }
     DisposableEffect(Unit) { onDispose { frame?.recycle(); ed.blankDrawing = false; CanvasSpace.set(false) } }
-    val requestClose: () -> Unit = {
+    val performClose: () -> Unit = {
         if (!saving && !completed && (vm.session != null || initialised)) {
             saving = true
             scope.launch {
@@ -126,7 +140,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                                     withContext(Dispatchers.IO) {
                                         val link = vm.artworkFolder()?.let { File(it, ".filmcraft-photo") }
                                         val previous = link?.takeIf { it.isFile }?.readText()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
-                                        val uri = saveDrawingPhoto(context, image, previous ?: ed.drawingPhotoDestination)
+                                        val uri = saveDrawingPhoto(context, image, previous ?: ed.drawingPhotoDestination, exportFormat, exportQuality)
                                         link?.writeText(uri.toString())
                                     }
                                 } finally { image.recycle() }
@@ -150,6 +164,9 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
             }
         }
     }
+    val requestClose: () -> Unit = {
+        if (!saving && !completed) { if (standalone && vm.session != null) exportMenu = true else performClose() }
+    }
     SideEffect { vm.hostClose = requestClose }
     Dialog(onDismissRequest = requestClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog()
@@ -164,6 +181,31 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 else Column(Modifier.fillMaxSize().padding(24.dp)) {
                     Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
                     TextButton(onClick = { if (standalone) ed.closeEditor() else close() }) { Text("Close") }
+                }
+                if (exportMenu) {
+                    AlertDialog(onDismissRequest = { exportMenu = false },
+                        title = { Text("Export drawing") },
+                        modifier = Modifier.then(io.github.artcraftandroid.procraft.ui.rememberFrost(35.dp)),
+                        containerColor = io.github.artcraftandroid.procraft.ui.Pc.PopoverFrost,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp),
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("Image format")
+                                listOf(DrawingFormat.PNG, DrawingFormat.JPEG, DrawingFormat.JXL, DrawingFormat.AVIF).chunked(2).forEach { formats ->
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        formats.forEach { format -> io.github.artcraftandroid.filmcraft.ui.SelectChip(format.label, exportFormat == format, { exportFormat = format }) }
+                                    }
+                                }
+                                if (exportFormat == DrawingFormat.JPEG || exportFormat == DrawingFormat.AVIF) {
+                                    Text("Quality · $exportQuality%")
+                                    io.github.artcraftandroid.filmcraft.ui.FcSlider((exportQuality - 1) / 99f, { exportQuality = (it * 99 + 1).toInt() }, description = "Image quality")
+                                } else Text("Lossless · full quality. PNG and JPEG XL preserve transparency.")
+                                if (exportFormat == DrawingFormat.JPEG) Text("JPEG uses a white background for transparent areas.")
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { exportMenu = false; performClose() }) { Text("Export and close") } },
+                        dismissButton = { TextButton(onClick = { exportMenu = false }) { Text("Keep drawing") } },
+                    )
                 }
                 if (saving) {
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .45f))) {

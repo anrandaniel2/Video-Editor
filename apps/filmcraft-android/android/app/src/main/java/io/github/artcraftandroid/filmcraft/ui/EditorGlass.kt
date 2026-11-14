@@ -21,6 +21,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -88,8 +89,10 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp =
         // as a source: sibling/nested panels can otherwise form RenderNode dependency cycles.
         return clip(RoundedCornerShape(corner))
             .hazeEffect(state, style = style)
+            .background(io.github.artcraftandroid.procraft.ui.Pc.PopoverFrost)
     }
     val backdrop = LocalEditorGlass.current
+    if (backdrop == null) return clip(RoundedCornerShape(corner)).background(io.github.artcraftandroid.procraft.ui.Pc.PopoverFill)
     var origin by remember { mutableStateOf(Offset.Zero) }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
     return onGloballyPositioned { coordinates ->

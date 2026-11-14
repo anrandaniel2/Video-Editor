@@ -3,6 +3,10 @@ package io.github.artcraftandroid.filmcraft.ui.export
 import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import io.github.artcraftandroid.filmcraft.core.VideoContainer
+import io.github.artcraftandroid.filmcraft.core.VideoCodec
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -158,27 +162,41 @@ private fun SettingsSheet(vm: AppViewModel) {
     val plan = vm.exportPlan()
     ToolPanel("Export settings", { vm.exportSheet = false }, tag = "export_settings_sheet") {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+            Text("File format", style = FcType.Label, color = Fc.Body)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                VideoContainer.entries.forEach { format -> SelectChip(if (format == VideoContainer.MP4) "MP4" else "QuickTime MOV", s.container == format, {
+                    vm.exportSettings = s.copy(container = format, codec = if (format == VideoContainer.MP4) VideoCodec.H264 else s.codec)
+                }) }
+            }
+            Spacer(Modifier.height(16.dp))
+            Text("Video codec", style = FcType.Label, color = Fc.Body)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val codecs = if (s.container == VideoContainer.MP4) listOf(VideoCodec.H264) else VideoCodec.entries
+                codecs.forEach { codec -> SelectChip(when(codec) { VideoCodec.H264 -> "H.264"; VideoCodec.PRORES -> "ProRes"; VideoCodec.DNXHR -> "DNxHR"; VideoCodec.MJPEG -> "Motion JPEG" }, s.codec == codec, { vm.exportSettings = s.copy(codec = codec) }) }
+            }
+            Spacer(Modifier.height(16.dp))
             Text("Resolution", style = FcType.Label, color = Fc.Body)
             Spacer(Modifier.height(13.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for ((label, v) in listOf("720" to 720u, "1080" to 1080u, "4K" to 2160u)) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((label, v) in listOf("720" to 720u, "1080" to 1080u, "4K" to 2160u, "8K" to 4320u)) {
                     SelectChip(label, s.shortSide == v, { vm.exportSettings = s.copy(shortSide = v) }, tag = "export_resolution_$label")
                 }
             }
             Spacer(Modifier.height(39.dp))
             Text("Frame rate", style = FcType.Label, color = Fc.Body)
             Spacer(Modifier.height(13.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (f in listOf(24u, 25u, 30u, 50u, 60u)) SelectChip("$f", s.fps == f, { vm.exportSettings = s.copy(fps = f) }, tag = "export_fps_$f")
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (f in listOf(24u, 25u, 30u, 50u, 60u, 90u, 120u)) SelectChip("$f", s.fps == f, { vm.exportSettings = s.copy(fps = f) }, tag = "export_fps_$f")
             }
             Spacer(Modifier.height(39.dp))
             Text("Quality", style = FcType.Label, color = Fc.Body)
             Spacer(Modifier.height(13.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for ((label, q) in listOf("Low" to ExportQuality.LOW, "Medium" to ExportQuality.MEDIUM, "High" to ExportQuality.HIGH)) {
                     SelectChip(label, s.quality == q, { vm.exportSettings = s.copy(quality = q) }, tag = "export_quality_$label")
                 }
             }
+            Text("8K uses up to 7680 pixels on the long edge. High-resolution/high-frame-rate exports need substantial memory, storage and time.", style = FcType.Caption, color = Fc.Secondary)
             Spacer(Modifier.height(27.dp))
             Text(
                 "Estimated file size: " + (plan?.let { "%.2f MB".format(it.estimatedBytes.toDouble() / 1_000_000) } ?: "–"),

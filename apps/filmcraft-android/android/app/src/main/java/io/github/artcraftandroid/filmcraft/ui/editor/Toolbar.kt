@@ -72,7 +72,7 @@ private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modif
         val fits = wanted <= maxWidth
         Row(
             Modifier.width(wanted.coerceAtMost(maxWidth)).height(FcSize.ToolTile + 12.dp)
-                .clip(CircleShape).background(Fc.Panel)
+                .editorGlass(36.dp)
                 .horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
             horizontalArrangement = if (fits) Arrangement.Center else Arrangement.Start,
             verticalAlignment = Alignment.CenterVertically,

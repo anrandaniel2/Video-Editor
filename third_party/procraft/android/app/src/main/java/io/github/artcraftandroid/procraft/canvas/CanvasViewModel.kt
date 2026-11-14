@@ -1272,7 +1272,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             opening = false
-            start(s, store.newFolder(galleryDir), brushesLoaded = true)
+            start(s, newArtworkFolder(), brushesLoaded = true)
             timeLapse?.settings = p.timeLapse
             startedNew()
         }
@@ -1326,7 +1326,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
             message = "The plugin couldn't make this artwork."
             return@launchArtworkOpening
         }
-        start(s, store.newFolder(galleryDir), brushesLoaded = true)
+        start(s, newArtworkFolder(), brushesLoaded = true)
         startedNew()
     }
 
@@ -1423,7 +1423,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
                 loadBrushes(it)
             }
         }
-        start(s, store.newFolder(galleryDir), brushesLoaded = true)
+        start(s, newArtworkFolder(), brushesLoaded = true)
         startedNew()
     }
 
@@ -1825,7 +1825,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
             message = why?.takeIf { it.isNotEmpty() }?.let { "This model can't be opened: $it." } ?: "This model can't be opened."
             return
         }
-        start(s, store.newFolder(galleryDir), brushesLoaded = true)
+        start(s, newArtworkFolder(), brushesLoaded = true)
         startedNew()
     }
 
@@ -2423,7 +2423,23 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         noteTime()
         keepChoices(s)
         keepColour()
-        withContext(Dispatchers.IO) { s.save(dir.path) }
+        if (!hostTransient) withContext(Dispatchers.IO) { s.save(dir.path) }
+    }
+
+    /** Video-editor canvases are scratch overlays, never gallery documents or autosaves. */
+    var hostTransient = false
+    private var hostPreviewLayer: ULong? = null
+    private fun newArtworkFolder(): File = if (hostTransient) {
+        File(getApplication<Application>().cacheDir, "host-overlay-${java.util.UUID.randomUUID()}").apply { mkdirs() }
+    } else store.newFolder(galleryDir)
+
+    fun prepareHostOverlay(hasPreview: Boolean) {
+        val s = session ?: return
+        hostPreviewLayer = if (hasPreview) s.layers().firstOrNull()?.id else null
+        hostPreviewLayer?.let { s.renameLayer(it, "Video preview (not exported)"); s.setLayerLocked(it, true) }
+        s.setBackgroundVisible(false)
+        s.addLayer()
+        refresh()
     }
 
     var hostClose: (() -> Unit)? = null
@@ -2658,6 +2674,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Saves the open artwork where it is (the app going into the background). */
     fun saveNow() {
+        if (hostTransient) return
         keepColour()
         val s = session ?: return
         val dir = artworkDir ?: return
@@ -2773,10 +2790,10 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         currentBrush = s.currentBrush()
         screen = Screen.CANVAS
         // a new artwork exists in the gallery from the start (an opened one is there already)
-        if (!File(dir, "artwork.json").exists()) viewModelScope.launch(Dispatchers.IO) { runCatching { s.save(dir.path) } }
+        if (!hostTransient && !File(dir, "artwork.json").exists()) viewModelScope.launch(Dispatchers.IO) { runCatching { s.save(dir.path) } }
         // kept saved by the core, a few seconds after it changes, once nothing is under way that
         // saving would cut short (only the layers that changed are written); a failure told
-        s.startAutosave(dir.path)
+        if (!hostTransient) s.startAutosave(dir.path)
         viewModelScope.launch(Dispatchers.IO) {
             while (session === s) {
                 kotlinx.coroutines.delay(SAVE_FAILURE_POLL_MS)
@@ -5851,8 +5868,16 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         val s = session ?: return null
         return withContext(Dispatchers.IO) {
             val file = File.createTempFile("host-save-", ".png", getApplication<Application>().cacheDir)
+            val underlay = hostPreviewLayer
+            val backgroundShown = s.background().visible
+            if (hostTransient) s.setBackgroundVisible(false)
+            if (underlay != null) s.setLayerVisible(underlay, false)
             try { s.exportPng(file.path); file }
             catch (e: Exception) { file.delete(); throw e }
+            finally {
+                if (underlay != null) s.setLayerVisible(underlay, true)
+                if (hostTransient) s.setBackgroundVisible(backgroundShown)
+            }
         }
     }
 
@@ -7781,7 +7806,9 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         strokeSound.follow(null, false)
         saveNow()
         session?.stopAutosave()
+        if (hostTransient) session?.releaseCanvas()
         session = null
+        if (hostTransient) artworkDir?.deleteRecursively()
         pourThread.shutdown()
     }
 

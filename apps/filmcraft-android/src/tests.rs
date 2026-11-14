@@ -639,7 +639,7 @@ fn bad_input_is_an_error_not_a_crash() {
 #[test]
 fn the_export_plan_keeps_the_aspect_and_an_export_finishes() {
     let (m, d, _) = two_clips();
-    let settings = |short, q| export::ExportSettings { short_side: short, fps: 30, quality: q };
+    let settings = |short, q| export::ExportSettings { short_side: short, fps: 30, quality: q, ..Default::default() };
     let p = m.export_plan(settings(1080, export::ExportQuality::High)).unwrap();
     assert_eq!((p.width, p.height), (1080, 1920));
     let low = m.export_plan(settings(1080, export::ExportQuality::Low)).unwrap();
@@ -884,7 +884,7 @@ fn exported_video_keeps_the_mask_from_the_preview() {
     let preview = m.renderer().unwrap().frame(0, 64, false, None).unwrap();
     let out = d.join("masked.mp4").to_string_lossy().into_owned();
     // The phone's own export path (not a separate renderer): 144 px is its smallest short side.
-    let job = m.start_export(out.clone(), export::ExportSettings { short_side: 144, fps: 30, quality: export::ExportQuality::High }).unwrap();
+    let job = m.start_export(out.clone(), export::ExportSettings { short_side: 144, fps: 30, quality: export::ExportQuality::High, ..Default::default() }).unwrap();
     let start = std::time::Instant::now();
     let status = loop {
         let st = m.export_status(job).unwrap();

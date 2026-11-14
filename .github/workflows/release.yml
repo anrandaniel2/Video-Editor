@@ -175,6 +175,12 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      - name: Preserve resolved dependency lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-lock
+          path: Cargo.lock
+
       - name: Remove the release key
         if: always()
         run: rm -f "$RUNNER_TEMP/release.p12"

@@ -145,7 +145,7 @@ pub struct SessionStatus {
 #[uniffi::export]
 pub fn encode_drawing_jxl(rgba: Vec<u8>, width: u32, height: u32) -> Result<Vec<u8>, MobileError> {
     let pixels = u64::from(width) * u64::from(height);
-    if width < 2 || height < 2 || pixels > 4_194_304 || rgba.len() as u64 != pixels * 4 {
+    if width < 2 || height < 2 || pixels > 67_108_864 || rgba.len() as u64 != pixels * 4 {
         return Err(MobileError::Command("Invalid drawing dimensions or pixel data.".into()));
     }
     let options = zune_core::options::EncoderOptions::new(width as usize, height as usize, zune_core::colorspace::ColorSpace::RGBA, zune_core::bit_depth::BitDepth::Eight);
@@ -153,6 +153,19 @@ pub fn encode_drawing_jxl(rgba: Vec<u8>, width: u32, height: u32) -> Result<Vec<
     let mut output = Vec::new();
     encoder.encode(&mut output).map_err(|e| MobileError::Command(format!("JPEG XL: {e:?}")))?;
     Ok(output)
+}
+
+/// Encode a genuine AVIF image with an independent alpha plane.
+#[uniffi::export]
+pub fn encode_drawing_avif(rgba: Vec<u8>, width: u32, height: u32, quality: u8) -> Result<Vec<u8>, MobileError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0 || height == 0 || pixels > 67_108_864 || rgba.len() as u64 != pixels * 4 {
+        return Err(MobileError::Command("Invalid drawing dimensions or pixel data.".into()));
+    }
+    let pixels: Vec<ravif::RGBA8> = rgba.chunks_exact(4).map(|c| ravif::RGBA8::new(c[0], c[1], c[2], c[3])).collect();
+    ravif::Encoder::new().with_quality(f32::from(quality.clamp(1, 100))).with_alpha_quality(100.0).with_speed(7)
+        .encode_rgba(ravif::Img::new(pixels.as_slice(), width as usize, height as usize))
+        .map(|image| image.avif_file).map_err(|e| MobileError::Command(format!("AVIF: {e}")))
 }
 
 /// Ticks per second, for the UI's clock and labels.

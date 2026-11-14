@@ -17,6 +17,14 @@ pub enum ExportQuality {
     High,
 }
 
+/// Output file container (not merely a filename extension).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum, Default)]
+pub enum VideoContainer { #[default] Mp4, Mov }
+
+/// Encoders supplied by the engine on every Android build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum, Default)]
+pub enum VideoCodec { #[default] H264, Prores, Dnxhr, Mjpeg }
+
 /// What to export: the short side (720, 1080 or 2160 pixels; the long side follows the frame's
 /// aspect), frames per second and quality.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -24,6 +32,12 @@ pub struct ExportSettings {
     pub short_side: u32,
     pub fps: u32,
     pub quality: ExportQuality,
+    pub container: VideoContainer,
+    pub codec: VideoCodec,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self { Self { short_side: 1080, fps: 30, quality: ExportQuality::High, container: VideoContainer::Mp4, codec: VideoCodec::H264 } }
 }
 
 /// An export's size and expected file size.
@@ -62,10 +76,21 @@ fn even(x: f64) -> u32 {
 pub(crate) fn plan(s: &Session, settings: &ExportSettings) -> Result<ExportPlan, MobileError> {
     let (_, seq) = model::sequence(s)?;
     let (w, h) = (f64::from(seq.settings.width.max(1)), f64::from(seq.settings.height.max(1)));
-    let short = f64::from(settings.short_side.clamp(144, 4320));
-    let (width, height) = if w <= h { (even(short), even(short * h / w)) } else { (even(short * w / h), even(short)) };
+    if !(1..=120).contains(&settings.fps) || !(144..=4320).contains(&settings.short_side) {
+        return Err(MobileError::Command("Choose a resolution up to 8K and a frame rate from 1 to 120 fps.".into()));
+    }
+    if settings.container == VideoContainer::Mp4 && settings.codec != VideoCodec::H264 {
+        return Err(MobileError::Command("Prores, DNxHR and Motion JPEG require QuickTime MOV.".into()));
+    }
+    let factor = (f64::from(settings.short_side) / w.min(h)).min(7680.0 / w.max(h));
+    let (width, height) = (even(w * factor), even(h * factor));
     let fps = f64::from(settings.fps.clamp(1, 120));
-    let kbps = (f64::from(width) * f64::from(height) * fps * bits_per_pixel(settings.quality) / 1000.0).max(500.0);
+    let bpp = match settings.codec {
+        VideoCodec::H264 => bits_per_pixel(settings.quality),
+        VideoCodec::Mjpeg => 2.0,
+        VideoCodec::Prores | VideoCodec::Dnxhr => 4.0,
+    };
+    let kbps = (f64::from(width) * f64::from(height) * fps * bpp / 1000.0).max(500.0);
     let seconds = seq.duration().seconds();
     // video plus 320 kb/s of sound, and a little for the container
     let estimated = ((kbps + 320.0) * 1000.0 / 8.0 * seconds * 1.02) as u64;
@@ -83,7 +108,14 @@ pub(crate) fn start(s: &mut Session, path: &str, settings: &ExportSettings) -> R
         s,
         "file.exportMedia",
         json!({
-            "path": path, "format": "h264", "width": p.width, "height": p.height, "fps": settings.fps,
+            "path": path, "format": match settings.codec { VideoCodec::H264 => "h264", VideoCodec::Prores => "prores", VideoCodec::Dnxhr => "dnxhr", VideoCodec::Mjpeg => "mjpeg" },
+            "settings": {
+                "multiplexer": if settings.container == VideoContainer::Mov { "mov" } else { "mp4" },
+                "proresProfile": match settings.quality { ExportQuality::Low => "lt", ExportQuality::Medium => "standard", ExportQuality::High => "hq" },
+                "dnxProfile": match settings.quality { ExportQuality::Low => "lb", ExportQuality::Medium => "sq", ExportQuality::High => "hq" },
+            },
+            "quality": match settings.quality { ExportQuality::Low => 60, ExportQuality::Medium => 80, ExportQuality::High => 95 },
+            "maxThreads": if p.width.max(p.height) >= 7680 { 1 } else { 2 }, "width": p.width, "height": p.height, "fps": settings.fps,
             "bitrateKbps": p.bitrate_kbps, "maxBitrateKbps": p.bitrate_kbps * 3 / 2, "bitrateMode": "vbr1Pass",
             "audio": true, "range": "entire",
             // captions are part of the picture, as in the preview

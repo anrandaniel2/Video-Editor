@@ -177,7 +177,7 @@ fun ToolPanel(
             .fillMaxWidth()
             .padding(horizontal = FcSize.PanelInset, vertical = 8.dp)
             .clip(RoundedCornerShape(FcSize.PanelCorner))
-            .background(io.github.artcraftandroid.procraft.ui.Pc.PopoverFill)
+            .editorGlass(FcSize.PanelCorner)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier),
     ) {
         // the handle and the title row drag the panel down to close it
@@ -393,8 +393,7 @@ fun FcDialog(
                 .padding(horizontal = 32.dp)
                 .widthIn(max = 480.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(FcSize.PanelCorner))
-                .background(Fc.Panel)
+                .editorGlass(FcSize.PanelCorner)
                 .padding(24.dp),
         ) {
             Text(title, style = FcType.DialogTitle, color = Color.White)

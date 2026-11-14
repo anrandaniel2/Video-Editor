@@ -75,7 +75,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     var deleting by mutableStateOf<ProjectEntry?>(null)
 
     // export
-    var exportSettings by mutableStateOf(ExportSettings(1080u, 30u, ExportQuality.HIGH))
+    var exportSettings by mutableStateOf(ExportSettings(1080u, 30u, ExportQuality.HIGH, io.github.artcraftandroid.filmcraft.core.VideoContainer.MP4, io.github.artcraftandroid.filmcraft.core.VideoCodec.H264))
     var exportPhase by mutableStateOf<ExportPhase>(ExportPhase.Settings)
         private set
     var exportSheet by mutableStateOf(false)
@@ -118,7 +118,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         exportPhase = ExportPhase.Settings
         val t = editor?.timeline
         val short = t?.let { minOf(it.width, it.height).toInt() } ?: 1080
-        exportSettings = ExportSettings(if (short == 720 || short == 1080 || short == 2160) short.toUInt() else 1080u, 30u, ExportQuality.HIGH)
+        exportSettings = ExportSettings(if (short == 720 || short == 1080 || short == 2160) short.toUInt() else 1080u, 30u, ExportQuality.HIGH, io.github.artcraftandroid.filmcraft.core.VideoContainer.MP4, io.github.artcraftandroid.filmcraft.core.VideoCodec.H264)
         screen = Screen.Export
     }
 
@@ -328,12 +328,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         }
         // the project's name, with only the characters a file name can't hold replaced
         val name = ed.project.name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().take(100).ifBlank { "FilmCraft" }
-        val out = File(dir, "$name.mp4")
+        val settings = exportSettings
+        val extension = if (settings.container == io.github.artcraftandroid.filmcraft.core.VideoContainer.MOV) "mov" else "mp4"
+        val out = File(dir, "$name.$extension")
         exportPhase = ExportPhase.Running(0f)
         exportJob = viewModelScope.launch {
             try {
                 ed.save()
-                val job = ed.engine.command { startExport(out.absolutePath, exportSettings) }
+                val job = ed.engine.command { startExport(out.absolutePath, settings) }
                 exportEngineJob = job
                 while (isActive) {
                     val st = ed.engine.command { exportStatus(job) }
@@ -374,8 +376,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     private fun saveToMovies(file: File, name: String): Uri {
         val resolver = getApplication<Application>().contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, "$name.mp4")
-            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
+            put(MediaStore.Video.Media.MIME_TYPE, if (file.extension == "mov") "video/quicktime" else "video/mp4")
             put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES)
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
