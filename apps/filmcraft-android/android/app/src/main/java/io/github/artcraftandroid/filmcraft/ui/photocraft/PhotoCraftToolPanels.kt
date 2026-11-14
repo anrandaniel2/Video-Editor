@@ -42,156 +42,255 @@ import io.github.artcraftandroid.filmcraft.ui.LucideIcons
 import io.github.artcraftandroid.filmcraft.ui.SelectChip
 import io.github.artcraftandroid.filmcraft.ui.SliderRow
 import io.github.artcraftandroid.filmcraft.ui.editorCard
+import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import io.github.artcraftandroid.filmcraft.ui.glyph
 import kotlin.math.roundToInt
 
 /**
- * PhotoCraft's chrome, laid out the way a tablet editor lays it out: a rail of tool groups down the
- * left with the open group's tools beside it, the picture full-bleed in the middle with its own bar
- * and zoom control, and the active tool's panel as a card on the right (a sheet at the bottom on a
- * phone). Every tool and every option still comes out of [PhotoTool] and [ToolOption].
+ * PhotoCraft's chrome, drawn the way the reference apps and this app's own draw mode draw theirs: a
+ * narrow icon rail down the left with the open group's tools on a glass card beside it, the picture
+ * full-bleed in the middle, a pill bar across the top, a strip of panel icons down the right edge and
+ * the active tool's options on a floating card.
+ *
+ * The glass is `editorGlass(…, blurRadius = 6.dp)` with the editor's frost, the same one the draw
+ * mode's rail and transport use, so the picture blurs faintly behind every control instead of being
+ * hidden by an opaque panel.
  */
 
-/** The nine groups, down the left in landscape and across the top of the sheet in portrait. */
+/** The rail down the left: the nine groups, then the all-tools and reset buttons. */
 @Composable
-internal fun GroupRail(
+internal fun ToolRail(
     active: ToolGroup,
     open: ToolGroup?,
     onGroup: (ToolGroup) -> Unit,
-    vertical: Boolean,
+    onMore: () -> Unit,
+    onReset: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scroll = rememberScrollState()
-    if (vertical) {
-        Column(
-            modifier.verticalScroll(scroll).padding(vertical = 8.dp, horizontal = 5.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            for (group in ToolGroup.entries) {
-                GroupButton(group, group == active, group == open, { onGroup(group) }, true, Modifier.fillMaxWidth())
-            }
+    Column(
+        modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        RailButton(LucideIcons.ChevronDown.glyph(), "Show or hide this group's tools", { onGroup(active) })
+        for (group in ToolGroup.entries) {
+            RailButton(
+                group.glyph,
+                "${group.label} tools, ${group.tools.size}",
+                { onGroup(group) },
+                selected = group == active,
+                expanded = group == open,
+                tag = "photocraft_group_${group.name.lowercase()}",
+            )
         }
-    } else {
-        Row(
-            modifier.horizontalScroll(scroll).padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            for (group in ToolGroup.entries) {
-                GroupButton(group, group == active, group == open, { onGroup(group) }, false, Modifier.width(58.dp))
-            }
-        }
+        Box(Modifier.width(24.dp).height(1.dp).background(Fc.Detail.copy(alpha = .35f)).padding(vertical = 4.dp))
+        RailButton(LucideIcons.Ellipsis.glyph(), "Every tool", onMore, tag = "photocraft_all_tools")
+        RailButton(LucideIcons.RotateCcw.glyph(), "Reset every edit", onReset, tag = "photocraft_reset")
     }
 }
 
 @Composable
-private fun GroupButton(
-    group: ToolGroup,
-    active: Boolean,
-    expanded: Boolean,
+private fun RailButton(
+    glyph: Glyph,
+    description: String,
     onClick: () -> Unit,
-    vertical: Boolean,
-    modifier: Modifier,
+    selected: Boolean = false,
+    expanded: Boolean = false,
+    tag: String? = null,
 ) {
-    Column(
-        modifier
-            .height(if (vertical) 50.dp else 48.dp)
-            .clip(RoundedCornerShape(if (vertical) 13.dp else 12.dp))
+    Box(
+        Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(
                 when {
-                    active -> Fc.Accent.copy(alpha = .22f)
-                    expanded -> Fc.Raised.copy(alpha = .9f)
+                    selected -> Fc.Accent
+                    expanded -> Fc.Accent.copy(alpha = .28f)
                     else -> Color.Transparent
                 },
             )
             .clickable(role = Role.Button, onClick = onClick)
-            .testTag("photocraft_group_${group.name.lowercase()}")
-            .semantics { contentDescription = "${group.label} tools, ${group.tools.size}" },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+            .then(if (tag != null) Modifier.testTag(tag) else Modifier)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(group.glyph, if (active || expanded) Fc.AccentLight else Fc.Icon, size = 19.dp)
-        Spacer(Modifier.height(3.dp))
+        GlyphIcon(glyph, if (selected) Color.White else Fc.Icon, size = 21.dp)
+    }
+}
+
+/** The floating card beside the rail: the open group's tools, then the chosen tool's own sliders. */
+@Composable
+internal fun ToolPickerCard(
+    group: ToolGroup,
+    current: PhotoTool,
+    values: PhotoToolValues,
+    onTool: (PhotoTool) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.editorGlass(20.dp).padding(vertical = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(group.label.uppercase(), style = FcType.ToolLabel.copy(fontSize = 9.sp), color = Fc.Detail)
+            Spacer(Modifier.weight(1f))
+            Text("${group.tools.size} tools", style = FcType.ToolLabel.copy(fontSize = 9.sp), color = Fc.Detail)
+        }
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            for (tool in group.tools) {
+                ToolRow(tool, tool == current, { onTool(tool) })
+            }
+        }
+        val sliders = current.options.filterIsInstance<ToolOption.Slider>().take(2)
+        if (sliders.isNotEmpty()) {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp).height(1.dp).background(Fc.Detail.copy(alpha = .3f)))
+            for (slider in sliders) OptionSlider(current, slider, values)
+        }
+    }
+}
+
+@Composable
+private fun ToolRow(tool: PhotoTool, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(38.dp)
+            .padding(horizontal = 6.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (selected) Fc.Accent else Color.Transparent)
+            .clickable(role = Role.Button, onClick = onClick)
+            .testTag("photocraft_tool_${tool.name.lowercase()}")
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        GlyphIcon(tool.glyph, if (selected) Color.White else Fc.Icon, size = 17.dp)
         Text(
-            group.label,
-            style = FcType.ToolLabel.copy(fontSize = 9.sp),
-            color = if (active) Fc.AccentLight else Fc.Detail,
+            tool.label,
+            style = FcType.Caption,
+            color = if (selected) Color.White else Fc.Body,
             maxLines = 1,
-            overflow = TextOverflow.Clip,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
-/** The open group's tools: a second rail in landscape, a scrolling strip in the sheet. */
+/** Every tool in every group: what the rail's "…" and the bar's menu open. */
+@Composable
+internal fun AllToolsCard(
+    current: PhotoTool,
+    onTool: (PhotoTool) -> Unit,
+    modifier: Modifier = Modifier,
+    glass: Boolean = true,
+) {
+    // Inside the phone's sheet the card is already on glass: a second haze pane would nest effects.
+    val base = if (glass) modifier.editorGlass(20.dp) else modifier
+    Column(base.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("ALL TOOLS", style = FcType.ToolLabel.copy(fontSize = 9.sp), color = Fc.Detail)
+            Spacer(Modifier.weight(1f))
+            Text("${PhotoTool.entries.size}", style = FcType.ToolLabel.copy(fontSize = 9.sp), color = Fc.Detail)
+        }
+        for (group in ToolGroup.entries) {
+            Text(
+                group.label.uppercase(),
+                style = FcType.ToolLabel.copy(fontSize = 9.sp),
+                color = Fc.AccentLight,
+                modifier = Modifier.padding(start = 14.dp, top = 6.dp, bottom = 2.dp),
+            )
+            for (tool in group.tools) ToolRow(tool, tool == current, { onTool(tool) })
+        }
+    }
+}
+
+/** The tools of the open group as a strip, for the sheet at the bottom of a phone. */
 @Composable
 internal fun ToolStrip(
     group: ToolGroup,
     current: PhotoTool,
     onTool: (PhotoTool) -> Unit,
-    vertical: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val scroll = rememberScrollState()
-    if (vertical) {
-        Column(
-            modifier.verticalScroll(scroll).padding(vertical = 8.dp, horizontal = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            for (tool in group.tools) {
-                ToolButton(tool, tool == current, { onTool(tool) }, true, Modifier.fillMaxWidth())
-            }
-        }
-    } else {
-        Row(
-            modifier.horizontalScroll(scroll).padding(horizontal = 8.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-        ) {
-            for (tool in group.tools) {
-                ToolButton(tool, tool == current, { onTool(tool) }, false, Modifier.width(56.dp))
+    Row(
+        modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        for (tool in group.tools) {
+            Column(
+                Modifier
+                    .width(54.dp)
+                    .height(50.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (tool == current) Fc.Accent else Color.Transparent)
+                    .clickable(role = Role.Button, onClick = { onTool(tool) })
+                    .testTag("photocraft_tool_${tool.name.lowercase()}")
+                    .semantics { contentDescription = tool.label },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                GlyphIcon(tool.glyph, if (tool == current) Color.White else Fc.Body, size = 18.dp)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    tool.label,
+                    style = FcType.ToolLabel.copy(fontSize = 9.sp),
+                    color = if (tool == current) Color.White else Fc.Detail,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }
 }
 
+/** The panel shortcuts down the right edge, like the reference's stack of panel icons. */
 @Composable
-private fun ToolButton(tool: PhotoTool, selected: Boolean, onClick: () -> Unit, vertical: Boolean, modifier: Modifier) {
+internal fun PanelStrip(
+    current: PhotoTool,
+    onTool: (PhotoTool) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val quick = listOf(
+        PhotoTool.Adjust,
+        PhotoTool.Filters,
+        PhotoTool.Crop,
+        PhotoTool.Eyedropper,
+        PhotoTool.SpotHealing,
+        PhotoTool.Brush,
+        PhotoTool.HorizontalType,
+        PhotoTool.Zoom,
+    )
     Column(
-        modifier
-            .height(if (vertical) 40.dp else 52.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) Fc.Accent.copy(alpha = .85f) else Color.Transparent)
-            .clickable(role = Role.Button, onClick = onClick)
-            .testTag("photocraft_tool_${tool.name.lowercase()}")
-            .semantics { contentDescription = tool.label },
+        modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp, horizontal = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        GlyphIcon(tool.glyph, if (selected) Fc.Title else Fc.Body, size = if (vertical) 18.dp else 17.dp)
-        if (!vertical) {
-            Spacer(Modifier.height(2.dp))
-            Text(
+        for (tool in quick) {
+            RailButton(
+                tool.glyph,
                 tool.label,
-                style = FcType.ToolLabel.copy(fontSize = 9.sp),
-                color = if (selected) Fc.Title else Fc.Detail,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
+                { onTool(tool) },
+                selected = tool == current,
+                tag = "photocraft_quick_${tool.name.lowercase()}",
             )
         }
     }
 }
 
-/** The card's title: the tool, the group it came from, and the picture's real size. */
+/** The card's title: the tool, its group and the picture's real pixel size. */
 @Composable
 internal fun PanelHeader(tool: PhotoTool, width: Int, height: Int, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 12.dp, bottom = 2.dp),
+            Modifier.fillMaxWidth().padding(start = 14.dp, end = 12.dp, top = 10.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            GlyphIcon(tool.glyph, Fc.AccentLight, size = 17.dp)
+            GlyphIcon(tool.glyph, Fc.AccentLight, size = 16.dp)
             Text(tool.label, style = FcType.Caption, color = Fc.Title, maxLines = 1)
-            Text(tool.group.label.uppercase(), style = FcType.ToolLabel.copy(fontSize = 9.sp), color = Fc.Detail, maxLines = 1)
             Spacer(Modifier.weight(1f))
             if (width > 0 && height > 0) {
                 Text("$width × $height", style = FcType.ToolLabel.copy(fontSize = 10.sp), color = Fc.Detail, maxLines = 1)
@@ -205,7 +304,7 @@ internal fun PanelHeader(tool: PhotoTool, width: Int, height: Int, modifier: Mod
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
         )
-        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp).height(1.dp).background(Fc.Raised))
+        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp).height(1.dp).background(Fc.Detail.copy(alpha = .3f)))
     }
 }
 
@@ -213,11 +312,7 @@ internal fun PanelHeader(tool: PhotoTool, width: Int, height: Int, modifier: Mod
 @Composable
 internal fun ZoomPill(view: PhotoViewState, modifier: Modifier = Modifier) {
     Row(
-        modifier
-            .height(36.dp)
-            .clip(CircleShape)
-            .background(Fc.Panel.copy(alpha = .92f))
-            .padding(horizontal = 4.dp),
+        modifier.height(36.dp).editorGlass(18.dp).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         PillButton(LucideIcons.ZoomOut.glyph(), "Zoom out") { view.zoomTo(view.zoom / 1.5f) }
@@ -265,12 +360,12 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
                 is ToolOption.Switch -> Unit
             }
         }
-        for (pair in switches.chunked(2)) {
+        if (switches.isNotEmpty()) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                for (option in pair) {
+                for (option in switches) {
                     SelectChip(option.label, values.switch(tool, option), { values.setSwitch(tool, option, !values.switch(tool, option)) })
                 }
             }
@@ -286,7 +381,7 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
 }
 
 @Composable
-private fun OptionSlider(tool: PhotoTool, option: ToolOption.Slider, values: PhotoToolValues) {
+internal fun OptionSlider(tool: PhotoTool, option: ToolOption.Slider, values: PhotoToolValues) {
     val value = values.number(tool, option)
     val span = option.max - option.min
     val fraction = if (span > 0f) ((value - option.min) / span).coerceIn(0f, 1f) else 0f
@@ -318,10 +413,10 @@ private fun OptionChoice(tool: PhotoTool, option: ToolOption.Choice, values: Pho
 }
 
 @Composable
-private fun ToolActionButton(action: ToolAction, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun RowScope.ToolActionButton(action: ToolAction, modifier: Modifier, onClick: () -> Unit) {
     Column(
         modifier
-            .height(52.dp)
+            .height(50.dp)
             .clip(RoundedCornerShape(13.dp))
             .editorCard(13.dp)
             .clickable(role = Role.Button, onClick = onClick)

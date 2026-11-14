@@ -133,10 +133,12 @@ keeps the clip's masks.
 ## PhotoCraft
 
 **PhotoCraft** is the dedicated photo editor, opened from Home (**PhotoCraft**) or from any
-saved picture's menu (**Edit in PhotoCraft**). It is laid out the way a desktop editor is: the
-tool rails run down the left, the picture sits full-bleed in the middle under a floating bar and
-its own zoom control, and the active tool's panel is a card on the right — a sheet under the
-picture on a phone, where the same rails scroll along its top.
+saved picture's menu (**Edit in PhotoCraft**). It is laid out the way the reference tablet editors
+are: one icon rail down the left with the open group's tools on a card beside it, the picture
+full-bleed in the middle under a floating pill bar and its own zoom control, the panel shortcuts
+down the right edge, and the active tool's options on a card at the top right — a sheet under the
+picture on a phone. Every control sits on the same frosted glass the draw mode uses, so the
+picture blurs faintly behind it.
 
 - **Adjust**, in three short tabs: *Light* (exposure, contrast, highlights, shadows, whites,
   blacks), *Colour* (temperature, tint, vibrance, saturation) and *Detail* (clarity, sharpen,
