@@ -12,7 +12,10 @@ name: Release
 
 on:
   push:
-    branches: ['arena/694df4ef-video-editor']
+    # The working branches: a push builds the APK as a dry run (nothing is released unless a tag
+    # is pushed), which is also how the Rust half — FilmCraft's crate, ProCraft and now the
+    # vendored PhotoCraft engine — is compiled and checked on every change.
+    branches: ['arena/694df4ef-video-editor', 'arena/d72fcf2f-video-editor']
     tags: ['v*']
   workflow_dispatch:
 
