@@ -75,10 +75,17 @@ cargo ndk -t arm64-v8a --platform 29 build --release -p photocraft-android-core 
 cargo run -p photocraft-bindgen -- generate <libphotocraft_core.so> --language kotlin --out-dir out
 ```
 
-`android/app/build.gradle.kts` runs both (`cargoBuild<Variant>`, and `uniffiBindgen<Variant>` once
-the bindings step is wired) with the same `-Pfilmcraft.abis` the rest of the app uses. The Gradle
-module only packages the library today; the Kotlin bindings are generated but not yet compiled
-into a host screen.
+`android/app/build.gradle.kts` runs the first (`cargoBuild<Variant>`, with the same
+`-Pfilmcraft.abis` the rest of the app uses); the bindings step is written and waits for the first
+Kotlin consumer. The Gradle module packages the library today, and the Kotlin bindings are not yet
+compiled into a host screen.
+
+The release workflow builds it on every push to the working branch: run
+[43612592493](https://github.com/anrandaniel2/Video-Editor/actions/runs/43612592493) compiled
+`libphotocraft_core.so` for arm64-v8a, linked it into `:app` and signed a dry-run APK
+(`filmcraft-android-0.0.61-beta.apk`). That run is what caught the four things this tree needed:
+`crates/text`'s build script wants `assets/fonts`, `spell.rs` includes `assets/dict`, and the app's
+own Auto exposure and controller setters (see the commits).
 
 ## Device checks (once the Kotlin host lands)
 
