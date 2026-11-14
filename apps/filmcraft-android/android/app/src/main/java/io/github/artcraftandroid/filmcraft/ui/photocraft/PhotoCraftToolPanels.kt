@@ -77,7 +77,11 @@ internal fun ToolRail(
         val shown = openGroup
         if (shown != null) {
             Spacer(Modifier.height(4.dp))
-            ToolFlyout(shown, tool, onTool)
+            // Picking a tool closes the flyout so its options get the room the tools just used.
+            ToolFlyout(shown, tool) { picked ->
+                openGroup = null
+                onTool(picked)
+            }
         }
     }
 }
