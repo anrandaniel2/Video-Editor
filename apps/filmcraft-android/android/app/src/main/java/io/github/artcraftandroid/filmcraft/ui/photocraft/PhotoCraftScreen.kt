@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -109,9 +110,11 @@ private val CompareGlyph: Glyph = lucide(
 ).glyph()
 
 /**
- * PhotoCraft: the photo editor. A picture, one tool at a time under it, and the actions that matter
- * on the top bar. The crop frame and the preview are drawn from the same edited picture the save
- * uses, so nothing is a simulation.
+ * PhotoCraft: the photo editor, laid out like a desktop one. On a tablet the tool rails run down the
+ * left, the picture is full-bleed in the middle under a floating bar and zoom control, and the active
+ * tool's panel is a card on the right; on a phone the rails and the panel drop into a sheet under the
+ * picture. The crop frame and the preview are drawn from the same edited picture the save uses, so
+ * nothing is a simulation.
  */
 @Composable
 fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
@@ -133,18 +136,65 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
 
     CompositionLocalProvider(LocalEditorBackdrop provides rememberHazeState()) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Fc.Black).testTag("screen_photocraft")) {
+            // The tablet layout, the way the desktop editor and the reference do it: the rails on the
+            // left, the picture full-bleed in the middle with its own bar and zoom control, the panel on
+            // the right; on a phone the panel drops to a sheet under the picture.
             val wide = maxWidth >= 760.dp && maxWidth > maxHeight
-            val panelRoom = if (wide) maxHeight - 150.dp else maxHeight * 0.42f
-            Column(Modifier.fillMaxSize()) {
-                PhotoCraftTopBar(ed, requestClose)
-                if (wide) {
-                    Row(Modifier.weight(1f).fillMaxWidth()) {
-                        PhotoPreview(ed, tool, values, view, Modifier.weight(1f).fillMaxSize())
-                        PhotoToolDock(ed, tool, { tool = it }, values, view, Modifier.width(404.dp).fillMaxSize(), panelRoom)
+            var openGroup by remember { mutableStateOf<ToolGroup?>(tool.group) }
+            val choose: (PhotoTool) -> Unit = { tool = it }
+            val toggleGroup: (ToolGroup) -> Unit = { openGroup = if (openGroup == it) null else it }
+            if (wide) {
+                Row(Modifier.fillMaxSize()) {
+                    GroupRail(tool.group, openGroup, toggleGroup, true, Modifier.width(64.dp).fillMaxHeight())
+                    openGroup?.let { group ->
+                        ToolStrip(group, tool, choose, true, Modifier.width(54.dp).fillMaxHeight())
                     }
-                } else {
-                    PhotoPreview(ed, tool, values, view, Modifier.weight(1f).fillMaxWidth())
-                    PhotoToolDock(ed, tool, { tool = it }, values, view, Modifier.fillMaxWidth(), panelRoom)
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        PhotoPreview(ed, tool, values, view, Modifier.fillMaxSize().padding(top = 64.dp, bottom = 16.dp))
+                        PhotoCraftTopBar(
+                            ed, requestClose,
+                            Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp, start = 8.dp, end = 8.dp),
+                        )
+                        ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 16.dp))
+                    }
+                    Column(
+                        Modifier
+                            .width(338.dp)
+                            .fillMaxHeight()
+                            .padding(start = 4.dp, end = 10.dp, top = 10.dp, bottom = 12.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .editorGlass(22.dp, material = Fc.Panel.copy(alpha = .95f)),
+                    ) {
+                        PanelHeader(tool, ed.baseWidth, ed.baseHeight)
+                        ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
+                        Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        PhotoPreview(ed, tool, values, view, Modifier.fillMaxSize().padding(top = 58.dp))
+                        PhotoCraftTopBar(
+                            ed, requestClose,
+                            Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 6.dp, start = 6.dp, end = 6.dp),
+                        )
+                        ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 12.dp))
+                    }
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = maxHeight * .60f)
+                            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                            .editorGlass(24.dp, material = Fc.Panel.copy(alpha = .96f)),
+                    ) {
+                        GroupRail(tool.group, openGroup, toggleGroup, false, Modifier.fillMaxWidth())
+                        openGroup?.let { group ->
+                            ToolStrip(group, tool, choose, false, Modifier.fillMaxWidth())
+                        }
+                        PanelHeader(tool, ed.baseWidth, ed.baseHeight)
+                        ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
+                        Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
+                    }
                 }
             }
             if (ed.loading) {
@@ -195,14 +245,18 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
 // ---- top bar ----
 
 @Composable
-private fun PhotoCraftTopBar(ed: PhotoCraftController, close: () -> Unit) {
+private fun PhotoCraftTopBar(ed: PhotoCraftController, close: () -> Unit, modifier: Modifier = Modifier) {
     Row(
-        Modifier.fillMaxWidth().statusBarsPadding().padding(start = 6.dp, end = 10.dp, top = 4.dp, bottom = 4.dp).height(52.dp),
+        modifier
+            .height(50.dp)
+            .clip(CircleShape)
+            .editorGlass(25.dp, material = Fc.Panel.copy(alpha = .92f))
+            .padding(horizontal = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FcIconButton(LucideIcons.X.glyph(), "Close PhotoCraft", close, size = 40.dp, iconSize = 22.dp)
-        Spacer(Modifier.width(6.dp))
-        Column(Modifier.weight(1f)) {
+        FcIconButton(LucideIcons.X.glyph(), "Close PhotoCraft", close, size = 38.dp, iconSize = 20.dp)
+        Spacer(Modifier.width(4.dp))
+        Column(Modifier.padding(end = 12.dp)) {
             Text("PHOTOCRAFT", style = FcType.Badge, color = Fc.AccentLight)
             Text(ed.name, style = FcType.Label, color = Fc.Title, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -457,40 +511,24 @@ private fun CropHandle(ed: PhotoCraftController, corner: CropCorner, frame: Norm
 
 // ---- tools ----
 
+/** Which panel the card shows: the tool's own, or the tone, filter and crop panels. */
 @Composable
-private fun PhotoToolDock(
+private fun ToolPanelBody(
     ed: PhotoCraftController,
     tool: PhotoTool,
-    onTool: (PhotoTool) -> Unit,
     values: PhotoToolValues,
     view: PhotoViewState,
     modifier: Modifier,
-    panelRoom: Dp,
 ) {
-    Column(
-        modifier
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(26.dp))
-            .editorGlass(26.dp, material = Fc.Panel.copy(alpha = .92f))
-            .padding(top = 6.dp),
-    ) {
-        // The rail, the flyout, the tool's name and its options share one bounded column, so an open
-        // flyout squeezes the options rather than the picture.
-        Column(Modifier.fillMaxWidth().heightIn(max = panelRoom.coerceAtLeast(240.dp))) {
-            ToolRail(tool, onTool)
-            ToolHeader(tool)
-            Box(Modifier.fillMaxWidth().weight(1f, fill = false)) {
-                when (tool.panel) {
-                    ToolPanel.Adjust -> AdjustPanel(ed)
-                    ToolPanel.Filters -> FiltersPanel(ed)
-                    ToolPanel.Crop -> CropPanel(ed)
-                    ToolPanel.Sample -> SamplePanel(tool, values, view)
-                    ToolPanel.View -> ViewPanel(view)
-                    ToolPanel.Options -> ToolOptionsPanel(tool, values) { action -> runToolAction(ed, action) }
-                }
-            }
+    Box(modifier) {
+        when (tool.panel) {
+            ToolPanel.Adjust -> AdjustPanel(ed)
+            ToolPanel.Filters -> FiltersPanel(ed)
+            ToolPanel.Crop -> CropPanel(ed)
+            ToolPanel.Sample -> SamplePanel(tool, values, view)
+            ToolPanel.View -> ViewPanel(view)
+            ToolPanel.Options -> ToolOptionsPanel(tool, values) { action -> runToolAction(ed, action) }
         }
-        Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
     }
 }
 

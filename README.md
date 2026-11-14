@@ -133,8 +133,10 @@ keeps the clip's masks.
 ## PhotoCraft
 
 **PhotoCraft** is the dedicated photo editor, opened from Home (**PhotoCraft**) or from any
-saved picture's menu (**Edit in PhotoCraft**). It is deliberately quieter than the video
-editor: the picture, one tool at a time under it, and Save.
+saved picture's menu (**Edit in PhotoCraft**). It is laid out the way a desktop editor is: the
+tool rails run down the left, the picture sits full-bleed in the middle under a floating bar and
+its own zoom control, and the active tool's panel is a card on the right — a sheet under the
+picture on a phone, where the same rails scroll along its top.
 
 - **Adjust**, in three short tabs: *Light* (exposure, contrast, highlights, shadows, whites,
   blacks), *Colour* (temperature, tint, vibrance, saturation) and *Detail* (clarity, sharpen,
@@ -143,7 +145,7 @@ editor: the picture, one tool at a time under it, and Save.
 - **Filters**: nine developed thumbnails (Punch, Film, Mono, Noir, Warm, Cool, Fade, Vivid and
   the original), each with a strength slider.
 - **Crop**: quarter turns, both flips, and a crop frame with a locked ratio from 1:1 to 16:9.
-- **The whole palette**, in nine groups on the rail: Tone, Navigate (move, hand, rotate view,
+- **The whole palette**, in nine groups on the left rail, each opening its tools beside it: Tone, Navigate (move, hand, rotate view,
   zoom, eyedropper, colour sampler, ruler), Select (marquees, the three lassos, object and quick
   selection, magic wand), Frame (crop, perspective crop, slice, artboard, frame, transform),
   Retouch (spot healing, healing, patch, content-aware move, red eye, blur, sharpen, smudge,
