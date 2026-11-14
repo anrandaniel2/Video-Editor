@@ -186,7 +186,7 @@ private fun SettingsSheet(vm: AppViewModel) {
             Text("Frame rate", style = FcType.Label, color = Fc.Body)
             Spacer(Modifier.height(13.dp))
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (f in listOf(24u, 25u, 30u, 50u, 60u, 90u, 120u)) SelectChip("$f", s.fps == f, { vm.exportSettings = s.copy(fps = f) }, tag = "export_fps_$f")
+                for (f in (listOf(s.fps, 24u, 25u, 30u, 50u, 60u, 90u, 120u).distinct().sorted())) SelectChip("$f", s.fps == f, { vm.exportSettings = s.copy(fps = f) }, tag = "export_fps_$f")
             }
             Spacer(Modifier.height(39.dp))
             Text("Quality", style = FcType.Label, color = Fc.Body)

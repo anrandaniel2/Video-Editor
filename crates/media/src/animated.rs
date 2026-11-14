@@ -155,7 +155,7 @@ impl AnimatedSource {
             pictures.push((w, h, rgba));
             durations.push(ticks);
         }
-        if pictures.len() < 2 && !(format == Format::WebP && decoded_frames >= 2) {
+        if pictures.len() < 2 && decoded_frames < 2 {
             return None;
         }
         let (width, height) = pictures.first().map(|p| (p.0, p.1))?;

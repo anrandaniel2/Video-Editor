@@ -134,6 +134,12 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                     if (vm.session != null && standalone && vm.animation?.pages == false && vm.animationFrameCount() > 1) {
                         // Lossless animated bridge, not a pre-encoded video: the editor's actual
                         // renderer/encoder still owns output size, codec, quality and frame rate.
+                        val (canvasWidth, canvasHeight) = vm.canvasSize()
+                        val frameCount = vm.animationFrameCount()
+                        val slots = vm.session?.animationSequence()?.size ?: frameCount
+                        check(slots <= 10_000 && canvasWidth.toLong() * canvasHeight * 4L * frameCount <= 768L * 1024 * 1024) {
+                            "This animation exceeds the frame preparation limit. Reduce its canvas size or frame count before exporting."
+                        }
                         val animated = vm.exportAnimation(CanvasViewModel.Animated.PNG, false, false, false, false, vm.artworkFps())
                             ?: kotlin.error("Could not prepare animation frames.")
                         try { ed.exportDrawingAnimation(animated, vm.artworkFps().toInt()) }
