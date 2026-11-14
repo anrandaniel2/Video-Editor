@@ -140,6 +140,8 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
             // left, the picture full-bleed in the middle with its own bar and zoom control, the panel on
             // the right; on a phone the panel drops to a sheet under the picture.
             val wide = maxWidth >= 760.dp && maxWidth > maxHeight
+            // Read here: inside the sheet's Column the implicit receiver is ColumnScope, not this box.
+            val sheetRoom = maxHeight * .60f
             var openGroup by remember { mutableStateOf<ToolGroup?>(tool.group) }
             val choose: (PhotoTool) -> Unit = { tool = it }
             val toggleGroup: (ToolGroup) -> Unit = { openGroup = if (openGroup == it) null else it }
@@ -183,7 +185,7 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .heightIn(max = maxHeight * .60f)
+                            .heightIn(max = sheetRoom)
                             .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                             .editorGlass(24.dp, material = Fc.Panel.copy(alpha = .96f)),
                     ) {
