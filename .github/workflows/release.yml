@@ -67,6 +67,7 @@ jobs:
           workspaces: |
             . -> target
             third_party/procraft -> target
+            third_party/photocraft -> target
 
       - name: Install cargo-ndk and the Android NDK
         run: |

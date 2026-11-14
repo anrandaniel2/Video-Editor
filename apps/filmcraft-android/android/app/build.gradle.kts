@@ -317,6 +317,9 @@ tasks.configureEach {
 
 dependencies {
     implementation(project(":procraft"))
+    // The vendored PhotoCraft engine (third_party/photocraft): its library is built for each ABI
+    // and packaged with the app.
+    implementation(project(":photocraft"))
     implementation("org.jsoup:jsoup:1.18.3")
     implementation(libs.haze)
     implementation(libs.androidx.core.ktx)

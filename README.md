@@ -146,11 +146,19 @@ editor: the picture, one tool at a time under it, and Save.
 - Hold the split icon to compare with the picture as it was opened; undo and redo step through
   every slider, filter, turn and frame.
 
-Every preview and every saved photo go through the same native pipeline
+Every preview and every saved photo of the quick pipeline go through the same native code
 (`apps/filmcraft-android/src/photo.rs`): the same settings, the same maths, at the preview's
-size for the screen and at the working picture's size for the file. Save writes a JPEG into
-`Pictures/FilmCraft` with the rest of the app's exported photos, where Home lists it as a
-picture.
+size and at the working picture's size. Save writes a JPEG into `Pictures/FilmCraft` with the
+rest of the app's exported photos, where Home lists it as a picture.
+
+**The full editor is the real PhotoCraft.** The upstream engine
+([storytold/photocraft](https://github.com/storytold/photocraft), MIT OR Apache-2.0) is vendored
+in `third_party/photocraft` and built for Android as the `:photocraft` library — its document
+model, layer stack, compositor, adjustment layers, type, vectors, brushes, selection and PSD
+reader are all there, behind a UniFFI bridge (`android/core`). See
+[`third_party/photocraft/FILMCRAFT-INTEGRATION.md`](third_party/photocraft/FILMCRAFT-INTEGRATION.md).
+The Compose screen above is the interim front end; its tools are being replaced by the vendored
+engine's.
 
 <br>
 
