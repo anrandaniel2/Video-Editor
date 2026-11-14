@@ -114,11 +114,10 @@ fun Modifier.editorGlass(corner: Dp = 16.dp, layer: Float = 1f, blurRadius: Dp =
     }
 }
 
-/** Inner cards use ProCraft's light row material, not a second opaque popover wash.
- * Haze samples the editor's real Compose source; native rememberFrost only works inside AppRoot.
+/** ProCraft's inner cards inherit the panel's frost. They must not sample and blur the
+ * editor again: that replaces the panel material with a much more exposed blurred image.
+ * Only outer panels own a backdrop effect; cards add the same faint row wash as ProCraft.
  */
 @Composable
-fun Modifier.editorCard(corner: Dp = 18.dp): Modifier = editorGlass(
-    corner, blurRadius = 4.dp, captureSurface = false,
-    material = io.github.artcraftandroid.procraft.ui.Pc.LayerRow,
-)
+fun Modifier.editorCard(corner: Dp = 18.dp): Modifier = clip(RoundedCornerShape(corner))
+    .background(io.github.artcraftandroid.procraft.ui.Pc.LayerRow)
