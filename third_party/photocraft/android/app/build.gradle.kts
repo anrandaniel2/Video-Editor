@@ -44,6 +44,8 @@ abstract class CargoNdkBuild : DefaultTask() {
         execOperations.exec {
             workingDir(workspaceDir.get())
             environment("ANDROID_NDK_HOME", ndkDir.get())
+            // the job sets CARGO_TERM_COLOR=always; a compile error is easier to find in plain text
+            environment("CARGO_TERM_COLOR", "never")
             environment("CARGO_ENCODED_RUSTFLAGS", remap.joinToString("\u001f"))
             // The build is long and its output is where a compile error shows up: stream it.
             isIgnoreExitValue = false
