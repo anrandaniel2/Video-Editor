@@ -97,6 +97,9 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Captions -> CaptionsPanel(ed, close, modifier)
         is Panel.Speech -> SpeechPanel(ed, panel, close, modifier)
         is Panel.TextInput -> {}
+        // The photo editor is its own full-screen dialog over the whole editor (EditorScreen
+        // hosts it), not a panel in the lane this one fills.
+        Panel.Photo -> {}
     }
     LaunchedEffect(panel, clip?.id) {
         if (panel != Panel.Mask) ed.resetMaskTool() else { ed.selectedMaskIndex = 0u; ed.selectedMaskVertex = -1 }
