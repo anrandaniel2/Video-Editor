@@ -281,7 +281,7 @@ class PhotoPaintState {
     /** The live selection, as a normalised polygon: paint made now is clipped to it. */
     var selection by mutableStateOf<List<Offset>?>(null)
 
-    fun setSelection(points: List<Offset>?) {
+    fun select(points: List<Offset>?) {
         selection = points
     }
 

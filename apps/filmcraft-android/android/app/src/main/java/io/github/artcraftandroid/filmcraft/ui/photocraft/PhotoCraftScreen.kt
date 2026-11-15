@@ -578,7 +578,7 @@ private fun PaintSurface(
                 detectDragGestures(
                     onDragStart = { offset ->
                         points = listOf(normalised(offset, size))
-                        if (kind == PaintKind.Selection) paint.setSelection(selectionFor(tool, points))
+                        if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
                         else paint.begin(opFor(tool, kind, values, points))
                     },
                     onDrag = { change, _ ->
@@ -586,12 +586,12 @@ private fun PaintSurface(
                         val last = points.lastOrNull()
                         if (last == null || (next - last).getDistance() > 0.004f) {
                             points = points + next
-                            if (kind == PaintKind.Selection) paint.setSelection(selectionFor(tool, points))
+                            if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
                             else paint.begin(opFor(tool, kind, values, points))
                         }
                     },
                     onDragEnd = {
-                        if (kind == PaintKind.Selection) paint.setSelection(selectionFor(tool, points))
+                        if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
                         else paint.commit()
                         ed.overlayMarked = true
                     },
@@ -627,7 +627,7 @@ private fun PaintSurface(
                             paint.begin(opFor(tool, kind, values, listOf(point)))
                             paint.commit()
                         }
-                        PaintKind.Selection -> paint.setSelection(null)
+                        PaintKind.Selection -> paint.select(null)
                         else -> Unit
                     }
                     ed.overlayMarked = true
