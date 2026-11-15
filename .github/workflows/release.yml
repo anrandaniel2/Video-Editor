@@ -4,10 +4,19 @@
 # becomes the latest release (betas too: while the app is in beta, every release is one).
 #
 # A manual run (Actions › Release › Run workflow) is a dry run: it builds the APK at the version in
-# gradle.properties and keeps it as the run's artifact, and releases nothing. A dry run is still
-# release-signed: with the release secrets it uses the release key, and without them it falls back
-# to the public dry-run key in .github/signing (see its README). That key is not the published one,
-# so its APK installs fresh but cannot update a published build, and vice versa.
+# gradle.properties and keeps it as the run's artifact. A dry run is still release-signed: with the
+# release secrets it uses the release key, and without them it falls back to the public test key in
+# .github/signing (see its README). That key is not the published one, so its APK installs fresh but
+# cannot update a published build, and vice versa.
+#
+# Which key:
+#   v* tags            the release key, always. A tag without it fails the run rather than publish
+#                      an APK that cannot update installed copies.
+#   dryrun-* tags      the public test key, always, and the tag drafts a release named after the
+#                      tag (dryrun-0.0.61-beta). The name is not a version, so the F-Droid recipe
+#                      and the update check (they read version tags) never see it.
+#   branches, manual   the release key when the secrets are here, else the public test key; a
+#                      manual run can also ask for the public key (signing: public).
 name: Release
 
 on:
@@ -16,8 +25,15 @@ on:
       - 'arena/694df4ef-video-editor'
       # each Arena session's branch: a push here builds a dry-run APK
       - 'arena/aa65d60d-video-editor'
-    tags: ['v*']
+      # a release tag drafts a release; dryrun-<version> drafts one signed with the public key
+    tags: ['v*', 'dryrun-*']
   workflow_dispatch:
+    inputs:
+      signing:
+        description: 'Key: auto = the release key if configured, else the public test key; public = the public test key (drafts nothing)'
+        type: choice
+        options: [auto, public]
+        default: auto
 
 permissions:
   contents: read
@@ -35,6 +51,9 @@ jobs:
   apk:
     name: APK
     runs-on: ubuntu-latest
+    # what signed it, for the release job's notes (and for anyone reading the API)
+    outputs:
+      key: ${{ steps.key.outputs.kind }}
     steps:
       - uses: actions/checkout@v7
 
@@ -42,18 +61,25 @@ jobs:
         name: Resolve version
         run: |
           listed="$(sed -n 's/^filmcraft\.version=//p' apps/filmcraft-android/android/gradle.properties)"
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="$listed"; fi
+          v="$listed"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            case "$GITHUB_REF_NAME" in
+              # a public-key draft: the tag reads dryrun-<version>, the build is <version>
+              dryrun-*) v="${GITHUB_REF_NAME#dryrun-}" ;;
+              *) v="${GITHUB_REF_NAME#v}" ;;
+            esac
+          fi
           if ! printf '%s' "$v" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
             echo "::error::'$v' is not a version like 1.2.3 or 1.2.3-beta"
             exit 1
           fi
           # the tag must be the version gradle.properties names (F-Droid builds from that file)
           if [ "$v" != "$listed" ]; then
-            echo "::error::the tag is v$v but gradle.properties says filmcraft.version=$listed: set it (and filmcraft.versionCode) before tagging"
+            echo "::error::the tag is $GITHUB_REF_NAME but gradle.properties says filmcraft.version=$listed: set it (and filmcraft.versionCode) before tagging"
             exit 1
           fi
           echo "version=$v" >>"$GITHUB_OUTPUT"
-          echo "### v$v (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
+          echo "### $GITHUB_REF_NAME (\`${GITHUB_SHA::9}\`)" >>"$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-java@v6
         with:
@@ -78,17 +104,33 @@ jobs:
           cargo install cargo-ndk --version 4.1.2 --locked
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
 
-      # Use the stable public CI key when private signing secrets are unavailable.
+      # The key: the public test key when asked for and when the release key is unavailable, the
+      # release key otherwise. A version tag with no release key is an error: its APK could not
+      # update installed copies, which is what a release promises.
       # Public signing is explicitly permitted by the repository owner.
       - name: Release key
         id: key
         env:
           KEYSTORE_BASE64: ${{ secrets.FILMCRAFT_KEYSTORE_BASE64 }}
+          WANT_SIGNING: ${{ inputs.signing }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
+          want=auto
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            case "$GITHUB_REF_NAME" in dryrun-*) want=public ;; esac
+          fi
+          # a manual run asks (signing: public); the version tag never does
+          if [ "$WANT_SIGNING" = public ] && [ "$GITHUB_REF_TYPE" != tag ]; then want=public; fi
+          if [ "$want" != public ] && [ -n "$KEYSTORE_BASE64" ]; then
             printf '%s' "$KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.p12"
             echo "kind=release" >>"$GITHUB_OUTPUT"
+            echo "::notice::Using the release signing key."
           else
+            if [ "$GITHUB_REF_TYPE" = tag ] && [ "$want" != public ]; then
+              echo "::error::$GITHUB_REF_NAME is a release tag but the release key is not configured:"
+              echo "::error::add FILMCRAFT_KEYSTORE_BASE64 (and the password, alias and key password secrets),"
+              echo "::error::or push a dryrun-$GITHUB_REF_NAME tag to draft a build signed with the public key."
+              exit 1
+            fi
             cp .github/signing/dryrun-release.p12 "$RUNNER_TEMP/release.p12"
             echo "kind=dryrun" >>"$GITHUB_OUTPUT"
             echo "::notice::Using the stable public CI signing key."
@@ -128,7 +170,9 @@ jobs:
       # while v2 would need the old key and F-Droid refuses an APK whose v2 and v3 keys differ. The
       # ZIP layout stays Gradle's, so F-Droid can copy this signature onto its own build.
       # The dry-run key is a key of its own, not a rotation of the published one, so it carries no
-      # lineage and signs v2 + v3 (the app needs Android 10; v1 and v4 add nothing).
+      # lineage. A dry run's artifact signs v2 + v3 (the app needs Android 10; v1 and v4 add
+      # nothing); a dryrun- tag drafts a release, and a release APK signs v3 alone, so its one
+      # certificate is the one F-Droid's checker names.
       - name: Sign
         env:
           KEY_KIND: ${{ steps.key.outputs.kind }}
@@ -143,6 +187,9 @@ jobs:
             FILMCRAFT_KEY_PASSWORD=filmcraft-dryrun
           fi
           extra=(--v2-signing-enabled true --v3-signing-enabled true)
+          if [ "$KEY_KIND" = dryrun ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            extra=(--v3-signing-enabled true)
+          fi
           for apk in dist/*.apk; do
             "$apksigner" sign --ks "$FILMCRAFT_KEYSTORE" --ks-key-alias "$FILMCRAFT_KEY_ALIAS" \
               --ks-pass env:FILMCRAFT_KEYSTORE_PASSWORD --key-pass env:FILMCRAFT_KEY_PASSWORD \
@@ -159,13 +206,26 @@ jobs:
           echo >>"$GITHUB_STEP_SUMMARY"
           for apk in dist/*.apk; do
             certs="$("$apksigner" verify --print-certs "$apk")"
-            label=" (dry run, public test key)"
+            label=" (public test key)"
             if [ "$KEY_KIND" = release ]; then
               label=""
               # the lineage must name v0.0.1-beta's key, or installed copies can't update
               if ! "$apksigner" lineage --in "$apk" --print-certs | grep -q "CN=LightCraft for Android"; then
                 echo "::error::$apk has no lineage from the old key"
                 exit 1
+              fi
+            else
+              # a public-key draft carries no lineage, so installs update nothing: say so on the
+              # release itself, where someone downloading it will look
+              if [ "$GITHUB_REF_TYPE" = tag ]; then
+                label=" (public test key, not the published key)"
+                {
+                  echo "### Public-key draft"
+                  echo
+                  echo "Signed with the public test key in \`.github/signing/\` (certificate above),"
+                  echo "not the published one. It installs on its own — uninstall any published copy"
+                  echo "first — and does not update or replace a published build."
+                } >>"$GITHUB_STEP_SUMMARY"
               fi
             fi
             sha="$(sha256sum "$apk" | cut -d' ' -f1)"
@@ -200,6 +260,7 @@ jobs:
   release:
     name: GitHub Release
     needs: apk
+    # a version tag drafts the release; so does a dryrun- tag, ahead of its F-Droid entry
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
@@ -214,6 +275,25 @@ jobs:
           path: dist
 
       - name: Draft the release
+        env:
+          KEY_KIND: ${{ needs.apk.outputs.key }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes "## What's Changed" -- dist/*
+          notes="$RUNNER_TEMP/notes.md"
+          echo "## What's Changed" >"$notes"
+          title="$GITHUB_REF_NAME"
+          if [ "$KEY_KIND" = dryrun ]; then
+            # a dryrun- tag: say, in the release itself, what this build is and is not
+            {
+              echo
+              echo "---"
+              echo
+              echo "**Built from \`$GITHUB_REF_NAME\`.** The APK is signed with the *public test key*"
+              echo "\`.github/signing/dryrun-release.p12\` (certificate SHA-256"
+              echo "\`b75617b60b055b3b02ff599744c69ddebe545a60ed305333f4fc442a9a27bcc0\`), not the published"
+              echo "artcraft-android key. It installs on its own — uninstall any published copy first —"
+              echo "and it neither updates nor replaces a published build. It is not a release: no"
+              echo "version tag points at it, so F-Droid and the update check do not see it."
+            } >>"$notes"
+          fi
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$title" --notes-file "$notes" -- dist/*
           echo "Draft **$GITHUB_REF_NAME** is ready: fill in What's Changed and publish it." >>"$GITHUB_STEP_SUMMARY"

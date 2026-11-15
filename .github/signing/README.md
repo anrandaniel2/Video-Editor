@@ -16,7 +16,27 @@ no signing secrets, instead of a debug-signed one.
 | Certificate SHA-256 | `b75617b60b055b3b02ff599744c69ddebe545a60ed305333f4fc442a9a27bcc0` |
 | Key | RSA 3072, valid until 2054-03-27 |
 
-Never use it for a tag: the Release workflow fails a tag build that has no real release key.
+Never use it for a version tag: the Release workflow fails a `v*` build that has no real release
+key, rather than publish an APK that cannot update installed copies.
+
+### Public-key drafts: `dryrun-*` tags
+
+To get an APK **as a draft release** without the release key, tag `dryrun-<version>` instead of
+`v<version>` — for example `dryrun-0.0.61-beta`, matching `filmcraft.version` in
+`apps/filmcraft-android/android/gradle.properties` as a `v*` tag would. The workflow then:
+
+- signs with this public test key and no other (a `dryrun-*` tag never uses the release key);
+- signs APK Signature Scheme v3 alone, as a release does, so the APK carries one certificate;
+- drafts a GitHub release **named after the tag** (`dryrun-0.0.61-beta`) with the APK attached,
+  whose notes say which key signed it and that it installs over nothing.
+
+The name is deliberately not a version: F-Droid's update check reads version tags
+(`UpdateCheckMode: Tags`) and `AllowedAPKSigningKeys` names the published key, so a `dryrun-*`
+release is never offered to F-Droid or to installed copies. It is a draft for testing a build, not
+a release.
+
+The same key can also be asked for from a manual run: **Actions › Release › Run workflow**,
+`signing: public`. A manual run keeps the APK as its artifact and drafts nothing.
 
 ### Installing a dry-run APK
 
