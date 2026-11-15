@@ -831,7 +831,7 @@ private fun TypePanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
             p.put("size", 14)
             vm.command("type.create", p)
         }
-        ActionButton("Done", vm::closePanel)
+        ActionButton("Done", onClick = vm::closePanel)
     }
 }
 
