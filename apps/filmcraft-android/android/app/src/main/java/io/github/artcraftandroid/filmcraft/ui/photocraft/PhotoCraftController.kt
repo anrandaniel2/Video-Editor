@@ -99,6 +99,9 @@ class PhotoCraftController(
      */
     var overlay: Bitmap? = null
 
+    /** The layer stack the screen edits: Save walks it over the developed picture. */
+    var document: PhotoDocument? = null
+
     /** Whether anything has been painted since the photo was opened: part of "unsaved edits". */
     var overlayMarked by mutableStateOf(false)
     /** The crop frame is on screen: the preview shows the whole turned picture, not the frame. */
@@ -330,14 +333,21 @@ class PhotoCraftController(
                     val turned = turn(pixels, source.width, source.height, snapshot, snapshot.crop)
                     val rendered = photoRender(turned.pixels, turned.width.toUInt(), turned.height.toUInt(), snapshot.adjustments.toNative())
                     val photo = rgbaToBitmap(rendered, turned.width, turned.height)
-                    val layer = overlay
-                    if (layer != null && !layer.isRecycled && layer.width > 0) {
-                        Canvas(photo).drawBitmap(
-                            layer,
-                            null,
-                            android.graphics.Rect(0, 0, photo.width, photo.height),
-                            Paint(Paint.FILTER_BITMAP_FLAG),
-                        )
+                    val stack = document
+                    if (stack != null) {
+                        // Every visible layer, in order, at the working copy's size: the file gets the
+                        // stack, not a screenshot of the preview.
+                        stack.bake(photo)
+                    } else {
+                        val layer = overlay
+                        if (layer != null && !layer.isRecycled && layer.width > 0) {
+                            Canvas(photo).drawBitmap(
+                                layer,
+                                null,
+                                android.graphics.Rect(0, 0, photo.width, photo.height),
+                                Paint(Paint.FILTER_BITMAP_FLAG),
+                            )
+                        }
                     }
                     photo
                 }

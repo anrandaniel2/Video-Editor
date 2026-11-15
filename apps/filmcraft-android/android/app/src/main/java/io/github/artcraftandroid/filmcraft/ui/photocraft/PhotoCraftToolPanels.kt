@@ -281,6 +281,8 @@ internal fun ToolStrip(
 internal fun PanelStrip(
     current: PhotoTool,
     onTool: (PhotoTool) -> Unit,
+    onLayers: () -> Unit,
+    layersOpen: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val quick = listOf(
@@ -298,6 +300,15 @@ internal fun PanelStrip(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
+        RailButton(
+            LucideIcons.Layers.glyph(),
+            "The layer stack",
+            onLayers,
+            selected = layersOpen,
+            light = true,
+            tag = "photocraft_layers",
+        )
+        Box(Modifier.width(22.dp).height(1.dp).background(PhotoUi.PillField))
         for (tool in quick) {
             RailButton(
                 tool.glyph,
@@ -308,6 +319,207 @@ internal fun PanelStrip(
                 tag = "photocraft_quick_${tool.name.lowercase()}",
             )
         }
+    }
+}
+
+/**
+ * The layer stack, drawn the way the reference draws it: a header with the blend mode and the
+ * opacity, then the rows top-down — the photo locked at the bottom, paint layers with their masks,
+ * adjustment layers between them — each row showing its eye, its mask chip and its name.
+ */
+@Composable
+internal fun LayersPanel(doc: PhotoDocument, modifier: Modifier = Modifier) {
+    val active = doc.active
+    Column(modifier.editorGlass(18.dp, material = PhotoUi.Card.copy(alpha = .95f))) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Layers", style = FcType.PanelTitle.copy(fontSize = 15.sp), color = PhotoUi.PillInk)
+            Spacer(Modifier.weight(1f))
+            GlyphButton(LucideIcons.FilePlus.glyph(), "New layer") { doc.addPaint() }
+            GlyphButton(LucideIcons.Sun.glyph(), "Adjustment layer") {
+                val layer = doc.addAdjustment(AdjustmentKind.BrightnessContrast)
+                doc.select(layer)
+            }
+            GlyphButton(LucideIcons.Copy.glyph(), "Duplicate") { active?.let { if (!it.base) doc.duplicate(it) } }
+            GlyphButton(LucideIcons.ChevronUp.glyph(), "Move up") { active?.let { doc.move(it, true) } }
+            GlyphButton(LucideIcons.ChevronDown.glyph(), "Move down") { active?.let { doc.move(it, false) } }
+            GlyphButton(LucideIcons.Trash2.glyph(), "Delete") { active?.let { if (!it.base) doc.remove(it) } }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(PhotoUi.PillInk.copy(alpha = .1f)))
+        active?.let { layer ->
+            if (layer.adjustment != null) {
+                AdjustmentRow(layer) { doc.refresh() }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Opacity", style = FcType.Caption, color = PhotoUi.PillInkSoft)
+                    Spacer(Modifier.weight(1f))
+                    Text("${(layer.opacity * 100).roundToInt()}%", style = FcType.Caption, color = PhotoUi.PillInk)
+                }
+                FcSlider(
+                    fraction = layer.opacity,
+                    onChange = { layer.opacity = it; doc.refresh() },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    description = "Layer opacity",
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    for (mode in LayerBlend.entries) {
+                        val on = layer.blend == mode
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(if (on) PhotoUi.Accent else PhotoUi.PillField)
+                                .clickable(role = Role.Button) { layer.blend = mode; doc.refresh() }
+                                .padding(horizontal = 9.dp, vertical = 6.dp),
+                        ) {
+                            Text(mode.label, style = FcType.Caption, color = if (on) Color.White else PhotoUi.PillInk)
+                        }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SelectChip(
+                        if (layer.maskActive) "Painting the mask" else if (layer.hasMask) "Mask on" else "Add mask",
+                        layer.hasMask,
+                        {
+                            if (!layer.hasMask) {
+                                layer.hasMask = true
+                                layer.maskActive = true
+                            } else {
+                                layer.maskActive = !layer.maskActive
+                            }
+                            doc.refresh()
+                        },
+                    )
+                    if (layer.maskActive) {
+                        SelectChip("Back to pixels", false, { layer.maskActive = false })
+                    }
+                }
+            }
+        }
+        for (layer in doc.layers.reversed()) {
+            LayerRow(layer, layer.id == doc.activeId) { doc.select(layer) }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** An adjustment layer's two sliders, labelled with the adjustment's own terms. */
+@Composable
+private fun AdjustmentRow(layer: PhotoLayer, onChange: () -> Unit) {
+    val kind = layer.adjustment ?: return
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+        Text(kind.label.uppercase(), style = FcType.ToolLabel.copy(fontSize = 9.sp), color = PhotoUi.PillInkSoft)
+        Spacer(Modifier.height(2.dp))
+        Text(kind.first, style = FcType.Caption, color = PhotoUi.PillInk)
+        FcSlider(
+            fraction = layer.amount,
+            onChange = { layer.amount = it; onChange() },
+            modifier = Modifier.fillMaxWidth(),
+            description = kind.first,
+        )
+        Text(kind.second, style = FcType.Caption, color = PhotoUi.PillInk)
+        FcSlider(
+            fraction = layer.second,
+            onChange = { layer.second = it; onChange() },
+            modifier = Modifier.fillMaxWidth(),
+            description = kind.second,
+        )
+    }
+}
+
+/** One row: eye, thumbnail, name, and the mask chip when the layer carries one. */
+@Composable
+private fun LayerRow(layer: PhotoLayer, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) PhotoUi.Accent.copy(alpha = .22f) else Color.Transparent)
+            .clickable(role = Role.Button, onClick = onClick)
+            .testTag("photocraft_layer_${layer.id}")
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            Modifier.size(30.dp).clip(RoundedCornerShape(7.dp)).background(PhotoUi.PillField)
+                .clickable(role = Role.Button) { layer.visible = !layer.visible },
+            contentAlignment = Alignment.Center,
+        ) {
+            GlyphIcon(
+                LucideIcons.Eye.glyph(),
+                if (layer.visible) PhotoUi.PillInk else PhotoUi.PillInkSoft.copy(alpha = .5f),
+                size = 15.dp,
+            )
+        }
+        Box(
+            Modifier.size(30.dp).clip(RoundedCornerShape(7.dp)).background(PhotoUi.PillField),
+            contentAlignment = Alignment.Center,
+        ) {
+            GlyphIcon(
+                when {
+                    layer.base -> LucideIcons.Image.glyph()
+                    layer.adjustment != null -> LucideIcons.Sun.glyph()
+                    else -> LucideIcons.Paintbrush.glyph()
+                },
+                PhotoUi.PillInkSoft,
+                size = 15.dp,
+            )
+        }
+        Column(Modifier.weight(1f)) {
+            Text(layer.name, style = FcType.Caption, color = PhotoUi.PillInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                when {
+                    layer.base -> "Background"
+                    layer.adjustment != null -> "Adjustment"
+                    layer.hasMask -> "Layer · mask"
+                    else -> "Layer"
+                },
+                style = FcType.ToolLabel.copy(fontSize = 9.sp),
+                color = PhotoUi.PillInkSoft,
+            )
+        }
+        if (layer.hasMask) {
+            Box(
+                Modifier
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (layer.maskActive) PhotoUi.Accent else PhotoUi.PillField)
+                    .clickable(role = Role.Button) {
+                        layer.maskActive = !layer.maskActive
+                        if (layer.maskActive) layer.hasMask = true
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                GlyphIcon(LucideIcons.CircleDashed.glyph(), if (layer.maskActive) Color.White else PhotoUi.PillInkSoft, size = 12.dp)
+            }
+        }
+    }
+}
+
+/** A small round icon button for the layer header. */
+@Composable
+private fun GlyphButton(glyph: Glyph, description: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        GlyphIcon(glyph, PhotoUi.PillInk, size = 15.dp)
     }
 }
 

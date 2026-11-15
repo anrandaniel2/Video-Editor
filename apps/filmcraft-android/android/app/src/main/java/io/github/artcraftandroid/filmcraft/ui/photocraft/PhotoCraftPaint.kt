@@ -380,6 +380,14 @@ class PhotoPaintState {
         return out
     }
 
+    /** Replays the operations into any canvas at any size: the preview's and the file's. */
+    internal fun renderInto(target: Canvas, width: Int, height: Int) {
+        for (op in ops) op.render(target, width, height)
+    }
+
+    /** The strokes this layer carries, for the layer list. */
+    val strokes: Int get() = ops.size
+
     /** Flood fill from a point, on a snapshot of the whole picture: the PatchOp it returns. */
     fun fill(source: Bitmap, at: Offset, color: Color, tolerance: Float): PaintOp {
         val width = source.width

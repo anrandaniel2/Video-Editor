@@ -56,6 +56,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -77,6 +78,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import io.github.artcraftandroid.filmcraft.core.PhotoHistogram
 import io.github.artcraftandroid.filmcraft.ui.Fc
 import io.github.artcraftandroid.filmcraft.ui.FcDialog
@@ -124,11 +127,13 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
     var confirmDiscard by remember { mutableStateOf(false) }
     val values = remember { PhotoToolValues() }
     val view = remember { PhotoViewState() }
-    val paint = remember { PhotoPaintState() }
+    val doc = remember { PhotoDocument().also { it.reset() } }
+    val paint = doc.active?.state ?: doc.layers.first().paint
+    LaunchedEffect(Unit) { ed.document = doc }
     val requestClose: () -> Unit = {
         when {
             ed.saving -> Unit
-            (ed.edits.hasEdits || ed.overlayMarked) && !ed.saved -> confirmDiscard = true
+            (ed.edits.hasEdits || doc.edits || ed.overlayMarked) && !ed.saved -> confirmDiscard = true
             else -> onClose()
         }
     }
@@ -150,6 +155,7 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
             var openGroup by remember { mutableStateOf<ToolGroup?>(tool.group) }
             var showAll by remember { mutableStateOf(false) }
             var panelOpen by remember { mutableStateOf(true) }
+            var layersOpen by remember { mutableStateOf(false) }
             val choose: (PhotoTool) -> Unit = { picked ->
                 // The same tool twice closes its panel, the way the reference toggles one.
                 if (picked == tool) panelOpen = !panelOpen
@@ -161,13 +167,13 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                 }
             }
             val toggleGroup: (ToolGroup) -> Unit = { group -> openGroup = if (openGroup == group) null else group }
-            val reset: () -> Unit = { ed.resetAll(); paint.clear(); ed.overlayMarked = false }
+            val reset: () -> Unit = { ed.resetAll(); doc.reset(); ed.overlayMarked = false }
             if (wide) {
                 Box(Modifier.fillMaxSize()) {
                     // The picture is the canvas: it runs edge to edge under every floating control.
-                    PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize())
+                    PhotoPreview(ed, tool, values, view, doc, Modifier.fillMaxSize())
                     PhotoCraftTopBar(
-                        ed, tool, choose, { showAll = !showAll }, paint, requestClose, wide = true,
+                        ed, tool, choose, { showAll = !showAll }, paint, { doc.refresh() }, requestClose, wide = true,
                         modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 60.dp, top = 6.dp),
                     )
                     Column(
@@ -188,7 +194,7 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                             .heightIn(max = railRoom)
                             .editorGlass(22.dp, material = PhotoUi.Light.copy(alpha = .94f)),
                     ) {
-                        PanelStrip(tool, choose)
+                        PanelStrip(tool, choose, onLayers = { layersOpen = !layersOpen }, layersOpen = layersOpen)
                     }
                     if (showAll) {
                         AllToolsCard(
@@ -223,14 +229,23 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                             ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
                         }
                     }
+                    if (layersOpen) {
+                        LayersPanel(
+                            doc,
+                            Modifier.align(Alignment.TopEnd)
+                                .padding(top = 56.dp, end = 58.dp)
+                                .width(300.dp)
+                                .heightIn(max = cardRoom),
+                        )
+                    }
                     ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 18.dp))
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize())
+                        PhotoPreview(ed, tool, values, view, doc, Modifier.fillMaxSize())
                         PhotoCraftTopBar(
-                            ed, tool, choose, { showAll = !showAll }, paint, requestClose, wide = false,
+                            ed, tool, choose, { showAll = !showAll }, paint, { doc.refresh() }, requestClose, wide = false,
                             modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 54.dp, top = 6.dp),
                         )
                         Column(
@@ -251,7 +266,7 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                                 .heightIn(max = railRoomSmall)
                                 .editorGlass(20.dp, material = PhotoUi.Light.copy(alpha = .94f)),
                         ) {
-                            PanelStrip(tool, choose)
+                            PanelStrip(tool, choose, onLayers = { layersOpen = !layersOpen }, layersOpen = layersOpen)
                         }
                         ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 14.dp, bottom = 14.dp))
                     }
@@ -266,7 +281,9 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                         } else {
                             openGroup?.let { group -> ToolStrip(group, tool, choose, Modifier.fillMaxWidth()) }
                         }
-                        if (panelOpen) {
+                        if (layersOpen) {
+                            LayersPanel(doc, Modifier.fillMaxWidth().heightIn(max = 320.dp))
+                        } else if (panelOpen) {
                             PanelHeader(tool, ed.baseWidth, ed.baseHeight)
                             ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
                         }
@@ -328,6 +345,7 @@ private fun PhotoCraftTopBar(
     onTool: (PhotoTool) -> Unit,
     onMenu: () -> Unit,
     paint: PhotoPaintState,
+    refresh: () -> Unit,
     close: () -> Unit,
     wide: Boolean,
     modifier: Modifier = Modifier,
@@ -372,7 +390,10 @@ private fun PhotoCraftTopBar(
         Spacer(Modifier.width(6.dp))
         FcIconButton(
             LucideIcons.Undo2.glyph(), "Undo",
-            { if (!paint.undoPainted()) ed.undo() },
+            {
+                if (!paint.undoPainted()) ed.undo()
+                refresh()
+            },
             enabled = ed.canUndo || paint.canUndo,
             size = 30.dp, iconSize = 16.dp, tint = PhotoUi.PillInk,
         )
@@ -453,9 +474,10 @@ private fun PhotoPreview(
     tool: PhotoTool,
     values: PhotoToolValues,
     view: PhotoViewState,
-    paint: PhotoPaintState,
+    doc: PhotoDocument,
     modifier: Modifier,
 ) {
+    val paint = doc.active?.state ?: doc.layers.first().paint
     LaunchedEffect(tool) {
         if (tool == PhotoTool.Crop) view.reset()
     }
@@ -465,10 +487,22 @@ private fun PhotoPreview(
             if (!ed.loading) GlyphIcon(LucideIcons.Image.glyph(), Fc.Disabled, size = 48.dp)
             return@BoxWithConstraints
         }
-        // The paint layer follows the preview's pixel size; the controller develops the same layer.
-        LaunchedEffect(image.width, image.height) {
-            paint.resize(image.width, image.height)
-            ed.overlay = paint.pixels
+        // Every paint layer and every mask follows the preview's pixel size, and the stack is
+        // composited at that size for the canvas: masks, blends, opacity and adjustment layers all
+        // show, and Save bakes the same stack at the working copy's size.
+        LaunchedEffect(image.width, image.height, doc.layers.size) {
+            for (layer in doc.layers) {
+                layer.paint.resize(image.width, image.height)
+                layer.mask.resize(image.width, image.height)
+            }
+            doc.refresh()
+        }
+        var composite by remember { mutableStateOf<ImageBitmap?>(null) }
+        LaunchedEffect(doc.version, image) {
+            val base = image.asAndroidBitmap()
+            composite = withContext(Dispatchers.Default) {
+                runCatching { doc.composite(base).asImageBitmap() }.getOrNull()
+            }
         }
         val availableWidth = (maxWidth.value - 24f).coerceAtLeast(1f)
         val availableHeight = (maxHeight.value - 24f).coerceAtLeast(1f)
@@ -500,18 +534,23 @@ private fun PhotoPreview(
                     .then(gestures),
             ) {
                 Image(
-                    bitmap = image,
+                    bitmap = composite ?: image,
                     contentDescription = "Photo being edited",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit,
                 )
-                paint.image?.let { layer ->
-                    Image(
-                        bitmap = layer,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit,
-                    )
+                // The stroke being drawn now, on top of the stack, so the brush follows the finger.
+                doc.active?.let { active ->
+                    if (!active.maskActive) {
+                        active.paint.image?.let { layer ->
+                            Image(
+                                bitmap = layer,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit,
+                            )
+                        }
+                    }
                 }
             }
             // The frame sits outside the clipped, zoomed layer so its corner handles stay whole.
@@ -548,7 +587,7 @@ private fun PhotoPreview(
                 }
             }
             if (painting) {
-                PaintSurface(tool, kind, values, paint, ed, view, Modifier.fillMaxSize())
+                PaintSurface(tool, kind, values, doc, ed, view, Modifier.fillMaxSize())
             }
         }
     }
@@ -563,11 +602,12 @@ private fun PaintSurface(
     tool: PhotoTool,
     kind: PaintKind,
     values: PhotoToolValues,
-    paint: PhotoPaintState,
+    doc: PhotoDocument,
     ed: PhotoCraftController,
     view: PhotoViewState,
     modifier: Modifier,
 ) {
+    val paint = doc.active?.state ?: doc.layers.first().paint
     var ring by remember(tool) { mutableStateOf<Offset?>(null) }
     Box(
         modifier
@@ -587,6 +627,7 @@ private fun PaintSurface(
                             onDragEnd = {
                                 ring = null
                                 applyRetouch(ed, paint, tool, values, points)
+                                doc.refresh()
                                 points = emptyList()
                             },
                             onDragCancel = {
@@ -622,6 +663,7 @@ private fun PaintSurface(
                                 if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
                                 else paint.commit()
                                 ed.overlayMarked = true
+                                doc.refresh()
                             },
                             onDragCancel = { paint.cancel() },
                         )
@@ -632,6 +674,7 @@ private fun PaintSurface(
                 when (kind) {
                     PaintKind.Retouch -> detectTapGestures { offset ->
                         applyRetouch(ed, paint, tool, values, listOf(normalised(offset, size)))
+                        doc.refresh()
                     }
                     PaintKind.Navigate -> detectTapGestures(
                         onTap = {
@@ -641,6 +684,7 @@ private fun PaintSurface(
                     )
                     else -> detectTapGestures { offset ->
                         tapOnPhoto(tool, kind, values, paint, ed, normalised(offset, size))
+                        doc.refresh()
                     }
                 }
             }

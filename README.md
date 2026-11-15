@@ -161,6 +161,13 @@ already selected closes its panel.
   patch, clone stamp, pattern stamp and red eye work on the picture's own pixels: each stroke is run
   over a snapshot of everything developed so far and kept as one operation, so it undoes in one go and
   is replayed into the saved photo. A brush ring shows where the stroke will land.
+- **A real layer stack**, opened from the sheet icon at the top of the right strip, the way the
+  reference's Layers panel sits there: the photo locked at the bottom, paint layers with their own
+  operations, adjustment layers (brightness/contrast, curves, saturation) that work on everything
+  below them, and a mask on any layer that you paint on to hide it. Rows carry the eye, the layer's
+  kind and its name; the header adds, duplicates, reorders and deletes, and sets the blend mode and
+  opacity. The preview composites the stack, and Save bakes the same stack over the developed photo
+  at the working copy's size — so the file gets the layers, not a screenshot.
 - **Selections that hold.** The marquees, the ellipse marquee and the lasso drag out a marching-ants
   outline; every stroke, shape, fill or gradient made after it is clipped to it, and a tap clears it.
 - **The whole palette**, in nine groups on the left rail, each opening its tools beside it: Tone, Navigate (move, hand, rotate view,
