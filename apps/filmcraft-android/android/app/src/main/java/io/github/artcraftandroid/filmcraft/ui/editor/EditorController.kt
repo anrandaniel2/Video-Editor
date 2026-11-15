@@ -64,6 +64,7 @@ sealed interface Panel {
     data object OnlineVideos : Panel
     data object OnlineSounds : Panel
     data object Drawing : Panel
+    data object Photo : Panel
     data object Speed : Panel
     data object Volume : Panel
     data object Fade : Panel
@@ -642,6 +643,48 @@ class EditorController(
     var blankDrawing = false
     /** Home-created drawing, not an editing panel opened inside an existing project. */
     var standaloneDrawing = false
+    /** The photo editor (PhotoCraft) rather than the drawing canvas (ProCraft). */
+    var photoEditor = false
+    /** Home-created photo: exporting saves it to the photo library and leaves the editor. */
+    var standalonePhoto = false
+    /** The photo library's JPEG quality for a photo opened from Home. */
+    var photoQuality: Int = 95
+
+    /**
+     * The current frame written to the project's media folder, so the photo editor can open it as
+     * a document. The photo panel reads the address once, when it opens; the next frame replaces
+     * the file (and the file goes with the project).
+     */
+    private var stashedPicture: android.net.Uri? = null
+
+    /**
+     * Drop the frame stashed for the photo editor. It has been read by the time the editor is
+     * open, and the next one would replace it anyway: it doesn't outlive its use.
+     */
+    fun forgetStashedPicture() {
+        stashedPicture?.path?.let { old -> java.io.File(old).delete() }
+        stashedPicture = null
+    }
+
+    /**
+     * Save [frame] as a picture the photo editor can open, and hand its address to [onSaved] once
+     * it is on disk (in [scope], off the UI thread): the frame is a bitmap, so writing it must not
+     * happen on the main thread.
+     */
+    fun stashPicture(frame: android.graphics.Bitmap, onSaved: (android.net.Uri?) -> Unit) {
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                runCatching {
+                    stashedPicture?.path?.let { old -> java.io.File(old).delete() }
+                    project.mediaDir.mkdirs()
+                    val file = java.io.File(project.mediaDir, "photo-input-${java.util.UUID.randomUUID()}.png")
+                    file.outputStream().use { check(frame.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+                    android.net.Uri.fromFile(file).also { stashedPicture = it }
+                }.getOrNull()
+            }
+            onSaved(uri)
+        }
+    }
 
     /** The caller keeps its save guard until both the file and timeline command succeed. */
     suspend fun importDrawing(bitmap: android.graphics.Bitmap) {

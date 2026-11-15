@@ -317,6 +317,7 @@ tasks.configureEach {
 
 dependencies {
     implementation(project(":procraft"))
+    implementation(project(":photocraft"))
     implementation("org.jsoup:jsoup:1.18.3")
     implementation(libs.haze)
     implementation(libs.androidx.core.ktx)

@@ -26,3 +26,6 @@ include(":app")
 
 include(":procraft")
 project(":procraft").projectDir = file("../../../third_party/procraft/android/app")
+
+include(":photocraft")
+project(":photocraft").projectDir = file("../../../third_party/photocraft/android/app")

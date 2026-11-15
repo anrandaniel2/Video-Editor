@@ -67,7 +67,9 @@ jobs:
           workspaces: |
             . -> target
             third_party/procraft -> target
+            third_party/photocraft -> target
 
+      # cargo-ndk builds both Rust halves of the APK: FilmCraft's own and :photocraft's.
       - name: Install cargo-ndk and the Android NDK
         run: |
           cargo install cargo-ndk --version 4.1.2 --locked
@@ -109,6 +111,13 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
+
+      # The standalone PhotoCraft app (third_party/photocraft/android/standalone) is a Gradle
+      # project of its own over the same library module: build it here, so a change that only
+      # breaks the standalone app fails this run instead of going unnoticed.
+      - name: PhotoCraft standalone app
+        working-directory: third_party/photocraft/android
+        run: ./gradlew :standalone:assembleRelease -Pphotocraft.abis=arm64-v8a --no-daemon
 
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),

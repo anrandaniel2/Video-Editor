@@ -93,6 +93,7 @@ import io.github.artcraftandroid.filmcraft.ui.FcSize
 import io.github.artcraftandroid.filmcraft.ui.FcType
 import io.github.artcraftandroid.filmcraft.ui.Glyphs
 import io.github.artcraftandroid.filmcraft.ui.LucideIcons
+import androidx.compose.ui.graphics.asAndroidBitmap
 import io.github.artcraftandroid.filmcraft.ui.glyph
 import kotlin.math.abs
 import kotlin.math.cos
@@ -108,6 +109,7 @@ fun EditorScreen(ed: EditorController) {
     SideEffect { io.github.artcraftandroid.filmcraft.CrashReports.screen = "Editor panel=${ed.panel}, clip=${ed.selectedClip?.kind}, 3D=${ed.selectedClip?.has3d}" }
     BackHandler {
         when {
+            // A photo editor up saves or closes itself; the others just close.
             ed.panel != null -> ed.panel = null
             ed.submenu != Submenu.None -> ed.submenu = Submenu.None
             ed.selectedClip != null || ed.selectedTransition != null || ed.selectedCaption != null -> ed.select(null)
@@ -142,6 +144,7 @@ fun EditorScreen(ed: EditorController) {
             // A single composition slot survives switching between portrait and landscape layouts.
             // Putting Draw inside each layout destroyed its VM and created a new artwork on rotation.
             if (ed.panel == Panel.Drawing) DrawingPanel(ed) { ed.panel = null }
+            if (ed.panel == Panel.Photo) PhotoEditorPanel(ed) { ed.panel = null }
             ed.busy?.let { BusyOverlay(it) }
         }
     }
@@ -161,7 +164,9 @@ private fun BusyOverlay(text: String) {
 /** One stable workspace. Inspectors FLOAT over the monitor instead of rebuilding its layout. */
 @Composable
 private fun EditorWorkspace(ed: EditorController) {
-    val panel = ed.panel.takeUnless { it == Panel.Drawing || it == Panel.OnlineVideos || it == Panel.OnlineSounds || it is Panel.TextInput }
+    val panel = ed.panel.takeUnless {
+        it == Panel.Drawing || it == Panel.Photo || it == Panel.OnlineVideos || it == Panel.OnlineSounds || it is Panel.TextInput
+    }
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         val wide = maxWidth >= 700.dp && maxWidth > maxHeight
         val inspectorWidth = if (wide) 380.dp else maxWidth - 12.dp
@@ -235,6 +240,28 @@ private fun WorkspaceBar(ed: EditorController) {
         NativeAction(Glyphs.Object3D, "3D", ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D }
         Spacer(Modifier.weight(1f))
         NativeAction(LucideIcons.Paintbrush.glyph(), "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
+        NativeAction(LucideIcons.Image.glyph(), "Photo", ed.panel == Panel.Photo) {
+            // Editing the picture under the playhead: the frame is saved as a picture and the
+            // photo editor opens it. Without a frame it opens blank, the timeline's size.
+            ed.photoEditor = true
+            ed.standalonePhoto = false
+            ed.drawingPicture = null
+            val frame = ed.picture?.asAndroidBitmap()
+            if (frame == null) {
+                ed.panel = Panel.Photo
+            } else {
+                ed.stashPicture(frame) { uri ->
+                    if (uri == null) {
+                        // No picture to open: say so rather than opening an empty editor over the
+                        // frame the user asked to edit.
+                        ed.tellUser("The frame couldn't be saved as a picture.")
+                    } else {
+                        ed.drawingPicture = uri
+                        ed.panel = Panel.Photo
+                    }
+                }
+            }
+        }
         NativeAction(LucideIcons.Share2.glyph(), "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
     }
 }

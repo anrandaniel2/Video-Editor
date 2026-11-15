@@ -1,0 +1,5 @@
+# UniFFI bindings of the `photocraft_android` library: Kotlin for the Android app.
+
+[bindings.kotlin]
+package_name = "io.github.artcraftandroid.photocraft.core"
+cdylib_name = "photocraft_android"

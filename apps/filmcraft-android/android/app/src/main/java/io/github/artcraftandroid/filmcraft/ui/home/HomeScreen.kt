@@ -114,6 +114,7 @@ fun HomeScreen(vm: AppViewModel) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     QuickTile(LucideIcons.Images.glyph(), "Import picture", "from_your_photo_library") { vm.importPicture() }
+                    QuickTile(LucideIcons.Image.glyph(), "Edit a photo", "edit_photo") { vm.editPicture() }
                     QuickTile(LucideIcons.FilePlus.glyph(), "From files", "new_from_files") { vm.newProject(NewProject.Files) }
                     QuickTile(LucideIcons.Paintbrush.glyph(), "New drawing", "create_drawing") { drawingSetup = true }
                     QuickTile(LucideIcons.SquarePlus.glyph(), "New video", "new_blank_project") { vm.newProject(NewProject.Blank) }
@@ -159,7 +160,9 @@ fun HomeScreen(vm: AppViewModel) {
             DropdownMenu(newMenu, { newMenu = false }, containerColor = Fc.Panel) {
                 DropdownMenuItem(text = { Text("New drawing") }, onClick = { newMenu = false; drawingSetup = true })
                 DropdownMenuItem(text = { Text("New video") }, onClick = { newMenu = false; vm.newProject(NewProject.Blank) })
+                DropdownMenuItem(text = { Text("New photo canvas") }, onClick = { newMenu = false; vm.newProject(NewProject.Photo) })
                 DropdownMenuItem(text = { Text("Import picture") }, onClick = { newMenu = false; vm.importPicture() })
+                DropdownMenuItem(text = { Text("Edit a photo") }, onClick = { newMenu = false; vm.editPicture() })
                 DropdownMenuItem(text = { Text("Import picture from files") }, onClick = { newMenu = false; vm.importPicture(fromFiles = true) })
                 DropdownMenuItem(text = { Text("Import photos and videos") }, onClick = { newMenu = false; vm.newProject(NewProject.PhotoLibrary) })
                 DropdownMenuItem(text = { Text("Import files") }, onClick = { newMenu = false; vm.newProject(NewProject.Files) })

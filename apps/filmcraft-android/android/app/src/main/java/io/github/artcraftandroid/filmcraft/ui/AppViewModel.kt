@@ -37,7 +37,7 @@ import kotlinx.coroutines.withContext
 enum class Screen { Home, Editor, Export, Settings, About, Licences }
 
 /** How a new project starts. */
-enum class NewProject { PhotoLibrary, Files, Blank, Drawing, ExtractAudio }
+enum class NewProject { PhotoLibrary, Files, Blank, Drawing, Photo, ExtractAudio }
 
 /** A request for the activity: show a picker and hand back what was chosen. */
 data class PickRequest(val kind: PickKind, val onPicked: (List<Uri>) -> Unit)
@@ -165,11 +165,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
     fun newProject(how: NewProject) {
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
         when (how) {
-            NewProject.Blank, NewProject.Drawing -> viewModelScope.launch {
-                val (w, h) = if (how == NewProject.Drawing) 1080 to 1080 else 1080 to 1920
-                val p = withContext(Dispatchers.IO) { if (how == NewProject.Drawing) projects.createTemporary("Drawing", w, h) else projects.create(projects.todaysName(), w, h) }
+            NewProject.Blank, NewProject.Drawing, NewProject.Photo -> viewModelScope.launch {
+                val (w, h) = when (how) {
+                    NewProject.Drawing -> 1080 to 1080
+                    NewProject.Photo -> 1920 to 1920
+                    else -> 1080 to 1920
+                }
+                val p = withContext(Dispatchers.IO) {
+                    if (how == NewProject.Blank) projects.create(projects.todaysName(), w, h) else projects.createTemporary(how.name, w, h)
+                }
                 open(e, p, fresh = true)
-                if (how == NewProject.Drawing) editor?.let { it.blankDrawing = true; it.standaloneDrawing = true; it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing }
+                when (how) {
+                    NewProject.Drawing -> editor?.let {
+                        it.blankDrawing = true
+                        it.standaloneDrawing = true
+                        it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
+                    }
+                    NewProject.Photo -> editor?.let {
+                        it.photoEditor = true
+                        it.standalonePhoto = true
+                        it.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Photo
+                    }
+                    else -> Unit
+                }
             }
             NewProject.PhotoLibrary, NewProject.Files -> pick(if (how == NewProject.PhotoLibrary) PickKind.PhotosAndVideos else PickKind.FilesVisual) { uris ->
                 if (uris.isEmpty()) return@pick
@@ -227,6 +245,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         val (n, d) = shapes.minBy { (a, b) -> kotlin.math.abs(kotlin.math.ln(ratio / (a.toDouble() / b))) }
         val size = frameSizeFor(n.toUInt(), d.toUInt())
         return size[0].toInt() to size[1].toInt()
+    }
+
+    /** Open a picture in the photo editor (PhotoCraft), not in a video timeline. */
+    fun editPicture(fromFiles: Boolean = false) {
+        val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
+        pick(if (fromFiles) PickKind.PictureFile else PickKind.Picture) { uris ->
+            val uri = uris.firstOrNull() ?: return@pick
+            viewModelScope.launch {
+                val (w, h) = withContext(Dispatchers.IO) { frameFor(uri) }
+                val temporary = withContext(Dispatchers.IO) { projects.createTemporary("Photo", w, h) }
+                open(e, temporary, fresh = true)
+                editor?.let { ed ->
+                    ed.photoEditor = true
+                    ed.standalonePhoto = true
+                    ed.drawingPicture = uri
+                    ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Photo
+                }
+            }
+        }
     }
 
     /** Import a photo into the layered drawing editor, not into a video timeline. */
@@ -290,7 +327,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         screen = Screen.Home
         viewModelScope.launch {
             ed.close()
-            if (ed.standaloneDrawing) withContext(Dispatchers.IO) { projects.delete(ed.project) }
+            if (ed.standaloneDrawing || ed.standalonePhoto) withContext(Dispatchers.IO) { projects.delete(ed.project) }
             editor = null
             refreshProjects()
         }
