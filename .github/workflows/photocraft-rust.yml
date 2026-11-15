@@ -25,9 +25,17 @@ jobs:
           cargo install cargo-ndk --version 4.1.2 --locked
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
 
+      # The run's own log can't be read back in this environment, so a failure is reported as an
+      # annotation: the last lines of the build, where Cargo puts its error.
       - name: Build the engine library
         working-directory: third_party/photocraft
         run: |
-          set -o pipefail
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
-          cargo ndk -t arm64-v8a --platform 28 -o /tmp/jni build --release -p photocraft-android --lib 2>&1 | tail -120
+          set +e
+          cargo ndk -t arm64-v8a --platform 28 -o /tmp/jni build --release -p photocraft-android --lib > /tmp/photocraft-build.log 2>&1
+          rc=$?
+          tail -60 /tmp/photocraft-build.log
+          if [ "$rc" -ne 0 ]; then
+            python3 "$GITHUB_WORKSPACE/.github/scripts/build-log-annotations.py" /tmp/photocraft-build.log 9000
+            exit "$rc"
+          fi
