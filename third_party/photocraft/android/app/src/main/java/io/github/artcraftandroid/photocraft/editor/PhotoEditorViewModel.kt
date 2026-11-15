@@ -136,6 +136,7 @@ class PhotoEditorViewModel : ViewModel() {
     var foreground by mutableStateOf(0xFF000000.toInt())
         private set
     var background by mutableStateOf(0xFFFFFFFF.toInt())
+        private set
 
     private var renderJob: Job? = null
     /** The job that opens or creates the first document: [awaitDocument] joins it. */
@@ -145,7 +146,7 @@ class PhotoEditorViewModel : ViewModel() {
         refreshCommands()
     }
 
-    fun setMode(m: Mode) {
+    fun chooseMode(m: Mode) {
         mode = m
         // The reference UI's tabs switch the tool set; Pixel is the photo editor's home.
         tool = when (m) {
@@ -157,13 +158,13 @@ class PhotoEditorViewModel : ViewModel() {
         }
     }
 
-    fun setTool(t: Tool) {
+    fun chooseTool(t: Tool) {
         tool = t
         cloneSource = null
         if (t == Tool.Type) panel = Panel.Type
     }
 
-    fun setPanel(p: Panel) {
+    fun choosePanel(p: Panel) {
         panel = if (panel == p) Panel.None else p
         if (panel == Panel.Layers) refreshLayers()
         if (panel == Panel.Brushes) refreshBrushes()
@@ -401,7 +402,7 @@ class PhotoEditorViewModel : ViewModel() {
             Tool.Gradient -> command("paint.gradient", gradientParams(x, y))
             Tool.Wand -> command("select.magicWand", JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("tolerance", 32))
             Tool.Eyedropper -> pickColour(x, y)
-            Tool.Zoom -> setZoom((zoom * 1.5f).coerceAtMost(16f))
+            Tool.Zoom -> zoomTo((zoom * 1.5f).coerceAtMost(16f))
             // Move has nothing to move yet (no layer transform in this build); the marquee tools
             // need a drag, and a tap gives them a 1x1 box, which selects nothing on purpose.
             Tool.Move, Tool.Lasso, Tool.Rect -> Unit
@@ -514,7 +515,7 @@ class PhotoEditorViewModel : ViewModel() {
         )
     }
 
-    fun setZoom(z: Float) {
+    fun zoomTo(z: Float) {
         // The canvas shows the document fitted, so zooming out past 100 % shows nothing new; the
         // range runs from the whole picture to 16x into it.
         zoom = z.coerceIn(1f, 16f)
@@ -538,15 +539,15 @@ class PhotoEditorViewModel : ViewModel() {
         renderViewport()
     }
 
-    fun setBrushSize(s: Float) {
+    fun chooseBrushSize(s: Float) {
         brushSize = s.coerceIn(1f, 512f)
     }
 
-    fun setBrushHardness(h: Float) {
+    fun chooseBrushHardness(h: Float) {
         brushHardness = h.coerceIn(0f, 1f)
     }
 
-    fun setBrushOpacity(o: Float) {
+    fun chooseBrushOpacity(o: Float) {
         brushOpacity = o.coerceIn(0f, 1f)
     }
 
@@ -570,7 +571,7 @@ class PhotoEditorViewModel : ViewModel() {
         }
     }
 
-    fun setForeground(c: Int) {
+    fun pickForeground(c: Int) {
         foreground = c
         // The engine's own foreground: the painting tools and Fill default to it.
         viewModelScope.launch {
@@ -578,7 +579,7 @@ class PhotoEditorViewModel : ViewModel() {
         }
     }
 
-    fun setBackground(c: Int) {
+    fun pickBackground(c: Int) {
         background = c
         viewModelScope.launch {
             runCatching { engine.execute("tools.setColors", JSONObject().put("background", hex(c))) }

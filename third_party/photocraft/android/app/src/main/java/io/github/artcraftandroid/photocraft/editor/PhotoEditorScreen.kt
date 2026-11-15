@@ -109,7 +109,7 @@ fun PhotoEditorScreen(vm: PhotoEditorViewModel, onExport: (ByteArray, String) ->
         Box(
             Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 44.dp)
                 .background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(12.dp))
-                .clickable { vm.setZoom(1f) }
+                .clickable { vm.zoomTo(1f) }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             Text("${"%.1f".format(vm.zoom)}x", color = Pc.Secondary, fontSize = 12.sp)
@@ -145,14 +145,14 @@ private fun ColourBar(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
                     .background(Color(vm.background), RoundedCornerShape(4.dp))
                     .border(1.dp, Pc.Hairline, RoundedCornerShape(4.dp))
                     // The background swatch also opens the colours, where it can be set.
-                    .clickable { vm.setPanel(Panel.Colour) },
+                    .clickable { vm.choosePanel(Panel.Colour) },
             )
             Box(
                 Modifier.size(22.dp).align(Alignment.TopStart)
                     .background(Color(vm.foreground), RoundedCornerShape(4.dp))
                     .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
                     // A tap on the foreground opens the colour panel.
-                    .clickable { vm.setPanel(Panel.Colour) },
+                    .clickable { vm.choosePanel(Panel.Colour) },
             )
         }
         Box(
@@ -197,7 +197,7 @@ private fun CanvasView(vm: PhotoEditorViewModel) {
                 // view is moved with the space bar instead.
                 if (vm.tool != Tool.Hand && vm.tool != Tool.Zoom) return@pointerInput
                 detectTransformGestures { _, pan, gestureZoom, _ ->
-                    if (gestureZoom != 1f) vm.setZoom(vm.zoom * gestureZoom)
+                    if (gestureZoom != 1f) vm.zoomTo(vm.zoom * gestureZoom)
                     if (pan != Offset.Zero) vm.pan(-pan.x.toInt(), -pan.y.toInt())
                 }
             }
@@ -328,7 +328,7 @@ private fun ModeTabs(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
             Box(
                 Modifier.clip(RoundedCornerShape(20.dp))
                     .background(if (active) color else Color.Transparent)
-                    .clickable { vm.setMode(m) }
+                    .clickable { vm.chooseMode(m) }
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -377,7 +377,7 @@ private fun ToolButton(tool: Tool, vm: PhotoEditorViewModel, glyph: io.github.ar
     Box(
         Modifier.size(44.dp).clip(RoundedCornerShape(10.dp))
             .background(if (active) Pc.Accent else Color.Transparent)
-            .clickable { vm.setTool(tool) },
+            .clickable { vm.chooseTool(tool) },
         contentAlignment = Alignment.Center,
     ) {
         GlyphIcon(glyph, if (active) Color.White else Pc.Title, size = 22.dp, description = tool.label)
@@ -413,7 +413,7 @@ private fun PanelButton(panel: Panel, vm: PhotoEditorViewModel, glyph: io.github
     Box(
         Modifier.size(44.dp).clip(RoundedCornerShape(10.dp))
             .background(if (active) Pc.Accent else Color.Transparent)
-            .clickable { vm.setPanel(panel) },
+            .clickable { vm.choosePanel(panel) },
         contentAlignment = Alignment.Center,
     ) {
         GlyphIcon(glyph, if (active) Color.White else Pc.Title, size = 22.dp, description = label)
@@ -478,9 +478,9 @@ private fun ActionButton(label: String, modifier: Modifier = Modifier, onClick: 
 @Composable
 private fun BrushesPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
     PanelShell("Brushes", vm::closePanel, modifier) {
-        SliderRow("Size", vm.brushSize, 1f..512f, vm::setBrushSize) { vm.commitBrush() }
-        SliderRow("Hardness", vm.brushHardness * 100f, 0f..100f, { vm.setBrushHardness(it / 100f) }) { vm.commitBrush() }
-        SliderRow("Opacity", vm.brushOpacity * 100f, 0f..100f, { vm.setBrushOpacity(it / 100f) }) { vm.commitBrush() }
+        SliderRow("Size", vm.brushSize, 1f..512f, vm::chooseBrushSize) { vm.commitBrush() }
+        SliderRow("Hardness", vm.brushHardness * 100f, 0f..100f, { vm.chooseBrushHardness(it / 100f) }) { vm.commitBrush() }
+        SliderRow("Opacity", vm.brushOpacity * 100f, 0f..100f, { vm.chooseBrushOpacity(it / 100f) }) { vm.commitBrush() }
         Spacer(Modifier.height(8.dp))
         Text("Presets", color = Pc.Secondary, fontSize = 12.sp)
         LazyColumn(Modifier.fillMaxWidth().height(220.dp)) {
@@ -772,13 +772,13 @@ private fun ColourPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier)
             // follows the finger; the engine hears it once, when the finger lifts.
             SliderRow("Red", android.graphics.Color.red(fg).toFloat(), 0f..255f, { v ->
                 fg = android.graphics.Color.rgb(v.toInt(), android.graphics.Color.green(fg), android.graphics.Color.blue(fg))
-            }) { vm.setForeground(fg) }
+            }) { vm.pickForeground(fg) }
             SliderRow("Green", android.graphics.Color.green(fg).toFloat(), 0f..255f, { v ->
                 fg = android.graphics.Color.rgb(android.graphics.Color.red(fg), v.toInt(), android.graphics.Color.blue(fg))
-            }) { vm.setForeground(fg) }
+            }) { vm.pickForeground(fg) }
             SliderRow("Blue", android.graphics.Color.blue(fg).toFloat(), 0f..255f, { v ->
                 fg = android.graphics.Color.rgb(android.graphics.Color.red(fg), android.graphics.Color.green(fg), v.toInt())
-            }) { vm.setForeground(fg) }
+            }) { vm.pickForeground(fg) }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 // A row of plain colours, then the two swatches the tools use.
@@ -791,14 +791,14 @@ private fun ColourPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier)
                         Box(
                             Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(Color(c))
                                 .border(1.dp, Pc.Hairline, RoundedCornerShape(6.dp))
-                                .clickable { fg = c; vm.setForeground(c) },
+                                .clickable { fg = c; vm.pickForeground(c) },
                         )
                     }
             }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ActionButton("Foreground") { vm.setForeground(fg) }
-                ActionButton("Background") { vm.setBackground(fg) }
+                ActionButton("Foreground") { vm.pickForeground(fg) }
+                ActionButton("Background") { vm.pickBackground(fg) }
                 ActionButton("Swap") { vm.swapColors(); fg = vm.foreground }
             }
             Spacer(Modifier.height(8.dp))
