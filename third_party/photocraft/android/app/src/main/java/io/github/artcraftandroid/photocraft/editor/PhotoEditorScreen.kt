@@ -6,13 +6,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,8 +24,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -44,7 +48,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.artcraftandroid.photocraft.editor.CommandRow
 import io.github.artcraftandroid.photocraft.ui.GlyphIcon
 import io.github.artcraftandroid.photocraft.ui.Glyphs
 import io.github.artcraftandroid.photocraft.ui.Pc
@@ -93,7 +96,7 @@ fun PhotoEditorScreen(vm: PhotoEditorViewModel, onExport: (ByteArray, String) ->
         // Error, bottom-centre.
         vm.error?.let { msg ->
             Box(
-                Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp)
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp, start = 72.dp, end = 72.dp)
                     .background(Pc.Negative, RoundedCornerShape(8.dp))
                     .clickable { vm.dismissError() }
                     .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -104,7 +107,7 @@ fun PhotoEditorScreen(vm: PhotoEditorViewModel, onExport: (ByteArray, String) ->
 
         // Zoom, bottom-right: the multiplier the canvas is showing.
         Box(
-            Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp)
+            Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 44.dp)
                 .background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(12.dp))
                 .clickable { vm.setZoom(1f) }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -308,7 +311,8 @@ private fun CanvasView(vm: PhotoEditorViewModel) {
 @Composable
 private fun ModeTabs(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
     Row(
-        modifier.background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(24.dp))
+        modifier.horizontalScroll(rememberScrollState())
+            .background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(24.dp))
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -341,8 +345,11 @@ private fun ModeTabs(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
 
 @Composable
 private fun LeftToolbar(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
+    // Fifteen tools are taller than a phone held sideways: the bar scrolls rather than running
+    // off the screen.
     Column(
-        modifier.background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(16.dp))
+        modifier.fillMaxHeight(0.86f).verticalScroll(rememberScrollState())
+            .background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(16.dp))
             .padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -380,7 +387,8 @@ private fun ToolButton(tool: Tool, vm: PhotoEditorViewModel, glyph: io.github.ar
 @Composable
 private fun RightToolbar(vm: PhotoEditorViewModel, modifier: Modifier = Modifier) {
     Column(
-        modifier.background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(16.dp))
+        modifier.fillMaxHeight(0.86f).verticalScroll(rememberScrollState())
+            .background(Pc.Toolbar.copy(alpha = 0.92f), RoundedCornerShape(16.dp))
             .padding(6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -415,7 +423,8 @@ private fun PanelButton(panel: Panel, vm: PhotoEditorViewModel, glyph: io.github
 @Composable
 private fun PanelShell(title: String, onClose: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Column(
-        modifier.width(320.dp).background(Pc.Panel.copy(alpha = 0.96f), RoundedCornerShape(16.dp))
+        modifier.width(320.dp).fillMaxHeight(0.9f)
+            .background(Pc.Panel.copy(alpha = 0.96f), RoundedCornerShape(16.dp))
             .border(1.dp, Pc.Hairline, RoundedCornerShape(16.dp))
             .padding(16.dp),
     ) {
@@ -424,7 +433,8 @@ private fun PanelShell(title: String, onClose: () -> Unit, modifier: Modifier = 
             Text("Done", color = Pc.AccentLight, fontSize = 13.sp, modifier = Modifier.clickable(onClick = onClose))
         }
         Spacer(Modifier.height(12.dp))
-        content()
+        // The panel's own content scrolls when it is taller than the space the panel is given.
+        Column(Modifier.verticalScroll(rememberScrollState())) { content() }
     }
 }
 
@@ -756,19 +766,17 @@ private fun ColourPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier)
     PanelShell("Colour", vm::closePanel, modifier) {
         var fg by remember { mutableStateOf(vm.foreground) }
         Column(Modifier.fillMaxWidth()) {
-            // The red, green and blue of the colour being picked, as 0..255 each.
-            SliderRow("Red", android.graphics.Color.red(fg).toFloat(), 0f..255f) {
-                fg = android.graphics.Color.rgb(it.toInt(), android.graphics.Color.green(fg), android.graphics.Color.blue(fg))
-                vm.setForeground(fg)
-            }
-            SliderRow("Green", android.graphics.Color.green(fg).toFloat(), 0f..255f) {
-                fg = android.graphics.Color.rgb(android.graphics.Color.red(fg), it.toInt(), android.graphics.Color.blue(fg))
-                vm.setForeground(fg)
-            }
-            SliderRow("Blue", android.graphics.Color.blue(fg).toFloat(), 0f..255f) {
-                fg = android.graphics.Color.rgb(android.graphics.Color.red(fg), android.graphics.Color.green(fg), it.toInt())
-                vm.setForeground(fg)
-            }
+            // The red, green and blue of the colour being picked, as 0..255 each. The swatch
+            // follows the finger; the engine hears it once, when the finger lifts.
+            SliderRow("Red", android.graphics.Color.red(fg).toFloat(), 0f..255f, { v ->
+                fg = android.graphics.Color.rgb(v.toInt(), android.graphics.Color.green(fg), android.graphics.Color.blue(fg))
+            }) { vm.setForeground(fg) }
+            SliderRow("Green", android.graphics.Color.green(fg).toFloat(), 0f..255f, { v ->
+                fg = android.graphics.Color.rgb(android.graphics.Color.red(fg), v.toInt(), android.graphics.Color.blue(fg))
+            }) { vm.setForeground(fg) }
+            SliderRow("Blue", android.graphics.Color.blue(fg).toFloat(), 0f..255f, { v ->
+                fg = android.graphics.Color.rgb(android.graphics.Color.red(fg), android.graphics.Color.green(fg), v.toInt())
+            }) { vm.setForeground(fg) }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 // A row of plain colours, then the two swatches the tools use.
