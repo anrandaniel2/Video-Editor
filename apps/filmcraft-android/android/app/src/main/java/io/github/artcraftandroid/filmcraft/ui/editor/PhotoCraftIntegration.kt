@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,6 +37,7 @@ import io.github.artcraftandroid.filmcraft.ui.ImmersiveDialog
 import io.github.artcraftandroid.photocraft.editor.Panel as PhotoPanel
 import io.github.artcraftandroid.photocraft.editor.PhotoEditorScreen
 import io.github.artcraftandroid.photocraft.editor.PhotoEditorViewModel
+import io.github.artcraftandroid.photocraft.studio.StudioScreen
 import io.github.artcraftandroid.photocraft.ui.PhotoCraftTheme
 import java.io.File
 import java.util.UUID
@@ -175,19 +177,62 @@ internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
         }
     }
 
+    // Picking a picture from the studio (or its menu) places it on the document it opened.
+    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw IllegalStateException("The picture couldn't be read.")
+                    vm.studioEngine.engine.placeBytes(uri.lastPathSegment ?: "picture.png", bytes)
+                    vm.studioEngine.refreshAll()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "The picture couldn't be placed."
+            }
+        }
+    }
+
     val dismiss: () -> Unit = { if (!saving && !done) close() }
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         ImmersiveDialog()
         PhotoCraftTheme {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
-                PhotoEditorScreen(vm, onExport = { bytes, format -> finish(bytes, format) })
-                // Back closes the editor's open panel first, as every other panel does, and then
-                // the editor itself. One handler for both: a second, always-on one would take
-                // over from this and leave the floating panels unable to intercept back.
-                BackHandler {
-                    if (saving) return@BackHandler
-                    if (vm.panel != PhotoPanel.None) vm.closePanel() else dismiss()
+                // The studio is the editor's interface: the reference UI's workspaces over this
+                // model's own PhotoCraft session, so the panels are the engine's and the host's
+                // save path is unchanged. It waits for the document, as the classic editor does:
+                // a store opened from a frame is briefly empty.
+                val documentOpen = vm.status?.active != null && !vm.busy
+                if (documentOpen) {
+                    StudioScreen(
+                        engine = vm.studioEngine,
+                        initialWidth = ed.timeline?.width?.toInt() ?: 1920,
+                        initialHeight = ed.timeline?.height?.toInt() ?: 1080,
+                        title = vm.studioEngine.status?.active?.name ?: "Untitled",
+                        onClose = dismiss,
+                        onExport = { format, bytes, _ -> finish(bytes, format) },
+                        onPickPicture = { pickPicture.launch("image/*") },
+                        // The classic editor, for the panels the studio doesn't show.
+                        onOpenClassic = { vm.choosePanel(PhotoPanel.Classic) },
+                    )
+                } else if (error == null) {
+                    // Opening: the reference's own backdrop, so the switch is not a blank frame.
+                    Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        Text("Opening the picture…", style = FcType.Body, color = Fc.Body)
+                    }
                 }
+                // The classic editor, for the panels the studio doesn't show. Its own back handler
+                // closes it before the studio's does.
+                if (vm.panel == PhotoPanel.Classic) {
+                    PhotoEditorScreen(vm, onExport = { bytes, format -> finish(bytes, format) })
+                    BackHandler { if (!saving) vm.closePanel() }
+                }
+                // The studio closes itself on back (its overlays first); this is the host's last
+                // resort, and a save in flight still wins.
+                BackHandler(enabled = !saving && vm.panel != PhotoPanel.Classic) { dismiss() }
                 if (saving) {
                     Box(Modifier.fillMaxSize().background(Fc.Scrim)) {
                         AlertDialog(

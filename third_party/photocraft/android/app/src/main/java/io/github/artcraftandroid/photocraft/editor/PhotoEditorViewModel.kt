@@ -55,6 +55,8 @@ enum class Panel {
     History,
     Export,
     Colour,
+    /** The classic editor, open over the studio's own interface. */
+    Classic,
 }
 
 /** One row in the Layers panel. */
@@ -93,6 +95,18 @@ data class CommandRow(
  */
 class PhotoEditorViewModel : ViewModel() {
     val engine = PhotoEngine()
+
+    /**
+     * The studio's interface over this model's session: the reference UI's workspaces, rails and
+     * panels driving the same engine, so its layers are this document's and its export comes back
+     * through the host's save path.
+     */
+    val studioEngine: io.github.artcraftandroid.photocraft.studio.StudioEngine by lazy {
+        io.github.artcraftandroid.photocraft.studio.StudioEngine(engine)
+    }
+
+    /** The active document's name, for the studio's title. */
+    fun activeName(): String = status?.active?.name ?: "Untitled"
 
     var mode by mutableStateOf(Mode.Pixel)
         private set
