@@ -91,6 +91,9 @@ fun PhotoEditorScreen(vm: PhotoEditorViewModel, onExport: (ByteArray, String) ->
             Panel.History -> HistoryPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
             Panel.Export -> ExportPanel(vm, onExport, Modifier.align(Alignment.Center).padding(end = 72.dp))
             Panel.Colour -> ColourPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
+            // Classic opens the whole classic editor, which the host draws over this screen;
+            // there is no panel of its own to show here.
+            Panel.Classic -> {}
         }
 
         // Error, bottom-centre.

@@ -271,6 +271,7 @@ class StudioState(workspace: WorkspaceId) {
             "brushOpacity" to "100", "colour" to "#f59ac9", "channel" to "Master",
             "colourSpace" to "RGB", "font" to "Instrument Serif", "fontStyle" to "Regular",
             "strokeWidth" to "0.7", "alignment" to "align", "nodeAction" to "Sharp node",
+            "strokeStyle" to "Solid", "exportFormat" to "PNG",
         )
         toggles = listOf("snapping")
         points = DefaultPoints

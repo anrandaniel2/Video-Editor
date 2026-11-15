@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -46,6 +48,9 @@ fun StudioCanvas(
     val scope = rememberCoroutineScope()
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var cursor by remember { mutableStateOf<Offset?>(null) }
+    // The reference's own artwork stands in until the document has pixels of its own, so the studio
+    // looks like the design at rest; the first stroke replaces it with the engine's composite.
+    var showReference by remember { mutableStateOf(true) }
     var strokePoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     // The live stroke and the pointer are read outside the draw scope, as Compose requires.
     val liveStroke = strokePoints

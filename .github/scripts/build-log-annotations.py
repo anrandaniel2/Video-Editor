@@ -20,7 +20,27 @@ if fails:
     print("\n".join(log[first : fails[-1] + 3]))
     # Every failing line as its own annotation: a log whose head the tail drops (a long Kotlin
     # error list) still reports all of them.
+    #
+    # A step may leave at most ten annotations, so the per-line ones below are a sample: the
+    # consolidated annotation carries the whole list, deduplicated and cut to an annotation's
+    # size, so a run with sixty compiler errors reports sixty and not ten.
+    seen, every = set(), []
     for i in fails:
+        line = " ".join(log[i].split())
+        if line not in seen:
+            seen.add(line)
+            every.append(line)
+    budget = 60000
+    picked = []
+    for line in every:
+        if len("\n".join(picked)) + len(line) + 1 > budget:
+            picked.append(f"… and {len(every) - len(picked)} more")
+            break
+        picked.append(line)
+    body = "\n".join(picked).replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+    print(f"::error title=all {len(every)} failures::{body}")
+
+    for i in fails[:9]:
         body = log[i][:1200].replace("%", "%25").replace("\r", "").replace("\n", "%0A")
         print(f"::error title=failure {fails.index(i) + 1}/{len(fails)}::{body}")
 
