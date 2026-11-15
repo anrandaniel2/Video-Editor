@@ -541,7 +541,9 @@ private fun LayersPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier)
                         },
                     )
                     Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
+                    // Not weight(): the panel's content scrolls, and a weighted row inside a
+                    // scrolling column has no bounded height to divide.
+                    Column(Modifier.width(220.dp)) {
                         Text(l.name, color = Pc.Title, fontSize = 13.sp)
                         Text("${l.kind} · ${l.blend} · ${"%.0f".format(l.opacity * 100f)}%", color = Pc.Detail, fontSize = 11.sp)
                     }
