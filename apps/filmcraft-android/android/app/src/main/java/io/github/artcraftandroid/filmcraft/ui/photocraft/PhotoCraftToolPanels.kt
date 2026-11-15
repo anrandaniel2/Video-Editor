@@ -49,19 +49,25 @@ import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import io.github.artcraftandroid.filmcraft.ui.glyph
 import kotlin.math.roundToInt
 
-/** The reference's colours: a near-black workspace, a light artboard, dark rails, a white bar. */
+/**
+ * The reference's colours, read off the screenshots: a full-bleed picture with every control floating
+ * over it, a near-black left rail, a light strip of panel icons down the right edge, the same
+ * near-black glass for the top bar and the cards, light ink on the dark pieces and dark ink on the
+ * light strip, and one blue for whatever is active.
+ */
 internal object PhotoUi {
-    val Workspace = Color(0xFF0B0B0F)
+    val Workspace = Color(0xFF101014)
     val Artboard = Color(0xFFE9E9EC)
     val Rail = Color(0xFF17171C)
-    val Card = Color(0xFF1C1C22)
+    val Card = Color(0xFF1B1B21)
+    val Light = Color(0xFFF2F2F5)
     val RailInk = Color(0xFFEDEDF2)
     val RailInkSoft = Color(0xFF8A8A94)
-    val Pill = Color(0xFFF6F6F8)
-    val PillInk = Color(0xFF16161A)
-    val PillInkSoft = Color(0xFF6A6A73)
-    val PillField = Color(0xFFE4E4E9)
-    val Accent = Color(0xFF1177FF)
+    val Pill = Color(0xFF1B1B21)
+    val PillInk = Color(0xFFF2F2F5)
+    val PillInkSoft = Color(0xFF9C9CA6)
+    val PillField = Color(0xFF2A2A33)
+    val Accent = Color(0xFF0A84FF)
 }
 
 /**
@@ -86,7 +92,7 @@ internal fun ToolRail(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp, horizontal = 6.dp),
+        modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -114,16 +120,22 @@ private fun RailButton(
     onClick: () -> Unit,
     selected: Boolean = false,
     expanded: Boolean = false,
+    light: Boolean = false,
     tag: String? = null,
 ) {
+    val ink = when {
+        selected -> Color.White
+        light -> PhotoUi.PillField
+        else -> PhotoUi.RailInk
+    }
     Box(
         Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .size(38.dp)
+            .clip(RoundedCornerShape(11.dp))
             .background(
                 when {
                     selected -> PhotoUi.Accent
-                    expanded -> PhotoUi.Accent.copy(alpha = .3f)
+                    expanded -> PhotoUi.Accent.copy(alpha = .22f)
                     else -> Color.Transparent
                 },
             )
@@ -132,7 +144,7 @@ private fun RailButton(
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(glyph, if (selected) Color.White else PhotoUi.RailInk, size = 21.dp)
+        GlyphIcon(glyph, ink, size = 19.dp)
     }
 }
 
@@ -282,7 +294,7 @@ internal fun PanelStrip(
         PhotoTool.Zoom,
     )
     Column(
-        modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp, horizontal = 6.dp),
+        modifier.verticalScroll(rememberScrollState()).padding(vertical = 6.dp, horizontal = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -292,6 +304,7 @@ internal fun PanelStrip(
                 tool.label,
                 { onTool(tool) },
                 selected = tool == current,
+                light = true,
                 tag = "photocraft_quick_${tool.name.lowercase()}",
             )
         }
@@ -326,47 +339,22 @@ internal fun PanelHeader(tool: PhotoTool, width: Int, height: Int, modifier: Mod
     }
 }
 
-/** Zoom and Fit, floating over the bottom-left corner of the picture. */
+/** Zoom and fit: the round handle the reference floats over the picture's bottom-left corner. */
 @Composable
 internal fun ZoomPill(view: PhotoViewState, modifier: Modifier = Modifier) {
-    Row(
-        modifier.height(34.dp).editorGlass(17.dp, material = PhotoUi.Card.copy(alpha = .92f)).padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PillButton(LucideIcons.ZoomOut.glyph(), "Zoom out") { view.zoomTo(view.zoom / 1.5f) }
-        Text(
-            "${(view.zoom * 100).roundToInt()}%",
-            style = FcType.Caption,
-            color = Fc.Title,
-            maxLines = 1,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.width(46.dp),
-        )
-        PillButton(LucideIcons.ZoomIn.glyph(), "Zoom in") { view.zoomTo(view.zoom * 1.5f) }
-        PillButton(LucideIcons.Scaling.glyph(), "Fit the picture") { view.reset() }
-    }
-}
-
-@Composable
-private fun PillButton(glyph: Glyph, description: String, onClick: () -> Unit) {
+    val fitted = view.zoom <= 1.001f
     Box(
-        Modifier
-            .size(28.dp)
+        modifier
+            .size(44.dp)
             .clip(CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description },
+            .editorGlass(22.dp, material = PhotoUi.Card.copy(alpha = .9f))
+            .clickable(role = Role.Button) { if (fitted) view.zoomTo(2f) else view.reset() }
+            .semantics { contentDescription = if (fitted) "Zoom in" else "Fit the picture" },
         contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(glyph, Fc.Body, size = 16.dp)
+        GlyphIcon(if (fitted) LucideIcons.ZoomIn.glyph() else LucideIcons.Scaling.glyph(), PhotoUi.RailInk, size = 19.dp)
     }
 }
-
-
-/** The ten colours the brush, the shapes, the type and the gradients draw with. */
-private val Swatches = listOf(
-    Color(0xFF17171B), Color(0xFFF6F6F8), Color(0xFFE23B3B), Color(0xFFF08A24), Color(0xFFF2C511),
-    Color(0xFF2FA84F), Color(0xFF1177FF), Color(0xFF7A3FF2), Color(0xFFE255A8), Color(0xFF22A9B8),
-)
 
 @Composable
 private fun ColourRow(values: PhotoToolValues, second: Boolean) {

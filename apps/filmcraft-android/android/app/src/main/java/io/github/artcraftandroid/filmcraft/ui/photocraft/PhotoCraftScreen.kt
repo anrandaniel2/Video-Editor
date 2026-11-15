@@ -145,7 +145,7 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
             val wide = maxWidth >= 790.dp && maxWidth > maxHeight
             val cardRoom = maxHeight * .60f
             val sheetRoom = maxHeight * .58f
-            val railRoom = maxHeight - 20.dp
+            val railRoom = maxHeight - 116.dp
             val railRoomSmall = maxHeight - 300.dp
             var openGroup by remember { mutableStateOf<ToolGroup?>(tool.group) }
             var showAll by remember { mutableStateOf(false) }
@@ -164,39 +164,29 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
             val reset: () -> Unit = { ed.resetAll(); paint.clear(); ed.overlayMarked = false }
             if (wide) {
                 Box(Modifier.fillMaxSize()) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .padding(start = 56.dp, end = 56.dp, top = 46.dp, bottom = 8.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(PhotoUi.Artboard),
-                    ) {
-                        PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize().padding(10.dp))
-                        ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(10.dp))
-                    }
+                    // The picture is the canvas: it runs edge to edge under every floating control.
+                    PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize())
                     PhotoCraftTopBar(
                         ed, tool, choose, { showAll = !showAll }, paint, requestClose, wide = true,
-                        modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 60.dp, top = 2.dp),
+                        modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 60.dp, top = 6.dp),
                     )
                     Column(
                         Modifier
                             .align(Alignment.CenterStart)
-                            .padding(start = 5.dp)
-                            .width(46.dp)
+                            .padding(start = 6.dp)
+                            .width(44.dp)
                             .heightIn(max = railRoom)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(PhotoUi.Rail),
+                            .editorGlass(22.dp, material = PhotoUi.Rail.copy(alpha = .92f)),
                     ) {
                         ToolRail(tool.group, openGroup, { toggleGroup(it); showAll = false }, { showAll = !showAll }, reset)
                     }
                     Column(
                         Modifier
                             .align(Alignment.CenterEnd)
-                            .padding(end = 5.dp)
-                            .width(46.dp)
+                            .padding(end = 6.dp)
+                            .width(44.dp)
                             .heightIn(max = railRoom)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(PhotoUi.Rail),
+                            .editorGlass(22.dp, material = PhotoUi.Light.copy(alpha = .94f)),
                     ) {
                         PanelStrip(tool, choose)
                     }
@@ -205,7 +195,7 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                             current = tool,
                             onTool = choose,
                             modifier = Modifier.align(Alignment.TopStart)
-                                .padding(start = 56.dp, top = 50.dp)
+                                .padding(start = 58.dp, top = 56.dp)
                                 .width(252.dp)
                                 .heightIn(max = cardRoom),
                         )
@@ -214,7 +204,7 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                             ToolPickerCard(
                                 group, tool, values, choose,
                                 Modifier.align(Alignment.TopStart)
-                                    .padding(start = 56.dp, top = 50.dp)
+                                    .padding(start = 58.dp, top = 56.dp)
                                     .width(214.dp)
                                     .heightIn(max = cardRoom),
                             )
@@ -224,51 +214,52 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
                         Column(
                             Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(top = 50.dp, end = 56.dp)
+                                .padding(top = 56.dp, end = 58.dp)
                                 .width(300.dp)
                                 .heightIn(max = cardRoom)
-                                .editorGlass(16.dp, material = PhotoUi.Card.copy(alpha = .93f)),
+                                .editorGlass(18.dp, material = PhotoUi.Card.copy(alpha = .94f)),
                         ) {
                             PanelHeader(tool, ed.baseWidth, ed.baseHeight)
                             ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
                         }
                     }
+                    ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 18.dp))
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .padding(start = 48.dp, top = 44.dp, end = 6.dp, bottom = 6.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(PhotoUi.Artboard),
-                        ) {
-                            PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize().padding(6.dp))
-                            ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(8.dp))
-                        }
+                        PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize())
                         PhotoCraftTopBar(
                             ed, tool, choose, { showAll = !showAll }, paint, requestClose, wide = false,
-                            modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 4.dp, top = 2.dp),
+                            modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 54.dp, top = 6.dp),
                         )
                         Column(
                             Modifier
                                 .align(Alignment.CenterStart)
-                                .padding(start = 4.dp)
-                                .width(42.dp)
+                                .padding(start = 5.dp)
+                                .width(40.dp)
                                 .heightIn(max = railRoomSmall)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(PhotoUi.Rail),
+                                .editorGlass(20.dp, material = PhotoUi.Rail.copy(alpha = .92f)),
                         ) {
                             ToolRail(tool.group, openGroup, { toggleGroup(it); showAll = false }, { showAll = !showAll }, reset)
                         }
+                        Column(
+                            Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(end = 5.dp)
+                                .width(40.dp)
+                                .heightIn(max = railRoomSmall)
+                                .editorGlass(20.dp, material = PhotoUi.Light.copy(alpha = .94f)),
+                        ) {
+                            PanelStrip(tool, choose)
+                        }
+                        ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 14.dp, bottom = 14.dp))
                     }
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(max = sheetRoom)
-                            .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
-                            .background(PhotoUi.Rail),
+                            .editorGlass(22.dp, material = PhotoUi.Card.copy(alpha = .96f)),
                     ) {
                         if (showAll) {
                             AllToolsCard(tool, choose, Modifier.fillMaxWidth().heightIn(max = 168.dp), glass = false)
@@ -343,19 +334,19 @@ private fun PhotoCraftTopBar(
 ) {
     Row(
         modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(11.dp))
-            .background(PhotoUi.Pill)
-            .padding(start = 3.dp, end = 3.dp),
+            .height(44.dp)
+            .clip(RoundedCornerShape(22.dp))
+            .editorGlass(22.dp, material = PhotoUi.Pill.copy(alpha = .92f))
+            .padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         FcIconButton(LucideIcons.X.glyph(), "Close PhotoCraft", close, size = 32.dp, iconSize = 17.dp, tint = PhotoUi.PillInk)
         Row(
             Modifier
-                .height(26.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .height(32.dp)
+                .clip(RoundedCornerShape(10.dp))
                 .background(PhotoUi.PillField)
-                .padding(horizontal = 7.dp),
+                .padding(horizontal = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -370,8 +361,10 @@ private fun PhotoCraftTopBar(
             )
             GlyphIcon(LucideIcons.ChevronDown.glyph(), PhotoUi.PillInkSoft, size = 11.dp)
         }
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.width(1.dp).height(20.dp).background(PhotoUi.PillInk.copy(alpha = .14f)))
         if (wide) {
-            Spacer(Modifier.width(5.dp))
+            Spacer(Modifier.width(6.dp))
             for (tab in listOf(PhotoTool.Adjust, PhotoTool.Filters, PhotoTool.Crop)) {
                 ModeTab(tab, tab == tool, { onTool(tab) })
             }
@@ -398,8 +391,8 @@ private fun PhotoCraftTopBar(
 private fun ModeTab(tool: PhotoTool, selected: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
-            .height(26.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .height(30.dp)
+            .clip(RoundedCornerShape(15.dp))
             .background(if (selected) PhotoUi.Accent else Color.Transparent)
             .clickable(role = Role.Button, onClick = onClick)
             .testTag("photocraft_tab_${tool.name.lowercase()}")
