@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -437,8 +438,10 @@ private fun BasicNumber(value: String, onChange: (String) -> Unit, width: androi
 /** The reference's `.curve-editor`: graph, side fields, hint. */
 @Composable
 private fun CurveEditor(s: StudioState, selected: Int, onSelect: (Int) -> Unit) {
+    // `.curve-editor`: 266 wide, hung 87 px to the left of the panel, so its graph sits over the
+    // document rather than inside the panel's own column.
     Column(
-        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 6.dp)
+        Modifier.width(266.dp).offset(x = (-87).dp)
             .clip(RoundedCornerShape(11.dp)).background(Color(0xFF20211F))
             .border(1.dp, Color(0xFF111111), RoundedCornerShape(11.dp))
             .padding(start = 8.dp, end = 8.dp, top = 9.dp, bottom = 6.dp),

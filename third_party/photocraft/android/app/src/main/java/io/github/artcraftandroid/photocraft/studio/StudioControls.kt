@@ -180,10 +180,11 @@ fun PanelFrame(
     var dy by remember { mutableStateOf(0f) }
     Column(
         // The panel takes the width its caller gives it (the reference's 238, or 266 for Curves).
+        // Its contents may hang outside it, as the reference's curve editor does with its negative
+        // margin, so the frame is not clipped: the rounded surface is drawn inside it instead.
         modifier
             .offset { androidx.compose.ui.unit.IntOffset(dx.toInt(), dy.toInt()) }
-            .clip(RoundedCornerShape(Sc.PanelRadius))
-            .background(Sc.surfaceBrush)
+            .background(Sc.surfaceBrush, RoundedCornerShape(Sc.PanelRadius))
             .border(1.dp, Sc.Hairline, RoundedCornerShape(Sc.PanelRadius)),
     ) {
         Box(Modifier.fillMaxWidth().height(17.dp), contentAlignment = Alignment.Center) {
