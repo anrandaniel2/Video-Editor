@@ -36,7 +36,10 @@ Builds:
 AllowedAPKSigningKeys: 75c802d4487299b7a5ff236077b90aed19124ca49fe046b381d467af038ceff2
 
 AutoUpdateMode: Version
-UpdateCheckMode: Tags
+# 'Tags ^v': only v<version> tags (the mode's pattern follows a space). dryrun-<version> tags draft APKs signed with the public test key
+# (see .github/signing/README.md); they carry the same versionCode, so a plain Tags check would
+# pick them up and point the index at an APK it must reject.
+UpdateCheckMode: Tags ^v
 VercodeOperation:
   - '%c * 10 + 2'
 UpdateCheckData: 

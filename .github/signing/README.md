@@ -30,10 +30,11 @@ To get an APK **as a draft release** without the release key, tag `dryrun-<versi
 - drafts a GitHub release **named after the tag** (`dryrun-0.0.61-beta`) with the APK attached,
   whose notes say which key signed it and that it installs over nothing.
 
-The name is deliberately not a version: F-Droid's update check reads version tags
-(`UpdateCheckMode: Tags`) and `AllowedAPKSigningKeys` names the published key, so a `dryrun-*`
-release is never offered to F-Droid or to installed copies. It is a draft for testing a build, not
-a release.
+The name is deliberately not a version tag, and the metadata says so: `UpdateCheckMode: Tags ^v`
+in `docs/fdroid/io.github.artcraftandroid.filmcraft.yml` accepts only `v<version>`, so the update
+check skips a `dryrun-*` tag (its versionCode is the ordinary one, so a plain `Tags` check would
+otherwise pick it up and point the index at an APK it must reject). `AllowedAPKSigningKeys` names
+the published key alone. It is a draft for testing a build, not a release.
 
 The same key can also be asked for from a manual run: **Actions › Release › Run workflow**,
 `signing: public`. A manual run keeps the APK as its artifact and drafts nothing.

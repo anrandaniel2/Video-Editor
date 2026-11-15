@@ -292,7 +292,8 @@ jobs:
               echo "\`b75617b60b055b3b02ff599744c69ddebe545a60ed305333f4fc442a9a27bcc0\`), not the published"
               echo "artcraft-android key. It installs on its own — uninstall any published copy first —"
               echo "and it neither updates nor replaces a published build. It is not a release: no"
-              echo "version tag points at it, so F-Droid and the update check do not see it."
+              echo "version tag points at it, and the F-Droid recipe's update check reads v* tags"
+              echo "only (\`UpdateCheckMode: Tags ^v\`), so it is never offered as an update."
             } >>"$notes"
           fi
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$title" --notes-file "$notes" -- dist/*
