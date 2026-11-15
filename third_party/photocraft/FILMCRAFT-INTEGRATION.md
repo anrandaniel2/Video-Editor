@@ -38,6 +38,9 @@ photo editor is PhotoCraft's real Rust engine — not a reimplementation.
 - `PhotoSession.render/renderRegion/thumbnail`: composited RGBA8 for the canvas. The editor
   renders the region it shows (`documentView()`: the whole picture at 100 %, a window of it as
   the zoom goes up), so what is on screen and what a finger maps to are the same rectangle.
+  `render`/`thumbnail` go through the engine's own area-averaged reduction
+  (`photocraft_compose::render_reduced`), not a full-size composite followed by a resize: a
+  fit-to-screen preview of a 24 MP document costs a thumbnail's memory, not 380 MB.
 - The engine's file-system commands (`file.open`, `file.save`, …) are unused: the app shell owns
   the file system (SAF, MediaStore, the project folder) and hands the engine bytes.
 
