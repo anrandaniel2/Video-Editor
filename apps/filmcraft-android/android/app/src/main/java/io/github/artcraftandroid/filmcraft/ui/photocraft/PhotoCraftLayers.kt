@@ -27,7 +27,7 @@ enum class LayerBlend(val label: String) {
     ;
 
     /** The Porter-Duff mode behind it, or null for plain source-over. */
-    val mode: PorterDuff.Mode? = when (this) {
+    val mode: PorterDuff.Mode? get() = when (this) {
         Normal -> null
         Multiply -> PorterDuff.Mode.MULTIPLY
         Screen -> PorterDuff.Mode.SCREEN
