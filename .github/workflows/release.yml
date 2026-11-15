@@ -12,7 +12,10 @@ name: Release
 
 on:
   push:
-    branches: ['arena/694df4ef-video-editor']
+    branches:
+      - 'arena/694df4ef-video-editor'
+      # each Arena session's branch: a push here builds a dry-run APK
+      - 'arena/aa65d60d-video-editor'
     tags: ['v*']
   workflow_dispatch:
 
