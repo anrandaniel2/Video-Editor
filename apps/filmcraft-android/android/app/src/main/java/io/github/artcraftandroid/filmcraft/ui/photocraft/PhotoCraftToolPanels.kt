@@ -421,7 +421,15 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
     val switches = tool.options.filterIsInstance<ToolOption.Switch>()
     val kind = tool.paintKind()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 10.dp)) {
-        if (kind != PaintKind.None) ColourRow(values, second = false)
+        if (kind != PaintKind.None && kind != PaintKind.Selection) ColourRow(values, second = false)
+        if (kind == PaintKind.Selection) {
+            Text(
+                "Drag to select. Paint after this stays inside the outline; tap to clear it.",
+                color = Pc.TextDim,
+                style = FcType.Caption,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
         if (kind == PaintKind.Gradient) ColourRow(values, second = true)
         if (kind == PaintKind.Text) TypeRow(tool, values)
         if (tool.actions.isNotEmpty()) {

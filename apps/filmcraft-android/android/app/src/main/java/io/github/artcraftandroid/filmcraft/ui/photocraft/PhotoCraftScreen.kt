@@ -54,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.Path
@@ -536,6 +537,23 @@ private fun PhotoPreview(
                         .semantics { contentDescription = "Tap the picture to sample its colour" },
                 )
             }
+            paint.selection?.let { points ->
+                Canvas(Modifier.fillMaxSize()) {
+                    val path = Path()
+                    points.forEachIndexed { index, point ->
+                        val x = point.x * size.width
+                        val y = point.y * size.height
+                        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    }
+                    path.close()
+                    drawPath(path, Color.Black.copy(alpha = .55f), style = Stroke(width = 3f))
+                    drawPath(
+                        path,
+                        Color.White,
+                        style = Stroke(width = 1.6f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(7f, 7f))),
+                    )
+                }
+            }
             if (painting) {
                 PaintSurface(tool, kind, values, paint, ed, Modifier.fillMaxSize())
             }
@@ -560,18 +578,21 @@ private fun PaintSurface(
                 detectDragGestures(
                     onDragStart = { offset ->
                         points = listOf(normalised(offset, size))
-                        paint.begin(opFor(tool, kind, values, points))
+                        if (kind == PaintKind.Selection) paint.setSelection(selectionFor(tool, points))
+                        else paint.begin(opFor(tool, kind, values, points))
                     },
                     onDrag = { change, _ ->
                         val next = normalised(change.position, size)
                         val last = points.lastOrNull()
                         if (last == null || (next - last).getDistance() > 0.004f) {
                             points = points + next
-                            paint.begin(opFor(tool, kind, values, points))
+                            if (kind == PaintKind.Selection) paint.setSelection(selectionFor(tool, points))
+                            else paint.begin(opFor(tool, kind, values, points))
                         }
                     },
                     onDragEnd = {
-                        paint.commit()
+                        if (kind == PaintKind.Selection) paint.setSelection(selectionFor(tool, points))
+                        else paint.commit()
                         ed.overlayMarked = true
                     },
                     onDragCancel = { paint.cancel() },
@@ -606,6 +627,7 @@ private fun PaintSurface(
                             paint.begin(opFor(tool, kind, values, listOf(point)))
                             paint.commit()
                         }
+                        PaintKind.Selection -> paint.setSelection(null)
                         else -> Unit
                     }
                     ed.overlayMarked = true
@@ -674,6 +696,29 @@ private fun opFor(tool: PhotoTool, kind: PaintKind, values: PhotoToolValues, poi
             opacity = values.slider(tool, "opacity", 100f) / 100f,
         )
         else -> StrokeOp(points, values.color, .04f, 1f, false, true)
+    }
+}
+
+/** The polygon a selection drag describes: a rectangle, an ellipse, or the path itself. */
+private fun selectionFor(tool: PhotoTool, points: List<Offset>): List<Offset> {
+    if (points.size < 2) return points
+    val from = points.first()
+    val to = points.last()
+    return when (tool) {
+        PhotoTool.Marquee, PhotoTool.RowMarquee, PhotoTool.ColumnMarquee -> listOf(
+            Offset(from.x, from.y), Offset(to.x, from.y), Offset(to.x, to.y), Offset(from.x, to.y),
+        )
+        PhotoTool.EllipseMarquee -> {
+            val centerX = (from.x + to.x) / 2f
+            val centerY = (from.y + to.y) / 2f
+            val radiusX = kotlin.math.abs(to.x - from.x) / 2f
+            val radiusY = kotlin.math.abs(to.y - from.y) / 2f
+            (0 until 64).map { step ->
+                val angle = step * 2.0 * kotlin.math.PI / 64
+                Offset(centerX + kotlin.math.cos(angle).toFloat() * radiusX, centerY + kotlin.math.sin(angle).toFloat() * radiusY)
+            }
+        }
+        else -> points
     }
 }
 

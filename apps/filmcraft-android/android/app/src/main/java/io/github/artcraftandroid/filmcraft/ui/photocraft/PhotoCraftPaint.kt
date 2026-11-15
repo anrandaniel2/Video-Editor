@@ -231,6 +231,33 @@ class PatchOp(private val patch: Bitmap) : PaintOp {
     }
 }
 
+/** An operation clipped to the selection that was live when it was made. */
+class ClippedOp(private val inner: PaintOp, private val clip: List<Offset>?) : PaintOp {
+    override fun render(canvas: Canvas, width: Int, height: Int) {
+        val points = clip
+        if (points == null || points.size < 3) {
+            inner.render(canvas, width, height)
+            return
+        }
+        val save = canvas.save()
+        canvas.clipPath(selectionPath(points, width, height))
+        inner.render(canvas, width, height)
+        canvas.restoreToCount(save)
+    }
+}
+
+/** A selection polygon in pixels, for clipping paint and for drawing the marching ants. */
+internal fun selectionPath(points: List<Offset>, width: Int, height: Int): Path {
+    val path = Path()
+    points.forEachIndexed { index, point ->
+        val x = point.x * width
+        val y = point.y * height
+        if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    path.close()
+    return path
+}
+
 /** The layer itself: the operations, the bitmap they replay into, and the undo history. */
 class PhotoPaintState {
     private var bitmap: Bitmap? = null
@@ -251,6 +278,13 @@ class PhotoPaintState {
     /** The live bitmap, handed to the controller so Save develops the same strokes. */
     val pixels: Bitmap? get() = bitmap
 
+    /** The live selection, as a normalised polygon: paint made now is clipped to it. */
+    var selection by mutableStateOf<List<Offset>?>(null)
+
+    fun setSelection(points: List<Offset>?) {
+        selection = points
+    }
+
     val isEmpty: Boolean get() = ops.isEmpty() && active == null
     val canUndo: Boolean get() = ops.isNotEmpty()
 
@@ -268,7 +302,7 @@ class PhotoPaintState {
     }
 
     fun begin(op: PaintOp) {
-        active = op
+        active = ClippedOp(op, selection)
         redraw()
     }
 
@@ -300,7 +334,7 @@ class PhotoPaintState {
     }
 
     fun add(op: PaintOp) {
-        ops.add(op)
+        ops.add(ClippedOp(op, selection))
         marked = true
         redraw()
     }

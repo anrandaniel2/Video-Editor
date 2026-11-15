@@ -118,7 +118,7 @@ class PhotoToolValues {
 }
 
 /** The way a tool puts marks on the picture, which is what the canvas does with a drag or a tap. */
-enum class PaintKind { None, Stroke, Pen, Erase, Shape, Text, Gradient, Bucket }
+enum class PaintKind { None, Stroke, Pen, Erase, Shape, Text, Gradient, Bucket, Selection }
 
 /** What this tool paints, if it paints at all. Retouch tools stay with the vendored engine. */
 fun PhotoTool.paintKind(): PaintKind = when (this) {
@@ -133,6 +133,9 @@ fun PhotoTool.paintKind(): PaintKind = when (this) {
     PhotoTool.HorizontalType, PhotoTool.VerticalType, PhotoTool.TypeMask, PhotoTool.VerticalTypeMask -> PaintKind.Text
     PhotoTool.Gradient -> PaintKind.Gradient
     PhotoTool.PaintBucket -> PaintKind.Bucket
+    PhotoTool.Marquee, PhotoTool.EllipseMarquee, PhotoTool.RowMarquee, PhotoTool.ColumnMarquee,
+    PhotoTool.Lasso, PhotoTool.PolygonalLasso, PhotoTool.MagneticLasso,
+    -> PaintKind.Selection
     else -> PaintKind.None
 }
 

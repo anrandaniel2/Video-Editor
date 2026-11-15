@@ -157,6 +157,8 @@ already selected closes its panel.
   or JetBrains Mono; gradients drag from one colour to the other; the paint bucket floods from the tap.
   Save develops the photo and replays every one of those operations at the working copy's size, so the
   strokes are in the file.
+- **Selections that hold.** The marquees, the ellipse marquee and the lasso drag out a marching-ants
+  outline; every stroke, shape, fill or gradient made after it is clipped to it, and a tap clears it.
 - **The whole palette**, in nine groups on the left rail, each opening its tools beside it: Tone, Navigate (move, hand, rotate view,
   zoom, eyedropper, colour sampler, ruler), Select (marquees, the three lassos, object and quick
   selection, magic wand), Frame (crop, perspective crop, slice, artboard, frame, transform),
