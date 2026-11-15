@@ -356,6 +356,20 @@ internal fun ZoomPill(view: PhotoViewState, modifier: Modifier = Modifier) {
     }
 }
 
+/** The ten swatches the paint tools draw with, dark to light and round the wheel. */
+private val Swatches = listOf(
+    Color(0xFF17171B),
+    Color(0xFFF6F6F8),
+    Color(0xFFE23B3B),
+    Color(0xFFF08A24),
+    Color(0xFFF2C511),
+    Color(0xFF2FA84F),
+    Color(0xFF1177FF),
+    Color(0xFF7A3FF2),
+    Color(0xFFE255A8),
+    Color(0xFF22A9B8),
+)
+
 @Composable
 private fun ColourRow(values: PhotoToolValues, second: Boolean) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp)) {
@@ -409,13 +423,43 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
     val switches = tool.options.filterIsInstance<ToolOption.Switch>()
     val kind = tool.paintKind()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 10.dp)) {
-        if (kind != PaintKind.None && kind != PaintKind.Selection) ColourRow(values, second = false)
+        val inked = kind == PaintKind.Stroke || kind == PaintKind.Pen || kind == PaintKind.Shape ||
+            kind == PaintKind.Text || kind == PaintKind.Gradient || kind == PaintKind.Bucket
+        if (inked) ColourRow(values, second = false)
         if (kind == PaintKind.Selection) {
             Text(
                 "Drag to select. Paint after this stays inside the outline; tap to clear it.",
                 color = PhotoUi.PillInkSoft,
                 style = FcType.Caption,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
+        if (kind == PaintKind.Retouch) {
+            Text(
+                when (retouchMode(tool)) {
+                    RetouchMode.Heal -> "Paint over a blemish: the pixels under the brush are smoothed into their surroundings."
+                    RetouchMode.Clone -> "Paint the copy: the brush takes what is two brush-widths to its left."
+                    RetouchMode.Blur -> "Paint to blur the pixels under the brush."
+                    RetouchMode.Sharpen -> "Paint to sharpen the edges under the brush."
+                    RetouchMode.Smudge -> "Drag to drag the pixels along with the brush."
+                    RetouchMode.Dodge -> "Paint to lighten."
+                    RetouchMode.Burn -> "Paint to darken."
+                    RetouchMode.Sponge -> "Paint to take the colour out."
+                    RetouchMode.RedEye -> "Tap a pupil: red turns grey."
+                    null -> ""
+                },
+                color = PhotoUi.PillInkSoft,
+                style = FcType.Caption,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        }
+        if (kind == PaintKind.Navigate) {
+            Text(
+                if (tool == PhotoTool.Hand) "Drag the picture to move it. Double-tap to fit."
+                else "Tap to zoom in; double-tap to fit.",
+                color = PhotoUi.PillInkSoft,
+                style = FcType.Caption,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
             )
         }
         if (kind == PaintKind.Gradient) ColourRow(values, second = true)
@@ -443,9 +487,9 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
             }
         }
         Text(
-            "Tone, crop, rotate, flip, sampling, every brush and pen stroke, the shapes, type, gradients and the " +
-                "paint bucket act on this picture now, and they are in the saved photo. The retouch brushes " +
-                "(healing, clone, dodge, burn, blur, sharpen, smudge, sponge) wait on the vendored engine.",
+            "Tone, crop, rotate, flip, sampling, every brush and pen stroke, the shapes, type, gradients, the " +
+                "paint bucket, the marquees and the retouch brushes act on this picture now, and they are in " +
+                "the saved photo.",
             style = FcType.Caption,
             color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),

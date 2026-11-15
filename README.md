@@ -157,6 +157,10 @@ already selected closes its panel.
   or JetBrains Mono; gradients drag from one colour to the other; the paint bucket floods from the tap.
   Save develops the photo and replays every one of those operations at the working copy's size, so the
   strokes are in the file.
+- **Retouching that retouches.** Dodge, burn, sponge, blur, sharpen, smudge, healing, spot healing,
+  patch, clone stamp, pattern stamp and red eye work on the picture's own pixels: each stroke is run
+  over a snapshot of everything developed so far and kept as one operation, so it undoes in one go and
+  is replayed into the saved photo. A brush ring shows where the stroke will land.
 - **Selections that hold.** The marquees, the ellipse marquee and the lasso drag out a marching-ants
   outline; every stroke, shape, fill or gradient made after it is clipped to it, and a tap clears it.
 - **The whole palette**, in nine groups on the left rail, each opening its tools beside it: Tone, Navigate (move, hand, rotate view,

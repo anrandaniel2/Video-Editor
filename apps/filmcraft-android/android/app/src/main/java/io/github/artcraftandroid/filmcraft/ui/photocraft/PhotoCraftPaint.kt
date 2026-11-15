@@ -231,6 +231,29 @@ class PatchOp(private val patch: Bitmap) : PaintOp {
     }
 }
 
+/**
+ * A patch of the picture itself, brought back by a retouch stroke: the pixels under the brush after
+ * dodge, burn, blur, sharpen, smudge, heal, clone or red-eye. Kept as its own operation so undo takes
+ * the whole stroke back and so save replays it at the working copy's size.
+ */
+class RegionOp(
+    private val patch: Bitmap,
+    private val left: Float,
+    private val top: Float,
+    private val right: Float,
+    private val bottom: Float,
+) : PaintOp {
+    override fun render(canvas: Canvas, width: Int, height: Int) {
+        if (patch.isRecycled) return
+        canvas.drawBitmap(
+            patch,
+            null,
+            RectF(left * width, top * height, right * width, bottom * height),
+            Paint(Paint.FILTER_BITMAP_FLAG),
+        )
+    }
+}
+
 /** An operation clipped to the selection that was live when it was made. */
 class ClippedOp(private val inner: PaintOp, private val clip: List<Offset>?) : PaintOp {
     override fun render(canvas: Canvas, width: Int, height: Int) {

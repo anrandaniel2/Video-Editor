@@ -548,13 +548,16 @@ private fun PhotoPreview(
                 }
             }
             if (painting) {
-                PaintSurface(tool, kind, values, paint, ed, Modifier.fillMaxSize())
+                PaintSurface(tool, kind, values, paint, ed, view, Modifier.fillMaxSize())
             }
         }
     }
 }
 
-/** The gesture surface of the drawing tools: drags make strokes and shapes, taps place type and fill. */
+/**
+ * The gesture surface of the tools: drags make strokes, shapes and retouch passes, taps place type,
+ * fill, sample a selection or work the zoom, and the hand drags the picture around.
+ */
 @Composable
 private fun PaintSurface(
     tool: PhotoTool,
@@ -562,72 +565,166 @@ private fun PaintSurface(
     values: PhotoToolValues,
     paint: PhotoPaintState,
     ed: PhotoCraftController,
+    view: PhotoViewState,
     modifier: Modifier,
 ) {
+    var ring by remember(tool) { mutableStateOf<Offset?>(null) }
     Box(
         modifier
             .pointerInput(tool, kind) {
-                var points: List<Offset> = emptyList()
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        points = listOf(normalised(offset, size))
-                        if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
-                        else paint.begin(opFor(tool, kind, values, points))
-                    },
-                    onDrag = { change, _ ->
-                        val next = normalised(change.position, size)
-                        val last = points.lastOrNull()
-                        if (last == null || (next - last).getDistance() > 0.004f) {
-                            points = points + next
-                            if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
-                            else paint.begin(opFor(tool, kind, values, points))
+                when (kind) {
+                    PaintKind.Retouch -> {
+                        var points: List<Offset> = emptyList()
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                points = listOf(normalised(offset, size))
+                                ring = offset
+                            },
+                            onDrag = { change, _ ->
+                                points = points + normalised(change.position, size)
+                                ring = change.position
+                            },
+                            onDragEnd = {
+                                ring = null
+                                applyRetouch(ed, paint, tool, values, points)
+                                points = emptyList()
+                            },
+                            onDragCancel = {
+                                ring = null
+                                points = emptyList()
+                            },
+                        )
+                    }
+                    PaintKind.Navigate -> detectDragGestures { change, delta ->
+                        if (tool == PhotoTool.Hand) {
+                            view.pan += delta
+                            change.consume()
                         }
-                    },
-                    onDragEnd = {
-                        if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
-                        else paint.commit()
-                        ed.overlayMarked = true
-                    },
-                    onDragCancel = { paint.cancel() },
-                )
+                    }
+                    else -> {
+                        var points: List<Offset> = emptyList()
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                points = listOf(normalised(offset, size))
+                                if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
+                                else paint.begin(opFor(tool, kind, values, points))
+                            },
+                            onDrag = { change, _ ->
+                                val next = normalised(change.position, size)
+                                val last = points.lastOrNull()
+                                if (last == null || (next - last).getDistance() > 0.004f) {
+                                    points = points + next
+                                    if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
+                                    else paint.begin(opFor(tool, kind, values, points))
+                                }
+                            },
+                            onDragEnd = {
+                                if (kind == PaintKind.Selection) paint.select(selectionFor(tool, points))
+                                else paint.commit()
+                                ed.overlayMarked = true
+                            },
+                            onDragCancel = { paint.cancel() },
+                        )
+                    }
+                }
             }
             .pointerInput(tool, kind) {
-                detectTapGestures { offset ->
-                    val point = normalised(offset, size)
-                    when (kind) {
-                        PaintKind.Text -> paint.add(
-                            TextOp(
-                                text = values.text(tool, "text", "Made with PhotoCraft"),
-                                at = point,
-                                size = values.slider(tool, "size", 48f) / 1000f,
-                                color = values.color,
-                                font = typefaceFor(values.choice(tool, "font")),
-                                align = when (values.choice(tool, "align")) {
-                                    "Centre" -> 1
-                                    "Right" -> 2
-                                    else -> 0
-                                },
-                                vertical = tool == PhotoTool.VerticalType || tool == PhotoTool.VerticalTypeMask,
-                            ),
-                        )
-                        PaintKind.Bucket -> {
-                            val source = ed.preview?.asAndroidBitmap()
-                            if (source != null) {
-                                paint.add(paint.fill(source, point, values.color, values.slider(tool, "tolerance", 32f) / 100f))
-                            }
-                        }
-                        PaintKind.Stroke, PaintKind.Pen, PaintKind.Erase -> {
-                            paint.begin(opFor(tool, kind, values, listOf(point)))
-                            paint.commit()
-                        }
-                        PaintKind.Selection -> paint.select(null)
-                        else -> Unit
+                when (kind) {
+                    PaintKind.Retouch -> detectTapGestures { offset ->
+                        applyRetouch(ed, paint, tool, values, listOf(normalised(offset, size)))
                     }
-                    ed.overlayMarked = true
+                    PaintKind.Navigate -> detectTapGestures(
+                        onTap = {
+                            if (tool == PhotoTool.Zoom) view.zoomTo((view.zoom * 1.6f).coerceAtMost(8f))
+                        },
+                        onDoubleTap = { view.reset() },
+                    )
+                    else -> detectTapGestures { offset ->
+                        tapOnPhoto(tool, kind, values, paint, ed, normalised(offset, size))
+                    }
                 }
             }
             .semantics { contentDescription = "${tool.label} on the picture" },
-    )
+    ) {
+        ring?.let { centre ->
+            val picture = ed.preview?.width ?: 1
+            Canvas(Modifier.fillMaxSize()) {
+                val scale = size.width / picture.coerceAtLeast(1).toFloat()
+                val radius = (values.slider(tool, "size", 40f) / 2f * scale).coerceAtLeast(4f)
+                drawCircle(Color.White.copy(alpha = .85f), radius, centre, style = Stroke(width = 1.5f))
+                drawCircle(Color.Black.copy(alpha = .35f), radius + 1f, centre, style = Stroke(width = 1f))
+            }
+        }
+    }
+}
+
+/** A tap with a drawing tool: type lands where tapped, the bucket floods, a pen leaves a dot. */
+private fun tapOnPhoto(
+    tool: PhotoTool,
+    kind: PaintKind,
+    values: PhotoToolValues,
+    paint: PhotoPaintState,
+    ed: PhotoCraftController,
+    point: Offset,
+) {
+    when (kind) {
+        PaintKind.Text -> paint.add(
+            TextOp(
+                text = values.text(tool, "text", "Made with PhotoCraft"),
+                at = point,
+                size = values.slider(tool, "size", 48f) / 1000f,
+                color = values.color,
+                font = typefaceFor(values.choice(tool, "font")),
+                align = when (values.choice(tool, "align")) {
+                    "Centre" -> 1
+                    "Right" -> 2
+                    else -> 0
+                },
+                vertical = tool == PhotoTool.VerticalType || tool == PhotoTool.VerticalTypeMask,
+            ),
+        )
+        PaintKind.Bucket -> {
+            val source = ed.preview?.asAndroidBitmap()
+            if (source != null) {
+                paint.add(paint.fill(source, point, values.color, values.slider(tool, "tolerance", 32f) / 100f))
+            }
+        }
+        PaintKind.Stroke, PaintKind.Pen, PaintKind.Erase -> {
+            paint.begin(opFor(tool, kind, values, listOf(point)))
+            paint.commit()
+        }
+        PaintKind.Selection -> paint.select(null)
+        else -> Unit
+    }
+    ed.overlayMarked = true
+}
+
+/** Runs a retouch stroke over the picture as it stands, and keeps the edited pixels as one operation. */
+private fun applyRetouch(
+    ed: PhotoCraftController,
+    paint: PhotoPaintState,
+    tool: PhotoTool,
+    values: PhotoToolValues,
+    points: List<Offset>,
+) {
+    if (points.isEmpty()) return
+    val mode = retouchMode(tool) ?: return
+    val base = ed.preview?.asAndroidBitmap() ?: return
+    val sliders = tool.options.filterIsInstance<ToolOption.Slider>().map { it.key }
+    val amount = when {
+        "opacity" in sliders -> values.slider(tool, "opacity", 100f) / 100f
+        "flow" in sliders -> values.slider(tool, "flow", 50f) / 100f
+        else -> .65f
+    }
+    val op = PhotoCraftRetouch.stroke(
+        base = paint.flatten(base),
+        points = points,
+        radius = values.slider(tool, "size", 40f) / 2f,
+        amount = amount,
+        mode = mode,
+    ) ?: return
+    paint.add(op)
+    ed.overlayMarked = true
 }
 
 private fun normalised(offset: Offset, size: IntSize): Offset =
