@@ -91,6 +91,7 @@ class PhotoCraftController(
         private set
     /** Hold to see the picture as it was opened. */
     var compare by mutableStateOf(false)
+        private set
 
     /**
      * The paint layer the tools commit to, in preview pixels. Save replays it at the working copy's
@@ -100,7 +101,6 @@ class PhotoCraftController(
 
     /** Whether anything has been painted since the photo was opened: part of "unsaved edits". */
     var overlayMarked by mutableStateOf(false)
-        private set
     /** The crop frame is on screen: the preview shows the whole turned picture, not the frame. */
     var cropMode by mutableStateOf(false)
         private set

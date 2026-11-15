@@ -47,9 +47,9 @@ data class StrokeOp(
     val erase: Boolean,
     val round: Boolean,
 ) : PaintOp {
-    override fun render(canvas: Canvas, width: Int, height: Int) {
+    override fun render(canvas: Canvas, frameWidth: Int, frameHeight: Int) {
         if (points.isEmpty()) return
-        val thickness = (width * min(width, height)).coerceAtLeast(1f)
+        val thickness = (width * min(frameWidth, frameHeight)).coerceAtLeast(1f)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = thickness
@@ -61,14 +61,14 @@ data class StrokeOp(
         val first = points.first()
         if (points.size == 1) {
             val dot = Paint(paint).apply { style = Paint.Style.FILL }
-            canvas.drawCircle(first.x * width, first.y * height, thickness / 2f, dot)
+            canvas.drawCircle(first.x * frameWidth, first.y * frameHeight, thickness / 2f, dot)
             return
         }
         val path = Path()
-        path.moveTo(first.x * width, first.y * height)
+        path.moveTo(first.x * frameWidth, first.y * frameHeight)
         for (index in 1 until points.size) {
             val point = points[index]
-            path.lineTo(point.x * width, point.y * height)
+            path.lineTo(point.x * frameWidth, point.y * frameHeight)
         }
         canvas.drawPath(path, paint)
     }
