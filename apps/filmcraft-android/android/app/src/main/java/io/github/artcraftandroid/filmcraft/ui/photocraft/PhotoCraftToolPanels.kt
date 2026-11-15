@@ -1,6 +1,7 @@
 package io.github.artcraftandroid.filmcraft.ui.photocraft
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -19,12 +20,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -45,6 +48,21 @@ import io.github.artcraftandroid.filmcraft.ui.editorCard
 import io.github.artcraftandroid.filmcraft.ui.editorGlass
 import io.github.artcraftandroid.filmcraft.ui.glyph
 import kotlin.math.roundToInt
+
+/** The reference's colours: a near-black workspace, a light artboard, dark rails, a white bar. */
+internal object PhotoUi {
+    val Workspace = Color(0xFF0B0B0F)
+    val Artboard = Color(0xFFE9E9EC)
+    val Rail = Color(0xFF17171C)
+    val Card = Color(0xFF1C1C22)
+    val RailInk = Color(0xFFEDEDF2)
+    val RailInkSoft = Color(0xFF8A8A94)
+    val Pill = Color(0xFFF6F6F8)
+    val PillInk = Color(0xFF16161A)
+    val PillInkSoft = Color(0xFF6A6A73)
+    val PillField = Color(0xFFE4E4E9)
+    val Accent = Color(0xFF1177FF)
+}
 
 /**
  * PhotoCraft's chrome, drawn the way the reference apps and this app's own draw mode draw theirs: a
@@ -104,8 +122,8 @@ private fun RailButton(
             .clip(RoundedCornerShape(12.dp))
             .background(
                 when {
-                    selected -> Fc.Accent
-                    expanded -> Fc.Accent.copy(alpha = .28f)
+                    selected -> PhotoUi.Accent
+                    expanded -> PhotoUi.Accent.copy(alpha = .3f)
                     else -> Color.Transparent
                 },
             )
@@ -114,7 +132,7 @@ private fun RailButton(
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(glyph, if (selected) Color.White else Fc.Icon, size = 21.dp)
+        GlyphIcon(glyph, if (selected) Color.White else PhotoUi.RailInk, size = 21.dp)
     }
 }
 
@@ -127,7 +145,7 @@ internal fun ToolPickerCard(
     onTool: (PhotoTool) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier.editorGlass(20.dp).padding(vertical = 8.dp)) {
+    Column(modifier.editorGlass(16.dp, material = PhotoUi.Card.copy(alpha = .95f)).padding(vertical = 8.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -157,18 +175,18 @@ private fun ToolRow(tool: PhotoTool, selected: Boolean, onClick: () -> Unit) {
             .height(38.dp)
             .padding(horizontal = 6.dp)
             .clip(RoundedCornerShape(9.dp))
-            .background(if (selected) Fc.Accent else Color.Transparent)
+            .background(if (selected) PhotoUi.Accent else Color.Transparent)
             .clickable(role = Role.Button, onClick = onClick)
             .testTag("photocraft_tool_${tool.name.lowercase()}")
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        GlyphIcon(tool.glyph, if (selected) Color.White else Fc.Icon, size = 17.dp)
+        GlyphIcon(tool.glyph, if (selected) Color.White else PhotoUi.RailInk, size = 17.dp)
         Text(
             tool.label,
             style = FcType.Caption,
-            color = if (selected) Color.White else Fc.Body,
+            color = if (selected) Color.White else PhotoUi.RailInk,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -184,7 +202,7 @@ internal fun AllToolsCard(
     glass: Boolean = true,
 ) {
     // Inside the phone's sheet the card is already on glass: a second haze pane would nest effects.
-    val base = if (glass) modifier.editorGlass(20.dp) else modifier
+    val base = if (glass) modifier.editorGlass(16.dp, material = PhotoUi.Card.copy(alpha = .95f)) else modifier
     Column(base.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
@@ -224,19 +242,19 @@ internal fun ToolStrip(
                     .width(54.dp)
                     .height(50.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(if (tool == current) Fc.Accent else Color.Transparent)
+                    .background(if (tool == current) PhotoUi.Accent else Color.Transparent)
                     .clickable(role = Role.Button, onClick = { onTool(tool) })
                     .testTag("photocraft_tool_${tool.name.lowercase()}")
                     .semantics { contentDescription = tool.label },
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                GlyphIcon(tool.glyph, if (tool == current) Color.White else Fc.Body, size = 18.dp)
+                GlyphIcon(tool.glyph, if (tool == current) Color.White else PhotoUi.RailInk, size = 18.dp)
                 Spacer(Modifier.height(2.dp))
                 Text(
                     tool.label,
                     style = FcType.ToolLabel.copy(fontSize = 9.sp),
-                    color = if (tool == current) Color.White else Fc.Detail,
+                    color = if (tool == current) Color.White else PhotoUi.RailInkSoft,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
@@ -312,7 +330,7 @@ internal fun PanelHeader(tool: PhotoTool, width: Int, height: Int, modifier: Mod
 @Composable
 internal fun ZoomPill(view: PhotoViewState, modifier: Modifier = Modifier) {
     Row(
-        modifier.height(36.dp).editorGlass(18.dp).padding(horizontal = 4.dp),
+        modifier.height(34.dp).editorGlass(17.dp, material = PhotoUi.Card.copy(alpha = .92f)).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         PillButton(LucideIcons.ZoomOut.glyph(), "Zoom out") { view.zoomTo(view.zoom / 1.5f) }
@@ -343,11 +361,69 @@ private fun PillButton(glyph: Glyph, description: String, onClick: () -> Unit) {
     }
 }
 
+
+/** The ten colours the brush, the shapes, the type and the gradients draw with. */
+private val Swatches = listOf(
+    Color(0xFF17171B), Color(0xFFF6F6F8), Color(0xFFE23B3B), Color(0xFFF08A24), Color(0xFFF2C511),
+    Color(0xFF2FA84F), Color(0xFF1177FF), Color(0xFF7A3FF2), Color(0xFFE255A8), Color(0xFF22A9B8),
+)
+
+@Composable
+private fun ColourRow(values: PhotoToolValues, second: Boolean) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp)) {
+        Text(if (second) "COLOUR · START" else "COLOUR", style = FcType.ToolLabel.copy(fontSize = 9.sp), color = Fc.Detail)
+        Spacer(Modifier.height(4.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            for (swatch in Swatches) {
+                val chosen = if (second) values.endColor == swatch else values.color == swatch
+                Box(
+                    Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(swatch)
+                        .then(if (chosen) Modifier.border(2.dp, Color.White, CircleShape) else Modifier)
+                        .clickable(role = Role.Button, onClick = { if (second) values.endColor = swatch else values.color = swatch }),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TypeRow(tool: PhotoTool, values: PhotoToolValues) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp)) {
+        Text("TEXT", style = FcType.ToolLabel.copy(fontSize = 9.sp), color = Fc.Detail)
+        Spacer(Modifier.height(4.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(Fc.Raised)
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+        ) {
+            BasicTextField(
+                value = values.text(tool, "text", "Made with PhotoCraft"),
+                onValueChange = { values.setText(tool, "text", it) },
+                textStyle = FcType.Caption.copy(color = Fc.Title),
+                cursorBrush = SolidColor(PhotoUi.Accent),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
 /** A tool's options: the actions the pipeline runs now, then its sliders, choices and switches. */
 @Composable
 internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction: (ToolAction) -> Unit) {
     val switches = tool.options.filterIsInstance<ToolOption.Switch>()
+    val kind = tool.paintKind()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 10.dp)) {
+        if (kind != PaintKind.None) ColourRow(values, second = false)
+        if (kind == PaintKind.Gradient) ColourRow(values, second = true)
+        if (kind == PaintKind.Text) TypeRow(tool, values)
         if (tool.actions.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (action in tool.actions) ToolActionButton(action, Modifier.weight(1f)) { onAction(action) }
@@ -371,8 +447,9 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
             }
         }
         Text(
-            "The palette and its options are complete. Tone, crop, rotate, flip and sampling act on this " +
-                "picture now; strokes, selections and vector edits are applied by the vendored PhotoCraft engine.",
+            "Tone, crop, rotate, flip, sampling, every brush and pen stroke, the shapes, type, gradients and the " +
+                "paint bucket act on this picture now, and they are in the saved photo. The retouch brushes " +
+                "(healing, clone, dodge, burn, blur, sharpen, smudge, sponge) wait on the vendored engine.",
             style = FcType.Caption,
             color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),

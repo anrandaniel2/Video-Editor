@@ -2,6 +2,8 @@ package io.github.artcraftandroid.filmcraft.ui.photocraft
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.ImageDecoder
 import android.net.Uri
 import androidx.compose.runtime.Stable
@@ -89,6 +91,15 @@ class PhotoCraftController(
         private set
     /** Hold to see the picture as it was opened. */
     var compare by mutableStateOf(false)
+
+    /**
+     * The paint layer the tools commit to, in preview pixels. Save replays it at the working copy's
+     * size on top of the developed photo, so the strokes on screen are the strokes in the file.
+     */
+    var overlay: Bitmap? = null
+
+    /** Whether anything has been painted since the photo was opened: part of "unsaved edits". */
+    var overlayMarked by mutableStateOf(false)
         private set
     /** The crop frame is on screen: the preview shows the whole turned picture, not the frame. */
     var cropMode by mutableStateOf(false)
@@ -296,7 +307,7 @@ class PhotoCraftController(
 
     fun resetAdjustments() = commit { it.copy(adjustments = PhotoAdjustments()) }
 
-    fun resetAll() = commit { PhotoEdits() }.also { aspect = null }
+    fun resetAll() = commit { PhotoEdits() }.also { aspect = null; overlayMarked = false }
 
     fun compareWithOriginal(on: Boolean) {
         if (compare == on) return
@@ -318,7 +329,17 @@ class PhotoCraftController(
                     val pixels = source.rgbaBytes()
                     val turned = turn(pixels, source.width, source.height, snapshot, snapshot.crop)
                     val rendered = photoRender(turned.pixels, turned.width.toUInt(), turned.height.toUInt(), snapshot.adjustments.toNative())
-                    rgbaToBitmap(rendered, turned.width, turned.height)
+                    val photo = rgbaToBitmap(rendered, turned.width, turned.height)
+                    val layer = overlay
+                    if (layer != null && !layer.isRecycled && layer.width > 0) {
+                        Canvas(photo).drawBitmap(
+                            layer,
+                            null,
+                            android.graphics.Rect(0, 0, photo.width, photo.height),
+                            Paint(Paint.FILTER_BITMAP_FLAG),
+                        )
+                    }
+                    photo
                 }
                 val destination = withContext(Dispatchers.IO) { savePhotoToLibrary(context, photo, name) }
                 photo.recycle()

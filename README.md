@@ -137,8 +137,11 @@ saved picture's menu (**Edit in PhotoCraft**). It is laid out the way the refere
 are: one icon rail down the left with the open group's tools on a card beside it, the picture
 full-bleed in the middle under a floating pill bar and its own zoom control, the panel shortcuts
 down the right edge, and the active tool's options on a card at the top right — a sheet under the
-picture on a phone. Every control sits on the same frosted glass the draw mode uses, so the
-picture blurs faintly behind it.
+picture on a phone. The frame follows the reference tablet editors: a near-black workspace, the
+picture on a light artboard, one icon rail down the left, a strip of panel icons down the right, the
+white pill bar at the top left and the floating cards over the canvas — the cards sit on the same
+frosted glass the draw mode uses, so the picture blurs faintly behind them. Tapping the tool that is
+already selected closes its panel.
 
 - **Adjust**, in three short tabs: *Light* (exposure, contrast, highlights, shadows, whites,
   blacks), *Colour* (temperature, tint, vibrance, saturation) and *Detail* (clarity, sharpen,
@@ -147,6 +150,13 @@ picture blurs faintly behind it.
 - **Filters**: nine developed thumbnails (Punch, Film, Mono, Noir, Warm, Cool, Fade, Vivid and
   the original), each with a strength slider.
 - **Crop**: quarter turns, both flips, and a crop frame with a locked ratio from 1:1 to 16:9.
+- **Painting that saves.** Brush, pencil, mixer, colour replacement and the history brushes lay strokes on
+  a paint layer over the photo — size, opacity and hardness from the tool's own options, ten swatches for
+  the colour; the erasers clear the layer; the pens draw thin paths; rectangles, ellipses, triangles,
+  polygons, stars and lines drag out with fill or stroke; type is placed where you tap in Inter, Noto Serif
+  or JetBrains Mono; gradients drag from one colour to the other; the paint bucket floods from the tap.
+  Save develops the photo and replays every one of those operations at the working copy's size, so the
+  strokes are in the file.
 - **The whole palette**, in nine groups on the left rail, each opening its tools beside it: Tone, Navigate (move, hand, rotate view,
   zoom, eyedropper, colour sampler, ruler), Select (marquees, the three lassos, object and quick
   selection, magic wand), Frame (crop, perspective crop, slice, artboard, frame, transform),

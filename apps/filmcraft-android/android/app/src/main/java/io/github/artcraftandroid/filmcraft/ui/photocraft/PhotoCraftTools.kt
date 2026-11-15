@@ -103,7 +103,49 @@ class PhotoToolValues {
     fun setSwitch(tool: PhotoTool, option: ToolOption.Switch, on: Boolean) {
         switches[key(tool, option.key)] = on
     }
+
+    private val strings = mutableStateMapOf<String, String>()
+
+    fun text(tool: PhotoTool, key: String, default: String): String = strings[this.key(tool, key)] ?: default
+
+    fun setText(tool: PhotoTool, key: String, value: String) {
+        strings[this.key(tool, key)] = value
+    }
+
+    /** The colour the brush, shapes, type and gradients use; the second one is the gradient's end. */
+    var color by mutableStateOf(Color(0xFF17171B))
+    var endColor by mutableStateOf(Color(0xFFF4F4F6))
 }
+
+/** The way a tool puts marks on the picture, which is what the canvas does with a drag or a tap. */
+enum class PaintKind { None, Stroke, Pen, Erase, Shape, Text, Gradient, Bucket }
+
+/** What this tool paints, if it paints at all. Retouch tools stay with the vendored engine. */
+fun PhotoTool.paintKind(): PaintKind = when (this) {
+    PhotoTool.Brush, PhotoTool.Pencil, PhotoTool.MixerBrush, PhotoTool.ColorReplacement,
+    PhotoTool.CloneStamp, PhotoTool.PatternStamp, PhotoTool.HistoryBrush, PhotoTool.ArtHistoryBrush,
+    -> PaintKind.Stroke
+    PhotoTool.Eraser, PhotoTool.BackgroundEraser, PhotoTool.MagicEraser -> PaintKind.Erase
+    PhotoTool.Pen, PhotoTool.FreeformPen, PhotoTool.CurvaturePen -> PaintKind.Pen
+    PhotoTool.Rectangle, PhotoTool.Ellipse, PhotoTool.TriangleShape, PhotoTool.Polygon,
+    PhotoTool.StarShape, PhotoTool.Line, PhotoTool.CustomShape, PhotoTool.FrameTool,
+    -> PaintKind.Shape
+    PhotoTool.HorizontalType, PhotoTool.VerticalType, PhotoTool.TypeMask, PhotoTool.VerticalTypeMask -> PaintKind.Text
+    PhotoTool.Gradient -> PaintKind.Gradient
+    PhotoTool.PaintBucket -> PaintKind.Bucket
+    else -> PaintKind.None
+}
+
+/** Reads one option by name, whatever tool carries it: the canvas needs size, opacity and the rest. */
+fun PhotoToolValues.slider(tool: PhotoTool, key: String, fallback: Float): Float =
+    tool.options.filterIsInstance<ToolOption.Slider>().firstOrNull { it.key == key }?.let { number(tool, it) } ?: fallback
+
+fun PhotoToolValues.choice(tool: PhotoTool, key: String): String? =
+    tool.options.filterIsInstance<ToolOption.Choice>().firstOrNull { it.key == key }
+        ?.let { option -> option.choices.getOrNull(choice(tool, option)) }
+
+fun PhotoToolValues.flag(tool: PhotoTool, key: String, fallback: Boolean = false): Boolean =
+    tool.options.filterIsInstance<ToolOption.Switch>().firstOrNull { it.key == key }?.let { switch(tool, it) } ?: fallback
 
 /** The view the Navigate tools share with the picture: zoom, pan and the colours sampled so far. */
 class PhotoViewState {

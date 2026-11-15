@@ -123,10 +123,11 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
     var confirmDiscard by remember { mutableStateOf(false) }
     val values = remember { PhotoToolValues() }
     val view = remember { PhotoViewState() }
+    val paint = remember { PhotoPaintState() }
     val requestClose: () -> Unit = {
         when {
             ed.saving -> Unit
-            ed.edits.hasEdits && !ed.saved -> confirmDiscard = true
+            (ed.edits.hasEdits || ed.overlayMarked) && !ed.saved -> confirmDiscard = true
             else -> onClose()
         }
     }
@@ -137,111 +138,146 @@ fun PhotoCraftScreen(ed: PhotoCraftController, onClose: () -> Unit) {
 
     CompositionLocalProvider(LocalEditorBackdrop provides rememberHazeState()) {
         BoxWithConstraints(Modifier.fillMaxSize().background(Fc.Black).testTag("screen_photocraft")) {
-            // The reference layout: one icon rail down the left with the open group's tools on a glass
-            // card beside it, the picture full-bleed, a pill bar across the top, the panel shortcuts down
-            // the right edge and the active tool's options on a floating card. On a phone the tools and
-            // the options fold into a sheet under the picture; the rail stays on the left.
+            // The reference's frame, element for element: one icon rail down the left, a strip of panel
+            // icons down the right, the picture on a light artboard between them, the white pill bar at
+            // the top left, the open group's tools and the active tool's options on floating cards.
             val wide = maxWidth >= 790.dp && maxWidth > maxHeight
-            val cardRoom = maxHeight * .62f
-            val sheetRoom = maxHeight * .60f
-            // Read here too: inside the cards' Box/Column the implicit receiver is not this one.
-            val railRoom = maxHeight - 92.dp
-            val railRoomSmall = maxHeight - 268.dp
+            val cardRoom = maxHeight * .60f
+            val sheetRoom = maxHeight * .58f
+            val railRoom = maxHeight - 20.dp
+            val railRoomSmall = maxHeight - 300.dp
             var openGroup by remember { mutableStateOf<ToolGroup?>(tool.group) }
             var showAll by remember { mutableStateOf(false) }
+            var panelOpen by remember { mutableStateOf(true) }
             val choose: (PhotoTool) -> Unit = { picked ->
-                tool = picked
-                openGroup = picked.group
-                showAll = false
+                // The same tool twice closes its panel, the way the reference toggles one.
+                if (picked == tool) panelOpen = !panelOpen
+                else {
+                    tool = picked
+                    panelOpen = true
+                    openGroup = picked.group
+                    showAll = false
+                }
             }
             val toggleGroup: (ToolGroup) -> Unit = { group -> openGroup = if (openGroup == group) null else group }
+            val reset: () -> Unit = { ed.resetAll(); paint.clear(); ed.overlayMarked = false }
             if (wide) {
                 Box(Modifier.fillMaxSize()) {
-                    PhotoPreview(
-                        ed, tool, values, view,
-                        Modifier.fillMaxSize().padding(start = 66.dp, end = 66.dp, top = 60.dp, bottom = 16.dp),
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(start = 56.dp, end = 56.dp, top = 46.dp, bottom = 8.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(PhotoUi.Artboard),
+                    ) {
+                        PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize().padding(10.dp))
+                        ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(10.dp))
+                    }
+                    PhotoCraftTopBar(
+                        ed, tool, choose, { showAll = !showAll }, paint, requestClose, wide = true,
+                        modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 60.dp, top = 2.dp),
                     )
                     Column(
                         Modifier
                             .align(Alignment.CenterStart)
-                            .padding(start = 8.dp)
-                            .width(52.dp)
+                            .padding(start = 5.dp)
+                            .width(46.dp)
                             .heightIn(max = railRoom)
-                            .editorGlass(20.dp),
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(PhotoUi.Rail),
                     ) {
-                        ToolRail(tool.group, openGroup, { toggleGroup(it); showAll = false }, { showAll = !showAll }, { ed.resetAll() })
+                        ToolRail(tool.group, openGroup, { toggleGroup(it); showAll = false }, { showAll = !showAll }, reset)
+                    }
+                    Column(
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 5.dp)
+                            .width(46.dp)
+                            .heightIn(max = railRoom)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(PhotoUi.Rail),
+                    ) {
+                        PanelStrip(tool, choose)
                     }
                     if (showAll) {
                         AllToolsCard(
                             current = tool,
                             onTool = choose,
-                            modifier = Modifier.align(Alignment.CenterStart).padding(start = 68.dp).width(268.dp).heightIn(max = cardRoom),
+                            modifier = Modifier.align(Alignment.TopStart)
+                                .padding(start = 56.dp, top = 50.dp)
+                                .width(252.dp)
+                                .heightIn(max = cardRoom),
                         )
                     } else {
                         openGroup?.let { group ->
                             ToolPickerCard(
                                 group, tool, values, choose,
-                                Modifier.align(Alignment.CenterStart).padding(start = 68.dp).width(232.dp).heightIn(max = cardRoom),
+                                Modifier.align(Alignment.TopStart)
+                                    .padding(start = 56.dp, top = 50.dp)
+                                    .width(214.dp)
+                                    .heightIn(max = cardRoom),
                             )
                         }
                     }
-                    PhotoCraftTopBar(ed, tool, choose, { showAll = !showAll }, requestClose, wide = true,
-                        modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 8.dp, start = 8.dp, end = 8.dp))
-                    Column(
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 68.dp, end = 62.dp)
-                            .width(318.dp)
-                            .heightIn(max = cardRoom)
-                            .editorGlass(20.dp),
-                    ) {
-                        PanelHeader(tool, ed.baseWidth, ed.baseHeight)
-                        ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
+                    if (panelOpen) {
+                        Column(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 50.dp, end = 56.dp)
+                                .width(300.dp)
+                                .heightIn(max = cardRoom)
+                                .editorGlass(16.dp, material = PhotoUi.Card.copy(alpha = .93f)),
+                        ) {
+                            PanelHeader(tool, ed.baseWidth, ed.baseHeight)
+                            ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
+                        }
                     }
-                    Column(
-                        Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 8.dp)
-                            .width(52.dp)
-                            .heightIn(max = railRoom)
-                            .editorGlass(20.dp),
-                    ) {
-                        PanelStrip(tool, choose)
-                    }
-                    ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 70.dp, bottom = 16.dp))
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        PhotoPreview(ed, tool, values, view, Modifier.fillMaxSize().padding(start = 58.dp, top = 56.dp))
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .padding(start = 48.dp, top = 44.dp, end = 6.dp, bottom = 6.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(PhotoUi.Artboard),
+                        ) {
+                            PhotoPreview(ed, tool, values, view, paint, Modifier.fillMaxSize().padding(6.dp))
+                            ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(8.dp))
+                        }
+                        PhotoCraftTopBar(
+                            ed, tool, choose, { showAll = !showAll }, paint, requestClose, wide = false,
+                            modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 4.dp, top = 2.dp),
+                        )
                         Column(
                             Modifier
                                 .align(Alignment.CenterStart)
-                                .padding(start = 6.dp)
-                                .width(46.dp)
+                                .padding(start = 4.dp)
+                                .width(42.dp)
                                 .heightIn(max = railRoomSmall)
-                                .editorGlass(18.dp),
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(PhotoUi.Rail),
                         ) {
-                            ToolRail(tool.group, openGroup, { toggleGroup(it); showAll = false }, { showAll = !showAll }, { ed.resetAll() })
+                            ToolRail(tool.group, openGroup, { toggleGroup(it); showAll = false }, { showAll = !showAll }, reset)
                         }
-                        PhotoCraftTopBar(ed, tool, choose, { showAll = !showAll }, requestClose, wide = false,
-                            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 6.dp, start = 6.dp, end = 6.dp))
-                        ZoomPill(view, Modifier.align(Alignment.BottomStart).padding(start = 56.dp, bottom = 10.dp))
                     }
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(max = sheetRoom)
-                            .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
-                            .editorGlass(22.dp),
+                            .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                            .background(PhotoUi.Rail),
                     ) {
                         if (showAll) {
-                            AllToolsCard(tool, choose, Modifier.fillMaxWidth().heightIn(max = 190.dp), glass = false)
+                            AllToolsCard(tool, choose, Modifier.fillMaxWidth().heightIn(max = 168.dp), glass = false)
                         } else {
                             openGroup?.let { group -> ToolStrip(group, tool, choose, Modifier.fillMaxWidth()) }
                         }
-                        PanelHeader(tool, ed.baseWidth, ed.baseHeight)
-                        ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
+                        if (panelOpen) {
+                            PanelHeader(tool, ed.baseWidth, ed.baseHeight)
+                            ToolPanelBody(ed, tool, values, view, Modifier.fillMaxWidth().weight(1f))
+                        }
                         Spacer(Modifier.fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars))
                     }
                 }
@@ -299,49 +335,59 @@ private fun PhotoCraftTopBar(
     tool: PhotoTool,
     onTool: (PhotoTool) -> Unit,
     onMenu: () -> Unit,
+    paint: PhotoPaintState,
     close: () -> Unit,
     wide: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier.height(48.dp).editorGlass(24.dp).padding(start = 4.dp, end = 4.dp),
+        modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(PhotoUi.Pill)
+            .padding(start = 3.dp, end = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FcIconButton(LucideIcons.X.glyph(), "Close PhotoCraft", close, size = 36.dp, iconSize = 19.dp)
+        FcIconButton(LucideIcons.X.glyph(), "Close PhotoCraft", close, size = 32.dp, iconSize = 17.dp, tint = PhotoUi.PillInk)
         Row(
             Modifier
-                .height(30.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(Fc.Raised.copy(alpha = .55f))
-                .padding(horizontal = 8.dp),
+                .height(26.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(PhotoUi.PillField)
+                .padding(horizontal = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            GlyphIcon(LucideIcons.Image.glyph(), Fc.Body, size = 14.dp)
+            GlyphIcon(LucideIcons.Image.glyph(), PhotoUi.PillInkSoft, size = 13.dp)
             Text(
                 ed.name,
-                style = FcType.Caption,
-                color = Fc.Title,
+                style = FcType.Caption.copy(fontSize = 12.sp),
+                color = PhotoUi.PillInk,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = if (wide) 132.dp else 84.dp),
+                modifier = Modifier.widthIn(max = if (wide) 122.dp else 74.dp),
             )
-            GlyphIcon(LucideIcons.ChevronDown.glyph(), Fc.Detail, size = 12.dp)
+            GlyphIcon(LucideIcons.ChevronDown.glyph(), PhotoUi.PillInkSoft, size = 11.dp)
         }
         if (wide) {
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(5.dp))
             for (tab in listOf(PhotoTool.Adjust, PhotoTool.Filters, PhotoTool.Crop)) {
                 ModeTab(tab, tab == tool, { onTool(tab) })
             }
         }
-        Spacer(Modifier.width(8.dp))
-        FcIconButton(LucideIcons.Undo2.glyph(), "Undo", { ed.undo() }, enabled = ed.canUndo, size = 34.dp, iconSize = 18.dp)
-        FcIconButton(LucideIcons.Redo2.glyph(), "Redo", { ed.redo() }, enabled = ed.canRedo, size = 34.dp, iconSize = 18.dp)
-        CompareButton(ed)
-        Spacer(Modifier.width(4.dp))
+        Spacer(Modifier.width(6.dp))
+        FcIconButton(
+            LucideIcons.Undo2.glyph(), "Undo",
+            { if (!paint.undoPainted()) ed.undo() },
+            enabled = ed.canUndo || paint.canUndo,
+            size = 30.dp, iconSize = 16.dp, tint = PhotoUi.PillInk,
+        )
+        FcIconButton(LucideIcons.Redo2.glyph(), "Redo", { ed.redo() }, enabled = ed.canRedo, size = 30.dp, iconSize = 16.dp, tint = PhotoUi.PillInk)
+        CompareButton(ed, PhotoUi.PillInk)
+        Spacer(Modifier.width(3.dp))
         SavePill(ed.saving) { ed.save() }
         if (wide) {
-            FcIconButton(LucideIcons.Menu.glyph(), "Every tool", onMenu, size = 34.dp, iconSize = 18.dp)
+            FcIconButton(LucideIcons.Menu.glyph(), "Every tool", onMenu, size = 30.dp, iconSize = 16.dp, tint = PhotoUi.PillInk)
         }
     }
 }
@@ -351,28 +397,28 @@ private fun PhotoCraftTopBar(
 private fun ModeTab(tool: PhotoTool, selected: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
-            .height(30.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(if (selected) Fc.Accent else Color.Transparent)
+            .height(26.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) PhotoUi.Accent else Color.Transparent)
             .clickable(role = Role.Button, onClick = onClick)
             .testTag("photocraft_tab_${tool.name.lowercase()}")
-            .padding(horizontal = 9.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        GlyphIcon(tool.glyph, if (selected) Color.White else Fc.Body, size = 14.dp)
-        Text(tool.label, style = FcType.Caption, color = if (selected) Color.White else Fc.Body, maxLines = 1)
+        GlyphIcon(tool.glyph, if (selected) Color.White else PhotoUi.PillInk, size = 13.dp)
+        Text(tool.label, style = FcType.Caption.copy(fontSize = 12.sp), color = if (selected) Color.White else PhotoUi.PillInk, maxLines = 1)
     }
 }
 
 /** Hold to see the picture exactly as it was opened. */
 @Composable
-private fun CompareButton(ed: PhotoCraftController) {
+private fun CompareButton(ed: PhotoCraftController, ink: Color) {
     Box(
         Modifier
-            .size(40.dp)
+            .size(30.dp)
             .clip(CircleShape)
-            .background(if (ed.compare) Fc.Raised else Color.Transparent)
+            .background(if (ed.compare) PhotoUi.Accent.copy(alpha = .22f) else Color.Transparent)
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
                     ed.compareWithOriginal(true)
@@ -383,7 +429,7 @@ private fun CompareButton(ed: PhotoCraftController) {
             .semantics { contentDescription = "Hold to compare with the original" },
         contentAlignment = Alignment.Center,
     ) {
-        GlyphIcon(CompareGlyph, if (ed.compare) Fc.AccentLight else Fc.Icon, size = 20.dp)
+        GlyphIcon(CompareGlyph, if (ed.compare) PhotoUi.Accent else ink, size = 17.dp)
     }
 }
 
@@ -413,6 +459,7 @@ private fun PhotoPreview(
     tool: PhotoTool,
     values: PhotoToolValues,
     view: PhotoViewState,
+    paint: PhotoPaintState,
     modifier: Modifier,
 ) {
     LaunchedEffect(tool) {
@@ -424,11 +471,18 @@ private fun PhotoPreview(
             if (!ed.loading) GlyphIcon(LucideIcons.Image.glyph(), Fc.Disabled, size = 48.dp)
             return@BoxWithConstraints
         }
+        // The paint layer follows the preview's pixel size; the controller develops the same layer.
+        LaunchedEffect(image.width, image.height) {
+            paint.resize(image.width, image.height)
+            ed.overlay = paint.pixels
+        }
         val availableWidth = (maxWidth.value - 24f).coerceAtLeast(1f)
         val availableHeight = (maxHeight.value - 24f).coerceAtLeast(1f)
         val (imageWidth, imageHeight) = fitAspect(image.width.toFloat() / image.height.coerceAtLeast(1), availableWidth, availableHeight)
         val sampling = tool.panel == ToolPanel.Sample
-        val gestures = if (tool == PhotoTool.Crop || sampling) Modifier else Modifier
+        val kind = tool.paintKind()
+        val painting = kind != PaintKind.None
+        val gestures = if (tool == PhotoTool.Crop || sampling || painting) Modifier else Modifier
             .pointerInput(Unit) {
                 detectTransformGestures { _, movement, change, _ ->
                     view.zoom = (view.zoom * change).coerceIn(1f, 6f)
@@ -457,6 +511,14 @@ private fun PhotoPreview(
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit,
                 )
+                paint.image?.let { layer ->
+                    Image(
+                        bitmap = layer,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
             }
             // The frame sits outside the clipped, zoomed layer so its corner handles stay whole.
             if (tool == PhotoTool.Crop) CropOverlay(ed, Modifier.fillMaxSize())
@@ -474,8 +536,160 @@ private fun PhotoPreview(
                         .semantics { contentDescription = "Tap the picture to sample its colour" },
                 )
             }
+            if (painting) {
+                PaintSurface(tool, kind, values, paint, ed, Modifier.fillMaxSize())
+            }
         }
     }
+}
+
+/** The gesture surface of the drawing tools: drags make strokes and shapes, taps place type and fill. */
+@Composable
+private fun PaintSurface(
+    tool: PhotoTool,
+    kind: PaintKind,
+    values: PhotoToolValues,
+    paint: PhotoPaintState,
+    ed: PhotoCraftController,
+    modifier: Modifier,
+) {
+    Box(
+        modifier
+            .pointerInput(tool, kind) {
+                var points: List<Offset> = emptyList()
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        points = listOf(normalised(offset, size))
+                        paint.begin(opFor(tool, kind, values, points))
+                    },
+                    onDrag = { change, _ ->
+                        val next = normalised(change.position, size)
+                        val last = points.lastOrNull()
+                        if (last == null || (next - last).getDistance() > 0.004f) {
+                            points = points + next
+                            paint.begin(opFor(tool, kind, values, points))
+                        }
+                    },
+                    onDragEnd = {
+                        paint.commit()
+                        ed.overlayMarked = true
+                    },
+                    onDragCancel = { paint.cancel() },
+                )
+            }
+            .pointerInput(tool, kind) {
+                detectTapGestures { offset ->
+                    val point = normalised(offset, size)
+                    when (kind) {
+                        PaintKind.Text -> paint.add(
+                            TextOp(
+                                text = values.text(tool, "text", "Made with PhotoCraft"),
+                                at = point,
+                                size = values.slider(tool, "size", 48f) / 1000f,
+                                color = values.color,
+                                font = typefaceFor(values.choice(tool, "font")),
+                                align = when (values.choice(tool, "align")) {
+                                    "Centre" -> 1
+                                    "Right" -> 2
+                                    else -> 0
+                                },
+                                vertical = tool == PhotoTool.VerticalType || tool == PhotoTool.VerticalTypeMask,
+                            ),
+                        )
+                        PaintKind.Bucket -> {
+                            val source = ed.preview?.asAndroidBitmap()
+                            if (source != null) {
+                                paint.add(paint.fill(source, point, values.color, values.slider(tool, "tolerance", 32f) / 100f))
+                            }
+                        }
+                        PaintKind.Stroke, PaintKind.Pen, PaintKind.Erase -> {
+                            paint.begin(opFor(tool, kind, values, listOf(point)))
+                            paint.commit()
+                        }
+                        else -> Unit
+                    }
+                    ed.overlayMarked = true
+                }
+            }
+            .semantics { contentDescription = "${tool.label} on the picture" },
+    )
+}
+
+private fun normalised(offset: Offset, size: IntSize): Offset =
+    Offset(
+        (offset.x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f),
+        (offset.y / size.height.coerceAtLeast(1)).coerceIn(0f, 1f),
+    )
+
+/** Turns the tool's own options into the operation the canvas draws. */
+private fun opFor(tool: PhotoTool, kind: PaintKind, values: PhotoToolValues, points: List<Offset>): PaintOp {
+    val from = points.first()
+    val to = points.last()
+    return when (kind) {
+        PaintKind.Stroke -> StrokeOp(
+            points = points,
+            color = values.color,
+            width = values.slider(tool, "size", 40f) / 1000f,
+            opacity = values.slider(tool, "opacity", 100f) / 100f,
+            erase = false,
+            round = true,
+        )
+        PaintKind.Erase -> StrokeOp(
+            points = points,
+            color = Color.Transparent,
+            width = values.slider(tool, "size", 40f) / 1000f,
+            opacity = 1f,
+            erase = true,
+            round = true,
+        )
+        PaintKind.Pen -> StrokeOp(
+            points = points,
+            color = values.color,
+            width = values.slider(tool, "width", 2f) / 1000f,
+            opacity = 1f,
+            erase = false,
+            round = true,
+        )
+        PaintKind.Shape -> ShapeOp(
+            shape = shapeFor(tool),
+            from = from,
+            to = to,
+            color = values.color,
+            stroke = (values.slider(tool, "stroke", 2f).takeIf { it > 0f } ?: 4f) / 1000f,
+            filled = shapeFor(tool) != PaintShape.Line && values.choice(tool, "fill") != "None",
+            sides = when (tool) {
+                PhotoTool.StarShape -> values.slider(tool, "points", 5f).toInt()
+                PhotoTool.Polygon -> values.slider(tool, "sides", 6f).toInt()
+                PhotoTool.TriangleShape -> 3
+                else -> 4
+            },
+            arrow = values.choice(tool, "arrow") == "Both",
+        )
+        PaintKind.Gradient -> GradientOp(
+            from = from,
+            to = to,
+            start = values.color,
+            end = values.endColor,
+            radial = values.choice(tool, "style") == "Radial",
+            opacity = values.slider(tool, "opacity", 100f) / 100f,
+        )
+        else -> StrokeOp(points, values.color, .04f, 1f, false, true)
+    }
+}
+
+private fun shapeFor(tool: PhotoTool): PaintShape = when (tool) {
+    PhotoTool.Ellipse -> PaintShape.Ellipse
+    PhotoTool.TriangleShape -> PaintShape.Triangle
+    PhotoTool.Polygon -> PaintShape.Polygon
+    PhotoTool.StarShape -> PaintShape.Star
+    PhotoTool.Line -> PaintShape.Line
+    else -> PaintShape.Rectangle
+}
+
+private fun typefaceFor(name: String?): String = when (name) {
+    "Noto Serif" -> "serif"
+    "JetBrains Mono" -> "monospace"
+    else -> "sans-serif"
 }
 
 /** How many pixels the eyedropper averages: the sampler's own option, 1 when it has none. */
