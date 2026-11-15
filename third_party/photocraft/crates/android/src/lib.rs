@@ -20,8 +20,10 @@ use serde_json::{Value, json};
 uniffi::setup_scaffolding!();
 
 /// What went wrong, as the Kotlin side shows it.
-#[derive(Debug, thiserror::Error)]
-#[uniffi::export]
+///
+/// Flat (no per-variant data): the Kotlin bindings render it as a `sealed class` of exceptions
+/// carrying the engine's message, and the shell catches `Exception` either way.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum PhotoError {
     #[error("{0}")]
     Command(String),
@@ -145,7 +147,12 @@ impl PhotoSession {
         let (can_undo, can_redo, undo_label, redo_label) = match s.active() {
             Some(st) => {
                 let h = &st.history;
-                (h.can_undo(), h.can_redo(), h.undo_label().unwrap_or_default(), h.redo_label().unwrap_or_default())
+                (
+                    h.can_undo(),
+                    h.can_redo(),
+                    h.undo_label().unwrap_or_default().to_string(),
+                    h.redo_label().unwrap_or_default().to_string(),
+                )
             }
             None => (false, false, String::new(), String::new()),
         };
@@ -209,8 +216,9 @@ impl PhotoSession {
         let st = s.active().ok_or_else(|| PhotoError::Render("no document open".into()))?;
         let bounds = st.doc.bounds();
         let (w, h) = fit(bounds.width(), bounds.height(), max_width, max_height);
-        let buf = photocraft_compose::render(&st.doc, bounds);
-        Ok(frame_from_buffer(buf, w, h))
+        // The engine's own area-averaged reduction: a fit-to-screen preview must not read the
+        // whole-document composite (a 24 MP document would cost 380 MB here for a thumbnail).
+        Ok(frame_from_buffer(photocraft_compose::render_reduced(&st.doc, w, h)))
     }
 
     /// Composite one region of the active document, in document pixels. For the canvas
@@ -221,7 +229,7 @@ impl PhotoSession {
         let st = s.active().ok_or_else(|| PhotoError::Render("no document open".into()))?;
         let rect = photocraft_geom::Rect::from_xywh(x, y, width, height);
         let buf = photocraft_compose::render(&st.doc, rect);
-        Ok(frame_from_buffer(buf, width, height))
+        Ok(frame_from_buffer(buf))
     }
 
     /// A thumbnail of the active document, at most `max_side` pixels on its longer side.
@@ -264,25 +272,12 @@ fn fit(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     ((w * scale).round().max(1.0) as u32, (h * scale).round().max(1.0) as u32)
 }
 
-/// Turn a composited buffer into 8-bit RGBA, resampled to `w` × `h` when it is not already
-/// that size (the buffer is the document's own size; the shell asked for a fit).
-fn frame_from_buffer(buf: photocraft_compose::Buffer, w: u32, h: u32) -> PhotoFrame {
+/// Turn a composited buffer into 8-bit RGBA for the shell. The buffer is already the size the
+/// caller asked for: [`PhotoSession::render`] reduces at the engine's own resampler, and
+/// [`PhotoSession::render_region`] is rendered 1:1.
+fn frame_from_buffer(buf: photocraft_compose::Buffer) -> PhotoFrame {
     let img = buf.to_rgba8();
-    if img.width == w && img.height == h {
-        return PhotoFrame { width: w, height: h, rgba: img.pixels };
-    }
-    // Resample through the engine's own resampler, so the preview matches the document.
-    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
-    surface.write_interleaved(
-        photocraft_geom::Rect::from_xywh(0, 0, img.width, img.height),
-        &img.pixels,
-    );
-    let sx = w as f64 / img.width.max(1) as f64;
-    let sy = h as f64 / img.height.max(1) as f64;
-    let resized = photocraft_algo::resample::resize_surface(&surface, sx, sy, photocraft_algo::resample::Resample::Lanczos3);
-    let mut out = vec![0u8; w as usize * h as usize * 4];
-    resized.read_rgba8_into(photocraft_geom::Rect::from_xywh(0, 0, w, h), &mut out.as_chunks_mut::<4>().0);
-    PhotoFrame { width: w, height: h, rgba: out }
+    PhotoFrame { width: img.width, height: img.height, rgba: img.pixels }
 }
 
 /// The log, to Android's (tag "photocraft-android"), with a panic's message and place in it;

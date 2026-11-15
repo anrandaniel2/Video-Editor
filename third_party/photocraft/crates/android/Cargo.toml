@@ -20,10 +20,6 @@ photocraft-engine = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-geom = { workspace = true }
-photocraft-color = { workspace = true }
-photocraft-raster = { workspace = true }
-photocraft-algo = { workspace = true }
-photocraft-codecs = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
