@@ -10,7 +10,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
-import androidx.compose.ui.graphics.vector.toPath
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -101,7 +100,7 @@ object StudioIcons {
     /** The vector for [name]; an unknown name draws the reference's placeholder (its rectangle). */
     fun vector(name: String): ImageVector = cache.getOrPut(name) {
         val path = paths[name] ?: paths.getValue("rectangle")
-        val parsed = PathParser().parsePathString(path).toNodes().toPath()
+        val parsed = PathParser().parsePathString(path).toNodes()
         val builder = ImageVector.Builder(
             name = "studio-$name",
             defaultWidth = 24.dp,
@@ -111,6 +110,7 @@ object StudioIcons {
         )
         builder.addPath(
             pathData = parsed,
+            fill = null,
             stroke = SolidColor(Color.Black),
             strokeLineWidth = 1.4f,
             strokeLineCap = StrokeCap.Round,

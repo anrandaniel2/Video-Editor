@@ -1,5 +1,4 @@
 package io.github.artcraftandroid.photocraft.studio
-
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,6 +28,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-
 /**
  * The studio's panels: the reference's seven panel bodies and its secondary ones, in its own
  * layout and order.
@@ -63,7 +62,6 @@ class StudioActions(
     /** The classic PhotoCraft editor, for the panels the studio doesn't show. */
     val classicEditor: () -> Unit,
 )
-
 /** The panel for [name], with the frame the reference wraps every one in. */
 @Composable
 fun StudioPanel(name: String, a: StudioActions, onPin: () -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
@@ -86,16 +84,13 @@ fun StudioPanel(name: String, a: StudioActions, onPin: () -> Unit, onClose: () -
         }
     }
 }
-
 // ---------------------------------------------------------------------------- Layers
-
 @Composable
 private fun LayersBody(a: StudioActions) {
     val s = a.state
     val e = a.engine
     val scope = rememberCoroutineScope()
     val live = e.layers.isNotEmpty()
-
     PanelToolbar {
         IconButton("more", "Layer actions", small = true) {
             if (live) a.feedback("${e.layers.size} layers in this document.") else a.feedback("Open a picture to inspect its layers.")
@@ -140,7 +135,6 @@ private fun LayersBody(a: StudioActions) {
         IconButton("settings", "Layer options", small = true) { a.feedback("Layer locks follow the document.") }
     }
     PanelDivider()
-
     Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
         if (live) {
             e.layers.forEach { row -> LiveLayerRow(row, a) }
@@ -156,7 +150,6 @@ private fun LayersBody(a: StudioActions) {
     }
     PanelFooter(if (live) "${e.layers.size} layers" else "${MockLayers.size} layers", if (live) "PhotoCraft" else "Reference")
 }
-
 @Composable
 private fun LiveLayerRow(row: StudioLayer, a: StudioActions) {
     val s = a.state
@@ -225,7 +218,6 @@ private fun LiveLayerRow(row: StudioLayer, a: StudioActions) {
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x88171815)))
 }
-
 @Composable
 private fun MockLayerRow(row: MockLayer, a: StudioActions) {
     val s = a.state
@@ -285,7 +277,6 @@ private fun MockLayerRow(row: MockLayer, a: StudioActions) {
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x88171815)))
 }
-
 /** The reference's `.layer-thumb` variants: each row's own little picture. */
 @Composable
 private fun Thumb(row: MockLayer, selected: Boolean) {
@@ -335,16 +326,13 @@ private fun Thumb(row: MockLayer, selected: Boolean) {
         }
     }
 }
-
 // ---------------------------------------------------------------------------- Curves
-
 @Composable
 private fun CurvesBody(a: StudioActions) {
     val s = a.state
     val e = a.engine
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf(1) }
-
     // `.curves-options`: two selects over two dials.
     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 5.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
         Column(Modifier.width(77.dp)) {
@@ -390,7 +378,6 @@ private fun CurvesBody(a: StudioActions) {
     CurveEditor(s, selected, onSelect = { selected = it })
     PanelNote("The curve is applied to the document as an adjustment layer.")
 }
-
 /** The reference's `.dial-control`: a 42 px ring with its reading. */
 @Composable
 private fun Dial(value: String, caption: String, editable: Boolean = false, onChange: ((String) -> Unit)? = null) {
@@ -418,7 +405,6 @@ private fun Dial(value: String, caption: String, editable: Boolean = false, onCh
         Text(caption, fontSize = 8.sp, color = Sc.Title, maxLines = 1)
     }
 }
-
 @Composable
 private fun BasicNumber(value: String, onChange: (String) -> Unit, width: androidx.compose.ui.unit.Dp) {
     androidx.compose.foundation.text.BasicTextField(
@@ -434,7 +420,6 @@ private fun BasicNumber(value: String, onChange: (String) -> Unit, width: androi
         modifier = Modifier.width(width),
     )
 }
-
 /** The reference's `.curve-editor`: graph, side fields, hint. */
 @Composable
 private fun CurveEditor(s: StudioState, selected: Int, onSelect: (Int) -> Unit) {
@@ -505,7 +490,6 @@ private fun CurveEditor(s: StudioState, selected: Int, onSelect: (Int) -> Unit) 
         )
     }
 }
-
 /** The 199 px curve graph: the reference's grid, its three histograms and its draggable points. */
 @Composable
 private fun CurveGraph(
@@ -575,7 +559,6 @@ private fun CurveGraph(
         }
     }
 }
-
 /** The reference's histogram path, at the canvas' size. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.histogram(
     w: Float,
@@ -599,9 +582,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.histogram(
     drawPath(path, fill)
     drawPath(path, stroke, style = Stroke(width = 0.7f))
 }
-
 // ---------------------------------------------------------------------------- Pages
-
 @Composable
 private fun PagesBody(a: StudioActions) {
     val s = a.state
@@ -658,9 +639,7 @@ private fun PagesBody(a: StudioActions) {
     DisclosureRow("Sections", s.isOn("sections")) { s.toggle("sections") }
     if (s.isOn("sections")) ExpandedSection("Section 1 — Showcase", "Pages 2–9")
 }
-
 // ---------------------------------------------------------------------------- Brushes
-
 @Composable
 private fun BrushesBody(a: StudioActions) {
     val s = a.state
@@ -669,7 +648,6 @@ private fun BrushesBody(a: StudioActions) {
     // The reference's filter: the search text, and the Inking category's Ink-only rule.
     val brushes = (if (e.brushPresets.isEmpty()) StudioBrushes else e.brushPresets)
         .filter { it.lowercase().contains(s.search.lowercase()) && (s.category != "Inking" || it.contains("Ink")) }
-
     // `.brush-search`
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 8.dp).height(27.dp)
@@ -700,7 +678,6 @@ private fun BrushesBody(a: StudioActions) {
         options = listOf("Sketching", "Pencils", "Inking", "All Brushes"),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp).height(25.dp),
     ) { s.category = it }
-
     Column(Modifier.fillMaxWidth().heightIn(max = 355.dp).verticalScroll(rememberScrollState())) {
         brushes.forEachIndexed { i, name ->
             val on = s.brush == name
@@ -735,7 +712,6 @@ private fun BrushesBody(a: StudioActions) {
         }
         }
     }
-
     // `.brush-controls`: width and opacity, pill and slider.
     Column(
         Modifier.fillMaxWidth().background(Color.Transparent)
@@ -766,7 +742,6 @@ private fun BrushesBody(a: StudioActions) {
         }
     }
 }
-
 /** `.brush-preset svg`: the stroke sample, its width varying down the list. */
 @Composable
 private fun BrushStrokeSample(index: Int, modifier: Modifier = Modifier) {
@@ -794,9 +769,7 @@ private fun BrushStrokeSample(index: Int, modifier: Modifier = Modifier) {
         }
     }
 }
-
 // ---------------------------------------------------------------------------- Colour, Text, secondary
-
 @Composable
 private fun SecondaryBody(name: String, a: StudioActions) {
     val s = a.state
@@ -818,7 +791,6 @@ private fun SecondaryBody(name: String, a: StudioActions) {
         }
     }
 }
-
 /** `.colour-content`: the wheel, the value row and the twelve swatches. */
 @Composable
 private fun ColourBody(a: StudioActions) {
@@ -875,7 +847,6 @@ private fun ColourBody(a: StudioActions) {
         )
     }
 }
-
 /** `.text-controls`: font, style, size, the three styles, the colour and the alignment. */
 @Composable
 private fun TextControls(a: StudioActions, compact: Boolean) {
@@ -910,7 +881,6 @@ private fun TextControls(a: StudioActions, compact: Boolean) {
         }
     }
 }
-
 @Composable
 private fun StrokeBody(a: StudioActions) {
     val s = a.state
@@ -937,7 +907,6 @@ private fun StrokeBody(a: StudioActions) {
         Text("Stroke width goes to the shape's stroke.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
     }
 }
-
 @Composable
 private fun EffectsBody(a: StudioActions) {
     val s = a.state
@@ -948,7 +917,6 @@ private fun EffectsBody(a: StudioActions) {
         Text("Layer effects are applied by the document's layer style.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
     }
 }
-
 @Composable
 private fun TransformBody(a: StudioActions) {
     val s = a.state
@@ -972,7 +940,6 @@ private fun TransformBody(a: StudioActions) {
         Text("Transforms apply to the active layer.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
     }
 }
-
 @Composable
 private fun NavigatorBody(a: StudioActions) {
     val s = a.state
@@ -987,7 +954,6 @@ private fun NavigatorBody(a: StudioActions) {
         StandardButton("Fit document") { s.fit() }
     }
 }
-
 @Composable
 private fun HistoryBody(a: StudioActions) {
     val e = a.engine
@@ -1016,7 +982,6 @@ private fun HistoryBody(a: StudioActions) {
         StandardButton("Redo") { scope.engine { e.redo() } }
     }
 }
-
 @Composable
 private fun ExportBody(a: StudioActions) {
     val s = a.state
@@ -1034,7 +999,6 @@ private fun ExportBody(a: StudioActions) {
         StandardButton("Classic editor…") { a.classicEditor() }
     }
 }
-
 /** Runs an engine call off the frame, reporting a refusal to the interface. */
 internal fun kotlinx.coroutines.CoroutineScope.engine(block: suspend () -> Unit) {
     launch(kotlinx.coroutines.Dispatchers.Main.immediate) {
@@ -1047,7 +1011,6 @@ internal fun kotlinx.coroutines.CoroutineScope.engine(block: suspend () -> Unit)
         }
     }
 }
-
 /** Where engine failures go: the shell shows them as its toast. */
 object StudioErrors {
     var sink: ((String) -> Unit)? = null
@@ -1055,6 +1018,3 @@ object StudioErrors {
         sink?.invoke(message)
     }
 }
-
-/** A small alpha modifier, so the hidden rows dim like the reference's. */
-private fun Modifier.alpha(value: Float): Modifier = this.then(androidx.compose.ui.draw.alpha(value))

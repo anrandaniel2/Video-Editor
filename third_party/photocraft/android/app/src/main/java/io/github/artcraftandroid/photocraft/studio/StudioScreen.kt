@@ -320,7 +320,6 @@ private fun ToolRail(
     onDocumentMenu: () -> Unit,
     onMore: () -> Unit,
     onDeselect: () -> Unit,
-    onResetTool: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val spec = Workspaces.of(state.workspace)
