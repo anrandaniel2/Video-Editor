@@ -11,12 +11,18 @@ path = sys.argv[1]
 lines = int(sys.argv[2]) if len(sys.argv) > 2 else 60
 log = open(path, errors="replace").read().splitlines()
 
-# The failing steps: Cargo prints `error[E…]: …` / `error: …` / `error: could not compile …`.
-fails = [i for i, line in enumerate(log) if line.startswith("error")]
+# The failing steps: Cargo prints `error[E…]: …` / `error: …` / `error: could not compile …`;
+# Kotlin and Java print `e: file://…` and `fatal error:` / `note:`.
+fails = [i for i, line in enumerate(log) if line.startswith(("error", "e: ", "fatal error:"))]
 if fails:
     first = max(0, fails[0] - 12)
     print("=" * 70)
     print("\n".join(log[first : fails[-1] + 3]))
+    # Every failing line as its own annotation: a log whose head the tail drops (a long Kotlin
+    # error list) still reports all of them.
+    for i in fails:
+        body = log[i][:1200].replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+        print(f"::error title=failure {fails.index(i) + 1}/{len(fails)}::{body}")
 
 # The tail, in annotation-sized pieces (an annotation's message is capped).
 chunks = [log[i : i + 40] for i in range(max(0, len(log) - 160), len(log), 40)]

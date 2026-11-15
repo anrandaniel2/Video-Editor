@@ -108,8 +108,8 @@ jobs:
           cat /tmp/android-build.log
           if [ "$rc" -ne 0 ]; then
             tail -120 /tmp/android-build.log >> "$GITHUB_STEP_SUMMARY"
-            msg=$(tail -c 3500 /tmp/android-build.log | sed -z 's/%/%25/g; s/\n/%0A/g')
-            echo "::error title=Android build failed::$msg"
+            # Every compiler error as its own annotation, so a long list is not cut to its tail.
+            python3 "$GITHUB_WORKSPACE/.github/scripts/build-log-annotations.py" /tmp/android-build.log 120
             exit "$rc"
           fi
           mkdir -p "$GITHUB_WORKSPACE/dist"

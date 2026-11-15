@@ -132,9 +132,10 @@ class PhotoEditorViewModel : ViewModel() {
         private set
     var brushOpacity by mutableStateOf(1f)
         private set
-    var foreground by mutableStateOf(0xFF000000)
+    // ARGB, as Android's Color: the literals are explicitly Int (0xFF000000 alone is a Long).
+    var foreground by mutableStateOf(0xFF000000.toInt())
         private set
-    var background by mutableStateOf(0xFFFFFFFF)
+    var background by mutableStateOf(0xFFFFFFFF.toInt())
 
     private var renderJob: Job? = null
     /** The job that opens or creates the first document: [awaitDocument] joins it. */

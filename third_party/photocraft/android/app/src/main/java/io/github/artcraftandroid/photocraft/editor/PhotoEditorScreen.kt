@@ -465,7 +465,7 @@ private fun SliderRow(
 }
 
 @Composable
-private fun ActionButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ActionButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Box(
         modifier.clip(RoundedCornerShape(8.dp)).background(Pc.PillButton).clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
@@ -782,7 +782,11 @@ private fun ColourPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 // A row of plain colours, then the two swatches the tools use.
-                listOf(0xFF000000, 0xFFFFFFFF, 0xFFE53935, 0xFFFB8C00, 0xFFFDD835, 0xFF43A047, 0xFF1E88E5, 0xFF8E24AA)
+                // Ints (0xFF000000 alone would be a Long, which Color and setForeground reject).
+                listOf(
+                    0xFF000000.toInt(), 0xFFFFFFFF.toInt(), 0xFFE53935.toInt(), 0xFFFB8C00.toInt(),
+                    0xFFFDD835.toInt(), 0xFF43A047.toInt(), 0xFF1E88E5.toInt(), 0xFF8E24AA.toInt(),
+                )
                     .forEach { c ->
                         Box(
                             Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(Color(c))
