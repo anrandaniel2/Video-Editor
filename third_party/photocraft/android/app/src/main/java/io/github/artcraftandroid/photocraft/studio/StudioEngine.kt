@@ -40,7 +40,8 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
 
     val hasDocument: Boolean get() = status?.active != null
 
-    val activeLayer: Long? get() = status?.activeLayer
+    /** UniFFI lifts Rust's `u64` as `ULong`; the engine's ids are signed here. */
+    val activeLayer: Long? get() = status?.activeLayer?.toLong()
 
     val width: Int get() = status?.active?.width?.toInt()?.coerceAtLeast(1) ?: 1
     val height: Int get() = status?.active?.height?.toInt()?.coerceAtLeast(1) ?: 1
