@@ -425,7 +425,7 @@ internal fun ToolOptionsPanel(tool: PhotoTool, values: PhotoToolValues, onAction
         if (kind == PaintKind.Selection) {
             Text(
                 "Drag to select. Paint after this stays inside the outline; tap to clear it.",
-                color = Pc.TextDim,
+                color = PhotoUi.PillInkSoft,
                 style = FcType.Caption,
                 modifier = Modifier.fillMaxWidth(),
             )
