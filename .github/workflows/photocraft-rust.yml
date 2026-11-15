@@ -1,0 +1,32 @@
+# Temporary diagnostic: build :photocraft's Rust half on its own, so the release build's failures
+# are readable (the Release workflow's APK log window drops them).
+name: PhotoCraft Rust
+
+on:
+  push:
+    branches:
+      - 'arena/aa65d60d-video-editor'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - name: Install cargo-ndk and the Android NDK
+        run: |
+          cargo install cargo-ndk --version 4.1.2 --locked
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
+
+      - name: Build the engine library
+        working-directory: third_party/photocraft
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          cargo ndk -t arm64-v8a --platform 28 -o /tmp/jni build --release -p photocraft-android --lib 2>&1 | tail -80
