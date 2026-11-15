@@ -31,6 +31,9 @@ version = "0.23.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
+# The editor's crates are published upstream and inherit this; without it a member that says
+# `publish.workspace = true` (crates/android, android/bindgen) will not parse.
+publish = true
 
 [workspace.dependencies]
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "e2dc681a3", features = ["serde"] }
