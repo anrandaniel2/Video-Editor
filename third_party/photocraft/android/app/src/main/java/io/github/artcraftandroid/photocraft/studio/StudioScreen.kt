@@ -186,22 +186,36 @@ fun StudioScreen(
                     onHelp = { dialog = StudioDialog.About },
                     modifier = Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp),
                 )
-                // The floating panels: the first at the top right, the reference's `.extra-panel`
-                // 81 px further left, in the order they were opened.
-                Row(
-                    Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 66.dp),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp),
-                ) {
-                    state.panels.forEachIndexed { index, name ->
-                        if (index > 0) Spacer(Modifier.width(8.dp))
-                        StudioPanel(
-                            name = name,
-                            a = actions,
-                            onPin = { state.pin(name) },
-                            onClose = { state.togglePanel(name) },
-                            modifier = if (index == 0) Modifier else Modifier.offset(x = (-81).dp),
+                // The floating panels, each at the place the reference gives it: the stack's own
+                // at `.floating-panel` (right 66, top 12), Curves at right 68 / top 100, Pages at
+                // the left / top 72, Brushes at the left / bottom 24 (Sketch 109), and the ones
+                // opened on top at `.extra-panel` (right 319 / top 75, or right 66 / top 75 when
+                // they belong to the document's own panel).
+                val spec = Workspaces.of(workspace)
+                state.panels.forEachIndexed { index, name ->
+                    val extra = index > 0
+                    val own = name == spec.panel
+                    val place = when (name) {
+                        "Curves" -> Modifier.align(Alignment.TopEnd).padding(top = 100.dp, end = 68.dp)
+                        "Pages" -> Modifier.align(Alignment.TopStart).padding(start = 66.dp, top = 72.dp)
+                        "Brushes" -> Modifier.align(Alignment.BottomStart).padding(
+                            start = if (workspace == WorkspaceId.Sketch) 109.dp else 68.dp,
+                            bottom = 24.dp,
                         )
+                        else -> when {
+                            own -> Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 66.dp)
+                            extra && (workspace == WorkspaceId.Layout || workspace == WorkspaceId.Sketch) ->
+                                Modifier.align(Alignment.TopEnd).padding(top = 75.dp, end = 66.dp)
+                            else -> Modifier.align(Alignment.TopEnd).padding(top = 75.dp, end = 319.dp)
+                        }
                     }
+                    StudioPanel(
+                        name = name,
+                        a = actions,
+                        onPin = { state.pin(name) },
+                        onClose = { state.togglePanel(name) },
+                        modifier = place,
+                    )
                 }
                 if (workspace == WorkspaceId.Vector) {
                     NodeToolbar(state, onStroke = { state.togglePanel("Stroke") }, modifier = Modifier.align(Alignment.BottomStart))
