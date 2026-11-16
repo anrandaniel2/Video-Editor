@@ -77,8 +77,16 @@ fun TopBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (vm.hostClose != null) {
+                // The host's way out. It says what it does for the document being edited, and the
+                // glyph is 34 across inside the bar's own 58 by 38 box rather than a 28 dp pebble
+                // at the screen's corner.
                 Box(Modifier.size(Pc.GalleryWidth, Pc.BarButtonHeight).tap { vm.closeArtwork() }, contentAlignment = Alignment.CenterStart) {
-                    Icon(PcIcons.Cross, contentDescription = "Save drawing and return to Projects", tint = Pc.BarText, modifier = Modifier.size(28.dp))
+                    Icon(
+                        PcIcons.Cross,
+                        contentDescription = if (vm.hostPhoto) "Save the photo" else "Save the drawing",
+                        tint = Pc.BarText,
+                        modifier = Modifier.size(34.dp),
+                    )
                 }
             } else {
                 Box(Modifier.size(Pc.GalleryWidth, Pc.BarButtonHeight).tap { vm.closeArtwork() }, contentAlignment = Alignment.CenterStart) {

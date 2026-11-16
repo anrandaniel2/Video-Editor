@@ -2444,6 +2444,13 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
 
     var hostClose: (() -> Unit)? = null
 
+    /**
+     * The host opened a picture rather than a blank page. The canvas is the same either way; this
+     * only decides what the interface calls the document ("the photo" or "the drawing") and that
+     * the picture stays an ordinary layer instead of a locked reference.
+     */
+    var hostPhoto by androidx.compose.runtime.mutableStateOf(false)
+
     fun closeArtwork() {
         hostClose?.let { it(); return }
         closeArtworkToGallery()

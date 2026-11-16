@@ -74,7 +74,10 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit, photo
     ProcraftHostServices(vm)
     val doubleTaps = remember { io.github.artcraftandroid.procraft.canvas.PenDoubleTaps() }
     val standalone = remember { if (photo) ed.standalonePhoto else ed.standaloneDrawing }
-    SideEffect { vm.hostTransient = !standalone }
+    SideEffect {
+        vm.hostTransient = !standalone
+        vm.hostPhoto = photo
+    }
     val blank = remember { ed.blankDrawing }
     // What the canvas is holding, for the labels: a photo editor that says "drawing" everywhere is
     // the sort of wrong that never gets filed as a bug but is always noticed.
@@ -259,7 +262,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit, photo
                     AppRoot(vm)
                 }
                 else Column(Modifier.fillMaxSize().padding(24.dp)) {
-                    Text(error ?: vm.message ?: "Opening drawing…", color = Color.White)
+                    Text(error ?: vm.message ?: "Opening the $noun…", color = Color.White)
                     TextButton(onClick = { if (standalone) ed.closeEditor() else close() }) { Text("Close") }
                 }
                 if (exportMenu) {
@@ -295,7 +298,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit, photo
                     }
                 }
                 error?.let { message ->
-                    AlertDialog(modifier = Modifier.then(rememberFrost(35.dp)), containerColor = Pc.PopoverFrost, shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp), onDismissRequest = { error = null }, title = { Text("Drawing") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } })
+                    AlertDialog(modifier = Modifier.then(rememberFrost(35.dp)), containerColor = Pc.PopoverFrost, shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp), onDismissRequest = { error = null }, title = { Text(if (photo) "Photo" else "Drawing") }, text = { Text(message) }, confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } })
                 }
             }
         }
