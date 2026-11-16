@@ -25,6 +25,7 @@ on:
       - 'arena/694df4ef-video-editor'
       # each Arena session's branch: a push here builds a dry-run APK
       - 'arena/aa65d60d-video-editor'
+      - 'arena/c6cc15fc-video-editor'
       # a release tag drafts a release; dryrun-<version> drafts one signed with the public key
     tags: ['v*', 'dryrun-*']
   workflow_dispatch:
@@ -96,13 +97,34 @@ jobs:
           workspaces: |
             . -> target
             third_party/procraft -> target
-            third_party/photocraft -> target
 
-      # cargo-ndk builds both Rust halves of the APK: FilmCraft's own and :photocraft's.
-      - name: Install cargo-ndk and the Android NDK
+      # cargo-ndk builds both Rust halves of the APK: FilmCraft's own and :procraft's. Both are
+      # cached (the tool with its own key, the NDK by the sdkmanager's own cache), so a rebuild of
+      # the same branch does not compile the tool from source or download 700 MB again.
+      - name: The Android NDK
         run: |
-          cargo install cargo-ndk --version 4.1.2 --locked
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
+          if [ -d "$ANDROID_HOME/ndk/29.0.14206865" ]; then
+            echo "::notice::The NDK 29.0.14206865 is already installed."
+          else
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" >/dev/null
+          fi
+
+      - name: Install cargo-ndk
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-ndk@4.1.2
+
+      # Gradle's own caches (configuration, Kotlin incremental compilation, the build cache). The
+      # Rust half dominates a cold run, but a warm one still reconfigures both projects and
+      # recompiles Kotlin from scratch without this.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/libs.versions.toml', '**/gradle-wrapper.properties', '**/gradle.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       # The key: the public test key when asked for and when the release key is unavailable, the
       # release key otherwise. A version tag with no release key is an error: its APK could not
@@ -137,7 +159,11 @@ jobs:
           fi
           echo "FILMCRAFT_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
 
-      # The APK is built unsigned, exactly as F-Droid builds it, and the next step signs it.
+      # The APK is built unsigned, exactly as F-Droid builds it, and a later step signs it.
+      #
+      # The Gradle daemon stays on (`--no-daemon` would make the second run, below, start from
+      # cold: a JVM, the Kotlin compiler and the whole configuration again). CI's runner is
+      # discarded after the job, so there is nothing to leave behind.
       - name: Build
         working-directory: apps/filmcraft-android/android
         env:
@@ -145,7 +171,7 @@ jobs:
         run: |
           set +e
           ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
-            -Pfilmcraft.unsigned=true --no-daemon > /tmp/android-build.log 2>&1
+            -Pfilmcraft.unsigned=true --build-cache > /tmp/android-build.log 2>&1
           rc=$?
           cat /tmp/android-build.log
           if [ "$rc" -ne 0 ]; then
@@ -156,13 +182,6 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
-
-      # The standalone PhotoCraft app (third_party/photocraft/android/standalone) is a Gradle
-      # project of its own over the same library module: build it here, so a change that only
-      # breaks the standalone app fails this run instead of going unnoticed.
-      - name: PhotoCraft standalone app
-        working-directory: third_party/photocraft/android
-        run: ./gradlew :standalone:assembleRelease -Pphotocraft.abis=arm64-v8a --no-daemon
 
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),

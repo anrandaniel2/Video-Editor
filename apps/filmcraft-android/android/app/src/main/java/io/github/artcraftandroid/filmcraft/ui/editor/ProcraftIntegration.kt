@@ -58,19 +58,37 @@ internal fun ProcraftColorPicker(color: Int, change: (Int) -> Unit) {
     }
 }
 
+/**
+ * The canvas: the drawing app's own editor, over a document the host hands it.
+ *
+ * Draw and Photo are the same surface on purpose. A picture is a document with the frame already
+ * painted on it, so opening a photo here gives it every brush, layer and adjustment the drawing
+ * canvas has, rather than a second editor with its own idea of what a brush is. [photo] only
+ * changes where the result goes: back to the timeline (or the photo library) as a picture.
+ */
 @Composable
-internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
+internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit, photo: Boolean = false) {
     val context = LocalContext.current
     val vm = rememberProcraftModel()
     val scope = rememberCoroutineScope()
     ProcraftHostServices(vm)
     val doubleTaps = remember { io.github.artcraftandroid.procraft.canvas.PenDoubleTaps() }
-    val standalone = remember { ed.standaloneDrawing }
+    val standalone = remember { if (photo) ed.standalonePhoto else ed.standaloneDrawing }
     SideEffect { vm.hostTransient = !standalone }
     val blank = remember { ed.blankDrawing }
-    val frame = remember {
+    // What the canvas is holding, for the labels: a photo editor that says "drawing" everywhere is
+    // the sort of wrong that never gets filed as a bug but is always noticed.
+    val noun = if (photo) "photo" else "drawing"
+    // The picture the canvas opens on, if any. A photo the host stashed (a frame under the
+    // playhead, or a file picked from Home) wins over the live frame: it is the thing being edited.
+    // Its import is read below, in the opening coroutine: it copies and decodes the file, which is
+    // no work for the thread composing this dialog.
+    val stashedUri = remember {
         ed.stop()
-        if (blank) null else ed.picture?.asAndroidBitmap()?.let { source ->
+        if (blank) null else ed.drawingPicture
+    }
+    val frame = remember {
+        if (stashedUri != null || blank) null else ed.picture?.asAndroidBitmap()?.let { source ->
             val w = ed.timeline?.width?.toInt() ?: source.width
             val h = ed.timeline?.height?.toInt() ?: source.height
             Bitmap.createScaledBitmap(source, w, h, true).let { scaled ->
@@ -87,17 +105,26 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
     var completed by remember { mutableStateOf(false) }
     LaunchedEffect(vm) {
         var input: File? = null
+        // The host's import file, when the document is a photo. It outlives this effect: the
+        // engine reads it while the document opens, and it is the host's file to clean up.
+        var imported: File? = null
         try {
             if (ed.drawingArtwork != null) {
                 vm.openArtwork(requireNotNull(ed.drawingArtwork))
                 snapshotFlow { vm.opening }.first { !it }
-            } else if (ed.drawingPicture != null) {
-                input = withContext(Dispatchers.IO) { io.github.artcraftandroid.filmcraft.engine.MediaImports.preparePicture(context, requireNotNull(ed.drawingPicture)) }
-                vm.newFromPicture(Uri.fromFile(requireNotNull(input)))?.join()
+            } else if (stashedUri != null) {
+                val picture = stashedUri
+                val file = withContext(Dispatchers.IO) {
+                    io.github.artcraftandroid.filmcraft.engine.MediaImports.preparePicture(context, picture)
+                }
+                imported = file
+                vm.newFromPicture(Uri.fromFile(file))?.join()
             } else if (ed.drawingPreset != null) {
                 vm.newPresetArtwork(requireNotNull(ed.drawingPreset))
                 snapshotFlow { vm.opening }.first { !it }
             } else if (frame == null) {
+                // No picture: the canvas is the timeline's own size, so the result drops onto it
+                // without a resize.
                 vm.newArtwork(ed.timeline?.width?.toInt() ?: 1080, ed.timeline?.height?.toInt() ?: 1920)?.join()
             } else {
                 input = File(context.cacheDir, "procraft-input-${java.util.UUID.randomUUID()}.png")
@@ -108,9 +135,15 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 vm.newFromPicture(Uri.fromFile(file))?.join()
             }
             // Await the real opening job, rather than polling a non-observable session field.
-            check(vm.session != null) { vm.message ?: "The drawing couldn't be opened." }
-            if (!standalone) vm.prepareHostOverlay(frame != null)
-            if (standalone) vm.artworkFolder()?.let { dir ->
+            check(vm.session != null) { vm.message ?: "The ${noun} couldn't be opened." }
+            // A drawing opened over a video frame keeps that frame as a locked reference layer,
+            // because the frame belongs to the timeline and is not the drawing's to change. A photo
+            // is the opposite: the picture *is* the document, so it stays the layer being painted.
+            if (!standalone && !photo) vm.prepareHostOverlay(frame != null)
+            // A standalone drawing is kept in the drawing gallery, so the host remembers which
+            // artwork the editor has open. A photo is not a drawing: it goes to the photo library
+            // and never appears in the gallery's list.
+            if (standalone && !photo) vm.artworkFolder()?.let { dir ->
                 val (w, h) = vm.canvasSize()
                 ed.drawingArtwork = io.github.artcraftandroid.procraft.gallery.Artwork(dir, vm.artworkTitle(), w, h, System.currentTimeMillis())
             }
@@ -118,20 +151,37 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            error = e.message ?: "Could not open drawing."
+            error = e.message ?: "Could not open the ${noun}."
             initialised = true
         } finally {
-            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { input?.delete() }
+            // Only the copy this effect made from a live frame is ours to delete. A photo's import
+            // file belongs to the host's importer, and the canvas may still be reading it.
+            if (input != null && input != imported) {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { input?.delete() }
+            }
         }
     }
-    DisposableEffect(Unit) { onDispose { frame?.recycle(); ed.blankDrawing = false; CanvasSpace.set(false) } }
+    DisposableEffect(Unit) {
+        onDispose {
+            frame?.recycle()
+            CanvasSpace.set(false)
+            // The host's picture and the "blank page" flag describe *this* opening. Left behind,
+            // they would open the next one — a later blank drawing would come up holding the last
+            // photo, and a later photo would come up blank.
+            ed.blankDrawing = false
+            ed.drawingPicture = null
+            ed.drawingPreset = null
+        }
+    }
     val performClose: () -> Unit = {
         if (!saving && !completed && (vm.session != null || initialised)) {
             saving = true
             scope.launch {
                 try {
                     vm.saveForHost()
-                    if (vm.session != null && standalone && vm.animation?.pages == false && vm.animationFrameCount() > 1) {
+                    // An animation is a drawing's export. A photo is one picture: its frames are
+                    // not a sequence to hand the timeline.
+                    if (vm.session != null && standalone && !photo && vm.animation?.pages == false && vm.animationFrameCount() > 1) {
                         // Lossless animated bridge, not a pre-encoded video: the editor's actual
                         // renderer/encoder still owns output size, codec, quality and frame rate.
                         val (canvasWidth, canvasHeight) = vm.canvasSize()
@@ -156,10 +206,17 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                             if (standalone) {
                                 try {
                                     withContext(Dispatchers.IO) {
-                                        val link = vm.artworkFolder()?.let { File(it, ".filmcraft-photo") }
-                                        val previous = link?.takeIf { it.isFile }?.readText()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
-                                        val uri = saveDrawingPhoto(context, image, previous ?: ed.drawingPhotoDestination, exportFormat, exportQuality)
-                                        link?.writeText(uri.toString())
+                                        if (photo) {
+                                            // A photo goes to the photo library, in the format the
+                                            // close sheet offered, and saves over itself next time.
+                                            val uri = saveDrawingPhoto(context, image, ed.drawingPhotoDestination, exportFormat, exportQuality)
+                                            ed.drawingPhotoDestination = uri
+                                        } else {
+                                            val link = vm.artworkFolder()?.let { File(it, ".filmcraft-photo") }
+                                            val previous = link?.takeIf { it.isFile }?.readText()?.takeIf { it.isNotBlank() }?.let(Uri::parse)
+                                            val uri = saveDrawingPhoto(context, image, previous ?: ed.drawingPhotoDestination, exportFormat, exportQuality)
+                                            link?.writeText(uri.toString())
+                                        }
                                     }
                                 } finally { image.recycle() }
 
@@ -175,7 +232,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    error = e.message ?: "Could not save drawing."
+                    error = e.message ?: "Could not save the ${noun}."
                 } finally {
                     saving = false
                 }
@@ -207,7 +264,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                 }
                 if (exportMenu) {
                     AlertDialog(onDismissRequest = { exportMenu = false },
-                        title = { Text("Export drawing") },
+                        title = { Text(if (photo) "Save photo" else "Export drawing") },
                         modifier = Modifier.then(io.github.artcraftandroid.procraft.ui.rememberFrost(35.dp)),
                         containerColor = io.github.artcraftandroid.procraft.ui.Pc.PopoverFrost,
                         shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp),
@@ -227,14 +284,14 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit) {
                             }
                         },
                         confirmButton = { TextButton(onClick = { exportMenu = false; performClose() }) { Text("Export and close") } },
-                        dismissButton = { TextButton(onClick = { exportMenu = false }) { Text("Keep drawing") } },
+                        dismissButton = { TextButton(onClick = { exportMenu = false }) { Text(if (photo) "Keep editing" else "Keep drawing") } },
                     )
                 }
                 if (saving) {
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .45f))) {
                         // Intercept input while the export snapshot is being saved.
                         BackHandler { }
-                        AlertDialog(modifier = Modifier.then(rememberFrost(35.dp)), containerColor = Pc.PopoverFrost, shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp), onDismissRequest = {}, confirmButton = {}, text = { Text("Saving drawing…") })
+                        AlertDialog(modifier = Modifier.then(rememberFrost(35.dp)), containerColor = Pc.PopoverFrost, shape = androidx.compose.foundation.shape.RoundedCornerShape(35.dp), onDismissRequest = {}, confirmButton = {}, text = { Text(if (photo) "Saving the photo…" else "Saving drawing…") })
                     }
                 }
                 error?.let { message ->

@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Files of PhotoCraft's that another app may reach through its FileProvider: an export being
-     shared from the cache -->
-<paths>
-    <cache-path name="share" path="" />
-</paths>

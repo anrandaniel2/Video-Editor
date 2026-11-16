@@ -247,7 +247,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         return size[0].toInt() to size[1].toInt()
     }
 
-    /** Open a picture in the photo editor (PhotoCraft), not in a video timeline. */
+    /** Open a picture in the photo editor, not in a video timeline. */
     fun editPicture(fromFiles: Boolean = false) {
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
         pick(if (fromFiles) PickKind.PictureFile else PickKind.Picture) { uris ->
@@ -266,7 +266,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
         }
     }
 
-    /** Import a photo into the layered drawing editor, not into a video timeline. */
+    /**
+     * Import a photo into the layered editor, not into a video timeline. It is the same canvas as
+     * [editPicture]; only the save destination differs, because this one keeps the picture in the
+     * photo library rather than saving over the file it came from.
+     */
     fun importPicture(fromFiles: Boolean = false) {
         val e = engine ?: return tell(engineProblem ?: "The editor is still starting.")
         pick(if (fromFiles) PickKind.PictureFile else PickKind.Picture) { uris ->
@@ -276,10 +280,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
                 val temporary = withContext(Dispatchers.IO) { projects.createTemporary("Picture", w, h) }
                 open(e, temporary, fresh = true)
                 editor?.let { ed ->
-                    ed.blankDrawing = true
-                    ed.standaloneDrawing = true
+                    // A picture, not a blank page: `blankDrawing` would open an empty canvas and
+                    // throw the picture away.
+                    ed.standalonePhoto = true
                     ed.drawingPicture = uri
-                    ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
+                    ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Photo
                 }
             }
         }
@@ -294,13 +299,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app), EditorHost {
                 open(e, temporary, fresh = true)
                 editor?.let { ed ->
                     ed.blankDrawing = true
-                    ed.standaloneDrawing = true
-                    if (p.kind == "drawing") ed.drawingArtwork = io.github.artcraftandroid.procraft.gallery.Artwork(p.dir, p.name, p.width, p.height, p.opened)
-                    else {
+                    if (p.kind == "drawing") {
+                        ed.standaloneDrawing = true
+                        ed.drawingArtwork = io.github.artcraftandroid.procraft.gallery.Artwork(p.dir, p.name, p.width, p.height, p.opened)
+                        ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
+                    } else {
+                        // A picture in the gallery is a photo, not a drawing: it opens in the same
+                        // canvas, but saves back to the photo library rather than the gallery.
+                        ed.standalonePhoto = true
                         ed.drawingPicture = Uri.parse(p.sourceUri)
                         ed.drawingPhotoDestination = ed.drawingPicture
+                        ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Photo
                     }
-                    ed.panel = io.github.artcraftandroid.filmcraft.ui.editor.Panel.Drawing
                 }
             }
         }

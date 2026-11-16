@@ -643,7 +643,7 @@ class EditorController(
     var blankDrawing = false
     /** Home-created drawing, not an editing panel opened inside an existing project. */
     var standaloneDrawing = false
-    /** The photo editor (PhotoCraft) rather than the drawing canvas (ProCraft). */
+    /** A picture to edit, rather than a blank drawing page. */
     var photoEditor = false
     /** Home-created photo: exporting saves it to the photo library and leaves the editor. */
     var standalonePhoto = false
