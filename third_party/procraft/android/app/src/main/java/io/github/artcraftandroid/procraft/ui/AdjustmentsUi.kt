@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -312,7 +313,7 @@ fun HsbPanel(vm: CanvasViewModel, modifier: Modifier = Modifier) {
         ) { rows(Modifier.weight(1f)) }
     } else {
         Column(
-            modifier.offset(y = (-25).dp).size(532.dp, 220.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(horizontal = 26.dp, vertical = 16.dp),
+            modifier.offset(y = (-25).dp).widthIn(max = 532.dp).fillMaxWidth().height(220.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(horizontal = 26.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) { rows(Modifier.fillMaxWidth()) }
     }
@@ -394,7 +395,7 @@ fun ColorBalancePanel(vm: CanvasViewModel, modifier: Modifier = Modifier) {
         return
     }
     Column(
-        modifier.offset(y = (-25).dp).size(532.dp, 272.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(horizontal = 26.dp, vertical = 16.dp),
+        modifier.offset(y = (-25).dp).widthIn(max = 532.dp).fillMaxWidth().height(272.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(horizontal = 26.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         BALANCE_PAIRS.forEachIndexed { k, (left, right, colours) ->
@@ -456,7 +457,7 @@ private fun BalanceRow(left: String, right: String, value: Float, track: Brush, 
 @Composable
 fun CurvesPanel(vm: CanvasViewModel, modifier: Modifier = Modifier) {
     Row(
-        modifier.offset(y = (-25).dp).size(584.dp, 183.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(16.dp),
+        modifier.offset(y = (-25).dp).widthIn(max = 584.dp).fillMaxWidth().height(183.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(16.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         val points = vm.curves[vm.curveChannel]
@@ -923,7 +924,7 @@ private fun LiquifyButton(icon: androidx.compose.ui.graphics.vector.ImageVector,
 @Composable
 private fun LiquifyUpright(vm: CanvasViewModel, modifier: Modifier) {
     Column(
-        modifier.offset(y = (-25).dp).size(654.dp, 200.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(16.dp),
+        modifier.offset(y = (-25).dp).widthIn(max = 654.dp).fillMaxWidth().height(200.dp).clip(RoundedCornerShape(33.dp)).background(HsbPanelFill).padding(16.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         val percent = { v: Float, none: String? -> if (v >= 1f) "Max" else if (v <= 0f && none != null) none else "${(v * 100).roundToInt()}%" }

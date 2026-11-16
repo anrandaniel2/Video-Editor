@@ -193,16 +193,21 @@ fun AppRoot(vm: CanvasViewModel) {
                 // each panel hangs from its button: colour, layers, then the tool that opened the library;
                 // it grows out of its arrow as it opens and fades as it closes
                 PanelPresence(vm.panel, Panel.NONE, fading = vm.panelFading, onFaded = { vm.panelFading = false }) { shown, alpha, scale, origin ->
+                    // The widest the panel may be: the screen, less the gutter it keeps on both
+                    // sides. Each panel's width below is the size it is drawn at on a tablet — the
+                    // canvas this interface was measured against — so on a phone it has to come in,
+                    // or its far column is off the glass and cannot be tapped at all.
+                    val room = (maxWidth - Pc.PopoverGap * 2).coerceAtLeast(240.dp)
                     val (width, button) = when (shown) {
-                        Panel.LAYERS -> (if (vm.backgroundPicking) 376.dp else 384.dp) to 1
-                        Panel.COLOR -> 376.dp to 0
-                        Panel.BRUSHES -> 440.dp to when (vm.tool) {
+                        Panel.LAYERS -> (if (vm.backgroundPicking) 376.dp else 384.dp).coerceAtMost(room) to 1
+                        Panel.COLOR -> 376.dp.coerceAtMost(room) to 0
+                        Panel.BRUSHES -> 440.dp.coerceAtMost(room) to when (vm.tool) {
                             ToolKind.ERASE -> if (vm.hostClose != null) 3 else 2
                             ToolKind.SMUDGE -> if (vm.hostClose != null) 4 else 3
                             else -> if (vm.hostClose != null) 5 else 4
                         }
-                        Panel.ACTIONS -> 390.dp to 0
-                        Panel.ADJUSTMENTS -> 330.dp to 1
+                        Panel.ACTIONS -> 390.dp.coerceAtMost(room) to 0
+                        Panel.ADJUSTMENTS -> 330.dp.coerceAtMost(room) to 1
                         Panel.NONE -> 0.dp to 0
                     }
                     val fromLeft = shown == Panel.ACTIONS || shown == Panel.ADJUSTMENTS
