@@ -99,7 +99,7 @@ impl PhotoSession {
         let params: Value = if params.trim().is_empty() {
             json!({})
         } else {
-            serde_json::from_str(&params).map_err(|e| PhotoError::Command(format!("bad params for `{cmd}`: {e}")))?;
+            serde_json::from_str(&params).map_err(|e| PhotoError::Command(format!("bad params for `{cmd}`: {e}")))?
         };
         let points = LiveStrokeSlot::points(params.get("points").unwrap_or(&Value::Null))
             .ok_or_else(|| PhotoError::Command(format!("`{cmd}` needs at least one point, [x, y]")))?;
@@ -159,7 +159,8 @@ impl PhotoSession {
         let live = slot.as_ref().ok_or_else(|| PhotoError::Render("no live stroke".into()))?;
         let doc = live.stroke.doc.clone();
         drop(slot);
-        Ok(surface_frame(&photocraft_compose::render(&doc, rect), rect))
+        // The composite is a `Buffer`, not a `Surface`: the same path `render_region` takes.
+        Ok(Some(crate::frame_from_buffer(photocraft_compose::render(&doc, rect))))
     }
 
     /// Whether the live stroke keeps changing while the pointer is still (an airbrush's build-up,
@@ -252,7 +253,7 @@ impl PhotoSession {
         let patch: Value = if params.trim().is_empty() {
             json!({})
         } else {
-            serde_json::from_str(&params).map_err(|e| PhotoError::Render(format!("bad brush params: {e}")))?;
+            serde_json::from_str(&params).map_err(|e| PhotoError::Render(format!("bad brush params: {e}")))?
         };
         // `preset` picks a library brush the way a stroke's `preset` does (its own tip, dynamics
         // and stabilisation, over the current tool state); anything else in the patch is merged
@@ -341,7 +342,7 @@ mod tests {
         let s = session();
         let before = s.status().revision;
         let began = s
-            .stroke_begin("paint.stroke".into(), r#"{"points":[[20,20]],"size":24,"flow":1.0,"color":"#ff0000","smoothing":0.0}"#.into())
+            .stroke_begin("paint.stroke".into(), r##"{"points":[[20,20]],"size":24,"flow":1.0,"color":"#ff0000","smoothing":0.0}"##.into())
             .unwrap();
         assert!(began, "a blank document paints");
         // The document has not changed yet: the stroke lives in the preview.
@@ -368,7 +369,7 @@ mod tests {
     fn a_stroke_is_one_history_step() {
         let s = session();
         assert!(!s.status().can_undo);
-        s.stroke_begin("paint.stroke".into(), r#"{"points":[[10,10]],"size":12,"color":"#000000","smoothing":0.0}"#.into()).unwrap();
+        s.stroke_begin("paint.stroke".into(), r##"{"points":[[10,10]],"size":12,"color":"#000000","smoothing":0.0}"##.into()).unwrap();
         s.stroke_add(r#"[[30,20]]"#.into()).unwrap();
         s.stroke_add(r#"[[50,30]]"#.into()).unwrap();
         s.stroke_end().unwrap();
@@ -412,7 +413,7 @@ mod tests {
     #[test]
     fn the_pencil_is_a_live_stroke_too() {
         let s = session();
-        assert!(s.stroke_begin("paint.pencil".into(), r#"{"points":[[10,10]],"size":8,"color":"#000000","smoothing":0.0}"#.into()).unwrap());
+        assert!(s.stroke_begin("paint.pencil".into(), r##"{"points":[[10,10]],"size":8,"color":"#000000","smoothing":0.0}"##.into()).unwrap());
         s.stroke_add(r#"[[60,50]]"#.into()).unwrap();
         let out: Value = serde_json::from_str(&s.stroke_end().unwrap()).unwrap();
         assert_eq!(out["fromLive"], Value::Bool(true), "{out}");
@@ -423,7 +424,7 @@ mod tests {
         let s = session();
         // Paint a band, then erase across it: the eraser's stroke commits as `paint.stroke`
         // with `erase`.
-        s.execute("paint.stroke".into(), r#"{"points":[[0,60],[160,60]],"size":40,"color":"#000000","smoothing":0.0}"#.into()).unwrap();
+        s.execute("paint.stroke".into(), r##"{"points":[[0,60],[160,60]],"size":40,"color":"#000000","smoothing":0.0}"##.into()).unwrap();
         let size = s.status().active.expect("the document is open");
         assert!(s.stroke_pixels(0, 0, size.width, size.height).is_err(), "no stroke, no preview");
         let began = s.stroke_begin("paint.stroke".into(), r#"{"points":[[0,60]],"size":20,"erase":true,"smoothing":0.0}"#.into()).unwrap();

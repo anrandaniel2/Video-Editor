@@ -47,7 +47,7 @@ pub struct StudioBrushSet {
 /// the studio's, so a brush is the same brush in both).
 #[uniffi::export]
 pub fn studio_shelf() -> Vec<StudioBrushSet> {
-    let brushes: Vec<Value> = studibrush::library()
+    let brushes: Vec<Value> = studiobrush::library()
         .into_iter()
         .map(|p| {
             json!({
@@ -132,7 +132,7 @@ impl PhotoSession {
     /// now has.
     pub fn studio_install_brushes(&self) -> Result<u32, PhotoError> {
         let mut s = self.lock();
-        let library = studibrush::library();
+        let library = studiobrush::library();
         let (mut added, mut removed) = (0u32, 0u32);
         // Drop the engine's generic built-ins that the studio's own library replaces (by name), so
         // no set lists both.
@@ -160,12 +160,12 @@ impl PhotoSession {
 
 /// The drawing app's set order (a `&'static str` list, as `studiobrush::SET_NAMES`).
 fn studibrush_order() -> Vec<&'static str> {
-    studibrush::SET_NAMES.to_vec()
+    studiobrush::SET_NAMES.to_vec()
 }
 
 /// The group a studio brush is filed under, by name, from the library.
 fn studio_group(name: &str) -> Option<String> {
-    studibrush::find(name).map(|p| p.group)
+    studiobrush::find(name).map(|p| p.group)
 }
 
 #[cfg(test)]
@@ -175,17 +175,17 @@ mod tests {
     #[test]
     fn the_shelf_is_the_library_with_no_session() {
         let shelf = studio_shelf();
-        assert_eq!(shelf.len(), studibrush::SET_NAMES.len(), "one set per shipped set");
+        assert_eq!(shelf.len(), studiobrush::SET_NAMES.len(), "one set per shipped set");
         assert_eq!(shelf[0].name, "Sketching");
         assert_eq!(shelf[0].brushes[0].name, "Graphite");
-        assert_eq!(shelf.iter().map(|s| s.brushes.len()).sum::<usize>(), studibrush::library().len());
+        assert_eq!(shelf.iter().map(|s| s.brushes.len()).sum::<usize>(), studiobrush::library().len());
         assert!(shelf.iter().all(|s| s.brushes.iter().all(|b| b.size > 0.0)));
     }
 
     #[test]
     fn every_library_brush_has_a_set_in_the_order() {
         let order = studibrush_order();
-        for p in studibrush::library() {
+        for p in studiobrush::library() {
             assert!(order.iter().any(|g| g.eq_ignore_ascii_case(&p.group)), "{}: {}", p.name, p.group);
             assert_eq!(studio_group(&p.name).as_deref(), Some(p.group.as_str()));
         }
