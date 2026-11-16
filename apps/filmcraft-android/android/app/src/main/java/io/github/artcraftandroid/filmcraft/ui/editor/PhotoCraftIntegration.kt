@@ -103,6 +103,9 @@ internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
     }
     LaunchedEffect(vm) {
         try {
+            // One brush library for the whole app: the drawing canvas lists the studio's shelf, so
+            // a brush means the same brush in FilmCraft's drawing and in the studio.
+            runCatching { vm.engine.studioShelf() }.getOrNull()?.let { DrawingBrushes.install(it) }
             if (picture != null) {
                 val (name, bytes) = withContext(Dispatchers.IO) { sourceBytes(context, picture) }
                 vm.openBytes(name, bytes)

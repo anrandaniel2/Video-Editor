@@ -10,6 +10,7 @@ import io.github.artcraftandroid.photocraft.core.PhotoStatus
 import io.github.artcraftandroid.photocraft.engine.PhotoEngine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 
 /** The editor's mode tabs, after the reference tablet UI. */
@@ -326,8 +327,159 @@ class PhotoEditorViewModel : ViewModel() {
     var strokePts by mutableStateOf<List<androidx.compose.ui.geometry.Offset>>(emptyList())
         private set
 
+    /**
+     * The engine's pixels for the stroke being drawn: one damage rect of the composite of the
+     * document with the stroke so far, per frame the stroke changed. The canvas draws them in
+     * order over its preview, so the brush's own dabs appear under the finger, not a line
+     * standing in for them.
+     */
+    var strokeParts by mutableStateOf<List<Pair<androidx.compose.ui.geometry.Rect, Bitmap>>>(emptyList())
+        private set
+
+    /**
+     * How many of the drag's points the running live stroke has been given. The canvas re-sends
+     * the whole path each move, so this is what makes only the new samples join the stroke.
+     */
+    private var liveSent = 0
+    private var liveQueue = kotlinx.coroutines.channels.Channel<Pair<Float, Float>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+    private var liveJob: Job? = null
+    private val liveGate = kotlinx.coroutines.sync.Mutex()
+
+    /** Whether the painting tools draw live (the Brush, Pencil and Eraser do). */
+    private fun paintsLive(): Boolean = tool in setOf(Tool.Brush, Tool.Pencil, Tool.Eraser)
+
     fun previewStroke(points: List<Pair<Float, Float>>) {
+        // Until the engine's first pixels answer, the path stands in for the brush (see the canvas);
+        // once they do, they are the stroke.
         strokePts = points.map { (x, y) -> androidx.compose.ui.geometry.Offset(x, y) }
+        if (!paintsLive()) return
+        if (points.size > liveSent) {
+            points.drop(liveSent).forEach { liveQueue.trySend(it) }
+            liveSent = points.size
+        }
+    }
+
+    /**
+     * Start the live stroke under the finger: the engine paints it as it goes, and the commit on
+     * release takes those pixels (one History step), so a long stroke is one Undo.
+     */
+    fun beginStroke(first: Pair<Float, Float>) {
+        strokeParts = emptyList()
+        liveSent = 1
+        if (tool == Tool.Clone && cloneSource == null) {
+            error = "Tap the area to clone from first."
+            return
+        }
+        if (!paintsLive()) return
+        // One stroke at a time: the new stroke waits for the last one's commit, so two previews
+        // are never in the engine's slot at once (a quick dab after a quick stroke). The last
+        // stroke's queue is closed in case the gesture never ended (a detached window).
+        val previous = liveJob
+        liveQueue.close()
+        val queue = kotlinx.coroutines.channels.Channel<Pair<Float, Float>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        liveQueue = queue
+        liveJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            previous?.join()
+            val began = runCatching {
+                engine.strokeBegin(strokeCommand(), strokeParams(listOf(first)).toString())
+            }.getOrElse {
+                error = it.message ?: "The stroke couldn't be painted."
+                false
+            }
+            if (!began) {
+                // Nothing to paint on (a hidden or locked layer): the canvas takes the drag's
+                // placeholder path, and nothing is committed on release.
+                strokePts = emptyList()
+                return@launch
+            }
+            // The stroke's own first dab, drawn now: the brush shows under the finger from the
+            // first touch, not from the first move.
+            liveGate.withLock { refreshTile(runCatching { engine.strokeBounds() }.getOrNull()) }
+            // An airbrush keeps laying dabs while the finger rests; smoothing keeps catching up.
+            val ticking = java.util.concurrent.atomic.AtomicBoolean(true)
+            val ticker = launch {
+                while (ticking.get()) {
+                    kotlinx.coroutines.delay(33)
+                    if (runCatching { engine.strokeWantsTime() }.getOrDefault(false)) {
+                        liveGate.withLock { refreshTile(runCatching { engine.strokeTick() }.getOrNull()) }
+                    }
+                }
+            }
+            try {
+                for (p in queue) {
+                    liveGate.withLock {
+                        // A batch of one: the input loop keeps sending, the engine keeps up.
+                        refreshTile(runCatching { engine.strokeAdd(pointsJson(listOf(p))) }.getOrNull())
+                    }
+                }
+            } finally {
+                ticking.set(false)
+                ticker.cancel()
+                liveGate.withLock {
+                    // The commit: the engine takes the pixels it previewed, so the stroke is one
+                    // History step and nothing is re-rendered.
+                    val ended = runCatching { engine.strokeEnd() }
+                    if (ended.isFailure) {
+                        runCatching { engine.strokeCancel() }
+                        error = ended.exceptionOrNull()?.message ?: "The stroke couldn't be painted."
+                    }
+                    // The composite first, then the preview dropped: no frame in between shows
+                    // the canvas without the stroke it has just committed.
+                    renderInto()
+                    strokeParts = emptyList()
+                    strokePts = emptyList()
+                    status = runCatching { engine.status() }.getOrNull() ?: status
+                    if (panel == Panel.Layers) refreshLayers()
+                }
+            }
+        }
+    }
+
+    /**
+     * End the live stroke: close the queue so the consumer commits it. Whether the finger lifted or
+     * the gesture was taken away, the stroke is one History step; a new queue takes the next one
+     * (closing a channel is final).
+     */
+    fun endStroke() {
+        // The next stroke gets a new queue: closing a channel is final.
+        liveQueue.close()
+        // The next stroke gets a new queue, and waits on this one's commit (see beginStroke).
+        liveQueue = kotlinx.coroutines.channels.Channel(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        liveSent = 0
+    }
+
+    /** A batch of points as the engine's wire form: `[[x, y], …]`. */
+    private fun pointsJson(points: List<Pair<Float, Float>>): String {
+        val arr = org.json.JSONArray()
+        for ((x, y) in points) arr.put(org.json.JSONArray().put(x.toDouble()).put(y.toDouble()))
+        return arr.toString()
+    }
+
+    /** Fetch the pixels of a damage rect (JSON `{x, y, width, height}`) for the canvas. */
+    private suspend fun refreshTile(damage: String?) {
+        val d = damage?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return
+        val x = d.optInt("x")
+        val y = d.optInt("y")
+        val w = d.optInt("width")
+        val h = d.optInt("height")
+        if (w <= 0 || h <= 0) return
+        val frame = androidx.compose.ui.geometry.Rect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat())
+        // A long stroke lays many small rectangles; past a few dozen, fold them into one that
+        // covers the stroke's whole reach, so a long stroke costs one bitmap, not one per frame.
+        val kept = strokeParts
+        val union = kept.fold(frame) { a, p ->
+            androidx.compose.ui.geometry.Rect(
+                minOf(a.left, p.first.left), minOf(a.top, p.first.top),
+                maxOf(a.right, p.first.right), maxOf(a.bottom, p.first.bottom),
+            )
+        }
+        val fetch = if (kept.size >= 24) union else frame
+        val fw = fetch.width.toInt().coerceAtLeast(1)
+        val fh = fetch.height.toInt().coerceAtLeast(1)
+        val bmp = runCatching {
+            engine.strokePixels(fetch.left.toInt(), fetch.top.toInt(), fw, fh)
+        }.getOrNull() ?: return
+        strokeParts = if (kept.size >= 24) listOf(fetch to bmp) else kept + (frame to bmp)
     }
 
     /** Send a finished drag to the engine as one stroke (one History step). */
@@ -391,11 +543,14 @@ class PhotoEditorViewModel : ViewModel() {
      * A finished drag: the painting tools paint it, the marquee and the lasso take it as a
      * selection, and the tap-only tools act on where it started, so a drag still does something.
      */
-    fun endDrag(points: List<Pair<Float, Float>>) {
+    fun endDrag(points: List<Pair<Float, Float>>, live: Boolean = false) {
         strokePts = emptyList()
         val first = points.firstOrNull() ?: return
         val last = points.last()
         when {
+            // A live stroke is already in the engine (it committed on release), so there is
+            // nothing left to send for the painting tools.
+            live && paintsLive() -> Unit
             paintsByDrag -> paintStroke(points)
             tool == Tool.Rect -> dragSelection(first, last)
             // The Lasso follows the finger: its path is the selection's outline, thinned to the
@@ -495,8 +650,7 @@ class PhotoEditorViewModel : ViewModel() {
         // The end of the path is part of its shape, even when the last sample was close.
         if (kept.last() != points.last()) kept += points.last()
         // The engine builds a polygon from these points: it needs a triangle at least. A shorter
-        // path made no gesture worth selecting, which `endDrag` doesn't send.
-        return if (kept.size >= 3) kept else points
+        // path made no gesture worth selecting, which `endDrag` doesn't send the lasso.
         return kept
     }
 
@@ -637,32 +791,41 @@ class PhotoEditorViewModel : ViewModel() {
     }
 
     private fun refresh() {
-        viewModelScope.launch {
-            try {
-                status = engine.status()
-                renderViewport()
-                if (panel == Panel.Layers) refreshLayers()
-            } catch (e: Exception) {
-                error = e.message
-            }
+        viewModelScope.launch { refreshNow() }
+    }
+
+    private suspend fun refreshNow() {
+        try {
+            status = engine.status()
+            renderInto()
+            if (panel == Panel.Layers) refreshLayers()
+        } catch (e: Exception) {
+            error = e.message
         }
     }
 
     private fun renderViewport() {
         renderJob?.cancel()
-        renderJob = viewModelScope.launch {
-            try {
-                val size = engine.documentSize() ?: return@launch
-                // The region the canvas shows: the whole document at 100 %, a window of it as
-                // the zoom goes up. Rendering is capped at 2048px on a side, since the engine
-                // composites on the CPU and a large window would preview slowly.
-                val view = documentView() ?: return@launch
-                val rw = view.width.toInt().coerceAtLeast(1)
-                val rh = view.height.toInt().coerceAtLeast(1)
-                bitmap = engine.renderRegion(view.x.toInt(), view.y.toInt(), rw, rh)
-            } catch (_: Exception) {
-                // No document yet: the canvas stays blank.
-            }
+        renderJob = viewModelScope.launch { renderInto() }
+    }
+
+    /**
+     * Render the region the canvas shows into [bitmap]. Suspend so a caller that has just committed
+     * a stroke can wait for the composite before dropping the live preview: a frame between the
+     * two must not show the canvas without the stroke it has just committed.
+     */
+    private suspend fun renderInto() {
+        try {
+            val size = engine.documentSize() ?: return
+            // The region the canvas shows: the whole document at 100 %, a window of it as
+            // the zoom goes up. Rendering is capped at 2048px on a side, since the engine
+            // composites on the CPU and a large window would preview slowly.
+            val view = documentView() ?: return
+            val rw = view.width.toInt().coerceAtLeast(1)
+            val rh = view.height.toInt().coerceAtLeast(1)
+            bitmap = engine.renderRegion(view.x.toInt(), view.y.toInt(), rw, rh)
+        } catch (_: Exception) {
+            // No document yet: the canvas stays blank.
         }
     }
 

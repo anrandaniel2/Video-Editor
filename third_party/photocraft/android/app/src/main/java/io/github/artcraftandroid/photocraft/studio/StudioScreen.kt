@@ -104,10 +104,12 @@ fun StudioScreen(
         onDispose { StudioErrors.sink = null }
     }
 
-    // The document, once: its size, its layers, the brush presets.
+    // The document, once: its size, its layers, the brushes. The studio's shelf is the drawing
+    // app's brush library, put in place of the engine's generic preset set (a photo editor's six
+    // brushes are not a drawing app's shelf), and the Brushes panel lists it set by set.
     LaunchedEffect(engine) {
         engine.refreshAll()
-        engine.refreshBrushes()
+        engine.installBrushes()
         states.values.forEach {
             it.docWidth = engine.width.coerceAtLeast(initialWidth)
             it.docHeight = engine.height.coerceAtLeast(initialHeight)

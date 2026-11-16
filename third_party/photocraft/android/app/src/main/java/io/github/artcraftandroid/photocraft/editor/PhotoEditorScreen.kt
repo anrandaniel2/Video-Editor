@@ -215,16 +215,28 @@ private fun CanvasView(vm: PhotoEditorViewModel) {
                 }
                 var stroke = mutableListOf<Offset>()
                 detectDragGestures(
-                    onDragStart = { start -> stroke = mutableListOf(start) },
+                    onDragStart = { start ->
+                        stroke = mutableListOf(start)
+                        // The engine starts the stroke where the finger did, so the brush's own
+                        // dabs show under the finger from the first touch. This runs only past the
+                        // touch slop, so a tap stays a tap (it is the other detector's).
+                        toDoc(start)?.let { vm.beginStroke(it) }
+                    },
                     onDragEnd = {
                         val points = stroke.mapNotNull(toDoc)
                         stroke = mutableListOf()
-                        vm.endDrag(points)
+                        // The engine commits the stroke it was given: one History step, its own
+                        // previewed pixels. A drag the engine refused commits nothing.
+                        vm.endStroke()
+                        // The other tools read the drag's endpoints; the painting ones have
+                        // already been committed by the live stroke.
+                        vm.endDrag(points, live = true)
                     },
                     onDragCancel = {
-                        // The gesture was taken by something else (a system swipe): drop the
-                        // preview with it, so no half-stroke is left drawn on the canvas.
+                        // The gesture was taken by something else (a system swipe): the stroke is
+                        // finished where it got to, so no half-stroke is left on the canvas.
                         stroke = mutableListOf()
+                        vm.endStroke()
                         vm.previewStroke(emptyList())
                     },
                 ) { change, _ ->
@@ -255,12 +267,36 @@ private fun CanvasView(vm: PhotoEditorViewModel) {
         } else {
             Text("Open a photo to start", color = Pc.Detail, fontSize = 14.sp)
         }
-        // The stroke under the finger, drawn as it goes in the document's own pixels scaled to
-        // where the preview shows them, so the paint appears to come off the brush. The engine
-        // has the whole stroke once the finger lifts.
+        // The stroke under the finger: the engine's own dabs over the damaged rect, scaled to where
+        // the preview shows them, so the paint comes off the brush. Until the first pixels arrive,
+        // the path stands in for them.
+        val parts = vm.strokeParts
+        val tileView = vm.documentView()
+        if (parts.isNotEmpty() && tileView != null) {
+            Canvas(Modifier.fillMaxSize()) {
+                val scale = minOf(size.width / tileView.width, size.height / tileView.height)
+                val left = (size.width - tileView.width * scale) / 2f
+                val top = (size.height - tileView.height * scale) / 2f
+                // In order, each an older frame's damage: the last one drawn is the newest dab.
+                for ((rect, dab) in parts) {
+                    val x = left + (rect.left - tileView.x) * scale
+                    val y = top + (rect.top - tileView.y) * scale
+                    drawImage(
+                        image = dab.asImageBitmap(),
+                        srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                        srcSize = androidx.compose.ui.unit.IntSize(dab.width, dab.height),
+                        dstOffset = androidx.compose.ui.unit.IntOffset(x.toInt(), y.toInt()),
+                        dstSize = androidx.compose.ui.unit.IntSize(
+                            (rect.width * scale).toInt().coerceAtLeast(1),
+                            (rect.height * scale).toInt().coerceAtLeast(1),
+                        ),
+                    )
+                }
+            }
+        }
         val stroke = vm.strokePts
         val view = vm.documentView()
-        if (stroke.isNotEmpty() && view != null) {
+        if (parts.isEmpty() && stroke.isNotEmpty() && view != null) {
             Canvas(Modifier.fillMaxSize()) {
                 val scale = minOf(size.width / view.width, size.height / view.height)
                 val left = (size.width - view.width * scale) / 2f

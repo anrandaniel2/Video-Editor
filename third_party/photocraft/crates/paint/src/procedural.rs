@@ -248,9 +248,101 @@ pub fn rake_tip(n: u32, seed: u32, bristles: u32) -> GrayTile {
     })
 }
 
+/// A grainy disc: the drawing studio's everyday pencil and charcoal stamp — a soft round body
+/// broken up by per-pixel grit and a ragged edge.
+pub fn grain_tip(n: u32, seed: u32) -> GrayTile {
+    let salt = u64::from(seed) + 808;
+    let c = n as f32 / 2.0;
+    GrayTile::from_fn(n, n, |x, y| {
+        let (dx, dy) = (x as f32 + 0.5 - c, y as f32 + 0.5 - c);
+        let r = (dx * dx + dy * dy).sqrt() / c;
+        let edge = 0.9 + 0.1 * value_noise((dy.atan2(dx) + std::f32::consts::PI) * 2.0, 0.5, 12, salt);
+        if r > edge {
+            return 0.0;
+        }
+        let body = (1.0 - r * r * 0.55).clamp(0.0, 1.0);
+        let grit = hash2(x as i32, y as i32, salt);
+        body * (0.55 + 0.45 * grit)
+    })
+}
+
+/// A soft cloud: a round dab with a feather-soft edge and an uneven interior, as the studio's
+/// airbrushes, washes and smudges are built on.
+pub fn cloud_tip(n: u32, seed: u32) -> GrayTile {
+    let salt = u64::from(seed) + 909;
+    let c = n as f32 / 2.0;
+    GrayTile::from_fn(n, n, |x, y| {
+        let (dx, dy) = (x as f32 + 0.5 - c, y as f32 + 0.5 - c);
+        let r = (dx * dx + dy * dy).sqrt() / c;
+        let lump = value_noise(dx * 0.06 + 8.0, dy * 0.06 + 8.0, 24, salt);
+        let soft = (1.0 - r / (1.0 + 0.12 * lump)).clamp(0.0, 1.0);
+        soft * soft
+    })
+}
+
+/// A flat brush: a soft ellipse, wide across and squat along, its ends rounded.
+pub fn flat_tip(n: u32) -> GrayTile {
+    let c = n as f32 / 2.0;
+    GrayTile::from_fn(n, n, |x, y| {
+        let (u, v) = ((x as f32 + 0.5 - c) / c, (y as f32 + 0.5 - c) / c);
+        // Across the tip: a wide band with rounded ends; along it: a shallow soft falloff.
+        let across = (1.0 - (v.abs() / 0.9).powi(6)).clamp(0.0, 1.0);
+        let along = (1.0 - (u.abs() / 0.32).powi(4)).clamp(0.0, 1.0);
+        (across * along).sqrt()
+    })
+}
+
+/// Hair: many fine strands running across the stamp, thinned towards the ends.
+pub fn hair_tip(n: u32, strands: u32) -> GrayTile {
+    let s = n as f32;
+    let k = clamp_primitives(n, strands).max(1);
+    GrayTile::from_fn(n, n, |x, y| {
+        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+        let along = 1.0 - ((px / s - 0.5).abs() * 2.0).powi(2);
+        if along <= 0.0 {
+            return 0.0;
+        }
+        // One strand per band of `y`; the gaps between them stay empty.
+        let band = py / s * k as f32;
+        let within = band.fract();
+        let strand = (1.0 - ((within - 0.5).abs() * 2.4).clamp(0.0, 1.0)).max(0.0);
+        strand * along
+    })
+}
+
+/// A smudge: a soft, streaky oval that pulls paint along the stroke.
+pub fn smudge_tip(n: u32) -> GrayTile {
+    let c = n as f32 / 2.0;
+    GrayTile::from_fn(n, n, |x, y| {
+        let (u, v) = ((x as f32 + 0.5 - c) / c, (y as f32 + 0.5 - c) / c * 1.7);
+        let r = (u * u + v * v).sqrt();
+        let streaks = 0.75 + 0.25 * ((u * 9.0).sin() * 0.5 + 0.5);
+        ((1.0 - r).clamp(0.0, 1.0)).powi(2) * streaks
+    })
+}
+
+/// A square: a crisp block, as the studio's palette knife, charcoal block and pixel brushes want.
+pub fn square_tip(n: u32) -> GrayTile {
+    let s = n as f32;
+    GrayTile::from_fn(n, n, |x, y| {
+        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+        let edge = ((px / s).min(py / s).min(1.0 - px / s).min(1.0 - py / s) * s).clamp(0.0, 1.0);
+        edge
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_studios_tips_have_paint() {
+        for t in [grain_tip(48, 3), cloud_tip(48, 3), flat_tip(48), hair_tip(48, 9), smudge_tip(48), square_tip(48)] {
+            assert!(t.is_valid());
+            let sum: f32 = t.to_f32().iter().sum();
+            assert!(sum > 48.0, "{sum}");
+        }
+    }
 
     #[test]
     fn tips_with_absurd_primitive_counts_stay_cheap() {

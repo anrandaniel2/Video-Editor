@@ -959,8 +959,16 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
             let mut v = json!({
                 "name": pr.name,
                 "builtin": pr.builtin,
+                // The set the preset is filed under (the Brushes panel's column of sets).
+                "group": pr.group,
                 "size": pr.brush.size,
                 "hardness": pr.brush.hardness,
+                // A sampled tip's larger side, so a panel can lay its brushes out by their size.
+                "tipSize": match &pr.brush.tip {
+                    TipShape::Round => Value::Null,
+                    TipShape::Sampled(g) => json!(g.width.max(g.height)),
+                    TipShape::Stored(t) => json!(t.width.max(t.height)),
+                },
                 "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
             });
             if full {

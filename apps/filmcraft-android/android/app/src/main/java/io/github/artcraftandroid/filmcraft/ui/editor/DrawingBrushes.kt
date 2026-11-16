@@ -4,18 +4,71 @@ import android.graphics.*
 import kotlin.math.*
 
 internal data class DrawingBrush(val name: String, val family: String, val variant: Int)
+
+/**
+ * The drawing canvas' brushes.
+ *
+ * The canvas draws its dabs itself (a Compose `Path` per stroke, stamped along it), so this is the
+ * renderer, not the library: the *names* come from the studio's shelf
+ * (`PhotoEngine.studioShelf`, the same 12 sets and 134 brushes the studio's Brushes panel lists),
+ * and each one is mapped onto the family that draws it nearest. A name the shelf does not have
+ * still draws — as a plain round dab — rather than failing the stroke.
+ */
 internal object DrawingBrushes {
     val families = listOf("Hair", "Writing", "Ink", "Pencil", "Marker", "Airbrush", "Dots", "Stars", "Chains", "Leaves", "Flowers", "Hearts", "Sparkles", "Hatching", "Texture")
     private val styles = listOf("Fine", "Soft", "Bold", "Wide", "Dense", "Loose", "Ribbon", "Delicate", "Expressive", "Heavy")
-    val all = families.flatMap { family -> styles.mapIndexed { i, style -> DrawingBrush("$family · $style", family, i) } }
-    private val byName = all.associateBy { it.name }
+
+    /** The procedural catalogue, for a canvas with no studio shelf yet. */
+    val all: List<DrawingBrush> = families.flatMap { family -> styles.mapIndexed { i, style -> DrawingBrush("$family · $style", family, i) } }
+
+    /** The studio's sets and brushes, once the engine's shelf is read: name → family. */
+    @Volatile
+    private var shelf: List<DrawingBrush> = emptyList()
+
+    /** [all] plus the studio shelf's brushes: what a picker lists. */
+    val every: List<DrawingBrush> get() = all + shelf
+
+    /**
+     * Take the studio's shelf (its sets and brushes) as the canvas' own: the names a stroke is
+     * saved with are then the same names the studio's Brushes panel shows, so a drawing opened in
+     * either keeps its brush.
+     *
+     * A studio brush draws with the family whose look it is nearest: pencils and charcoals grain,
+     * inks and pens a crisp line, airbrushes blur, and everything else stamps its own mark.
+     */
+    fun install(sets: List<io.github.artcraftandroid.photocraft.core.StudioBrushSet>) {
+        val read = sets.flatMap { set ->
+            set.brushes.mapIndexed { i, brush -> DrawingBrush(brush.name, familyOf(set.name, brush.name), i) }
+        }
+        shelf = read
+        index = (all + read).associateBy { it.name }
+    }
+
+    /** The family that draws a library brush: by its set first, then by its name. */
+    private fun familyOf(set: String, name: String): String {
+        val n = name.lowercase()
+        return when {
+            n.contains("pencil") || n.contains("charcoal") || n.contains("graphite") || n.contains("crayon") || set == "Sketching" || set == "Charcoals" -> "Pencil"
+            n.contains("airbrush") || n.contains("soft") || set == "Airbrushing" -> "Airbrush"
+            n.contains("marker") || n.contains("highlighter") -> "Marker"
+            n.contains("bristle") || n.contains("brush") || n.contains("wash") || set == "Painting" || set == "Watercolour" -> "Hair"
+            n.contains("ink") || n.contains("pen") || n.contains("nib") || set == "Inking" || set == "Calligraphy" -> "Ink"
+            n.contains("chalk") || n.contains("grain") || n.contains("texture") || n.contains("sponge") || set == "Textures" -> "Texture"
+            n.contains("dots") || n.contains("dotted") -> "Dots"
+            else -> "Hair"
+        }
+    }
+
+    /** The index a stroke looks its brush up in, rebuilt when the shelf arrives (not per dab). */
+    @Volatile
+    private var index: Map<String, DrawingBrush> = all.associateBy { it.name }
     fun footprint(name: String, size: Float): Float {
-        val b = byName[name] ?: DrawingBrush(name, if (name == "Pen") "Ink" else name, 0)
+        val b = index[name] ?: DrawingBrush(name, if (name == "Pen") "Ink" else name, 0)
         val width = size.coerceAtLeast(1f) * (.5f + b.variant * .12f)
         return if (b.family == "Ink" || b.family == "Pen") width * .45f else width
     }
     fun draw(canvas: Canvas, path: Path, name: String, color: Int, size: Float, opacity: Float) {
-        val b = byName[name] ?: DrawingBrush(name, when (name) { "Pen" -> "Ink"; else -> name }, 0)
+        val b = index[name] ?: DrawingBrush(name, when (name) { "Pen" -> "Ink"; else -> name }, 0)
         val v = b.variant
         val width = size.coerceAtLeast(1f) * (.5f + v * .12f)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color; alpha = (opacity * 255).toInt().coerceIn(0, 255); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; strokeWidth = width }

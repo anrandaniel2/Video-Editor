@@ -86,12 +86,14 @@ fun NumberField(
     modifier: Modifier = Modifier,
     suffix: String = "",
     minWidth: Dp = 52.dp,
+    /** `.number-field`'s own height (26), or the `.brush-controls` field's 22. */
+    height: Dp = 26.dp,
     min: Int = 0,
     max: Int = 100,
     onChange: (String) -> Unit,
 ) {
     Row(
-        modifier.height(26.dp).width(minWidth).clip(RoundedCornerShape(13.dp)).background(Sc.Field)
+        modifier.height(height).width(minWidth).clip(RoundedCornerShape(height / 2)).background(Sc.Field)
             .padding(horizontal = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
@@ -318,13 +320,13 @@ fun StudioSlider(
 
 /** A labelled row: the reference's `.field-row` (label left, control right). */
 @Composable
-fun FieldRow(label: String, modifier: Modifier = Modifier, trailing: @Composable () -> Unit) {
+fun FieldRow(label: String, modifier: Modifier = Modifier, labelSize: Int = 11, trailing: @Composable () -> Unit) {
     Row(
         modifier.fillMaxWidth().heightIn(min = 26.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(label, fontSize = 11.sp, color = Sc.Title, maxLines = 1)
+        Text(label, fontSize = labelSize.sp, color = Sc.Title, maxLines = 1)
         trailing()
     }
 }

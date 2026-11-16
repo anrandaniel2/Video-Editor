@@ -17,6 +17,11 @@ use std::sync::Mutex;
 use photocraft_engine::{EngineError, Session};
 use serde_json::{Value, json};
 
+mod live;
+mod studio;
+
+use live::LiveStrokeSlot;
+
 uniffi::setup_scaffolding!();
 
 /// What went wrong, as the Kotlin side shows it.
@@ -79,9 +84,15 @@ pub struct PhotoStatus {
 
 /// The engine session the Compose editor drives. One per editor screen; the shell creates it,
 /// hands it bytes, and drops it when the editor closes.
+///
+/// The session is in its own lock, apart from the live stroke's ([`LiveStrokeSlot`]): a stroke
+/// being drawn holds the stroke's renderer, not the document, so the UI stays responsive and a
+/// commit is the only moment the two meet.
 #[derive(uniffi::Object)]
 pub struct PhotoSession {
     session: Mutex<Session>,
+    /// The stroke being drawn, between `stroke_begin` and `stroke_end`.
+    live: Mutex<Option<LiveStrokeSlot>>,
 }
 
 impl PhotoSession {
@@ -109,7 +120,7 @@ impl PhotoSession {
     #[uniffi::constructor]
     pub fn new() -> Self {
         start_log();
-        PhotoSession { session: Mutex::new(Session::new()) }
+        PhotoSession { session: Mutex::new(Session::new()), live: Mutex::new(None) }
     }
 
     /// Run one engine command. `params` is JSON (an object, or empty); the result is the
@@ -275,7 +286,7 @@ fn fit(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
 /// Turn a composited buffer into 8-bit RGBA for the shell. The buffer is already the size the
 /// caller asked for: [`PhotoSession::render`] reduces at the engine's own resampler, and
 /// [`PhotoSession::render_region`] is rendered 1:1.
-fn frame_from_buffer(buf: photocraft_compose::Buffer) -> PhotoFrame {
+pub(crate) fn frame_from_buffer(buf: photocraft_compose::Buffer) -> PhotoFrame {
     let img = buf.to_rgba8();
     PhotoFrame { width: img.width, height: img.height, rgba: img.pixels }
 }

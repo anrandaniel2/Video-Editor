@@ -199,7 +199,7 @@ class StudioState(workspace: WorkspaceId) {
     val hidden = mutableStateListOf("sketch")
     val locked = mutableStateListOf("master")
     var page by mutableStateOf(8)
-    var brush by mutableStateOf("Natural Pencil 4B")
+    var brush by mutableStateOf("Graphite")
     var search by mutableStateOf("")
     var category by mutableStateOf("Sketching")
 
@@ -210,7 +210,7 @@ class StudioState(workspace: WorkspaceId) {
             "brushOpacity" to "100", "colour" to "#f59ac9", "channel" to "Master", "colourSpace" to "RGB",
             "font" to "Instrument Serif", "fontStyle" to "Regular", "strokeWidth" to "0.7",
             "alignment" to "align", "nodeAction" to "Sharp node", "exportFormat" to "PNG",
-            "strokeStyle" to "Solid",
+            "strokeStyle" to "Solid", "fontSize" to "64",
         ),
     )
     var toggles by mutableStateOf(listOf("snapping"))
@@ -263,7 +263,7 @@ class StudioState(workspace: WorkspaceId) {
         hidden.clear(); hidden.add("sketch")
         locked.clear(); locked.add("master")
         page = 8
-        brush = "Natural Pencil 4B"
+        brush = "Graphite"
         search = ""
         category = "Sketching"
         values = values + mapOf(
@@ -271,7 +271,7 @@ class StudioState(workspace: WorkspaceId) {
             "brushOpacity" to "100", "colour" to "#f59ac9", "channel" to "Master",
             "colourSpace" to "RGB", "font" to "Instrument Serif", "fontStyle" to "Regular",
             "strokeWidth" to "0.7", "alignment" to "align", "nodeAction" to "Sharp node",
-            "strokeStyle" to "Solid", "exportFormat" to "PNG",
+            "strokeStyle" to "Solid", "exportFormat" to "PNG", "fontSize" to "64",
         )
         toggles = listOf("snapping")
         points = DefaultPoints
@@ -288,10 +288,15 @@ class StudioState(workspace: WorkspaceId) {
     }
 }
 
-/** The brush names the Brushes panel lists, as the reference declares them. */
+/**
+ * The brush names the reference declares. They are not the shelf any more: the Brushes panel lists
+ * the drawing app's library from the engine (`StudioEngine.brushSets`), which is the same library
+ * the standalone drawing app draws with. This list stays for the reference's mock document, which
+ * shows before a document is open.
+ */
 val StudioBrushes = listOf(
-    "Natural Pencil 6B", "Natural Pencil 2B", "Natural Pencil 4B", "Compressed Charcoal",
-    "Dense Graphite", "Round Dry Bristle", "Soft Chalk", "Fine Ink",
+    "Graphite", "Soft Pencil", "Technical Pencil", "Coloured Pencil",
+    "Charcoal Stick", "Soft Charcoal", "Chalk", "Round Pen",
 )
 
 /** The Colour panel's swatches. */

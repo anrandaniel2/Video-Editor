@@ -1,7 +1,11 @@
 package io.github.artcraftandroid.photocraft.studio
 
 import android.graphics.Bitmap
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import io.github.artcraftandroid.photocraft.core.PhotoStatus
+import io.github.artcraftandroid.photocraft.core.StudioBrushSet
 import io.github.artcraftandroid.photocraft.editor.Tool
 import io.github.artcraftandroid.photocraft.engine.PhotoEngine
 import kotlinx.coroutines.Dispatchers
@@ -20,23 +24,49 @@ import org.json.JSONObject
  * engine's encoded bytes to the host.
  */
 class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
-    var status: PhotoStatus? = null
+    // Everything a composable reads is Compose state: the panels and the canvas recompose when the
+    // engine's answer changes, with no polling loop in between.
+
+    /** The session's state: revision, undo/redo, the open documents. */
+    var status by mutableStateOf<PhotoStatus?>(null)
         private set
 
     /** The composited document, as the canvas paints it. */
-    var preview: Bitmap? = null
+    var preview by mutableStateOf<Bitmap?>(null)
         private set
 
     /** The document's layers, top first, flattened from the engine's tree. */
-    var layers: List<StudioLayer> = emptyList()
+    var layers by mutableStateOf<List<StudioLayer>>(emptyList())
         private set
 
     /** History labels, newest first. */
-    var history: List<String> = emptyList()
+    var history by mutableStateOf<List<String>>(emptyList())
         private set
 
-    var brushPresets: List<String> = emptyList()
+    /**
+     * The brush names, in the library's order. The Brushes panel reads it, and recomposes when the
+     * library changes.
+     */
+    var brushPresets by mutableStateOf<List<String>>(emptyList())
         private set
+
+    /**
+     * The drawing app's brush shelf, set by set: the Brushes panel's column of sets and its grid.
+     * Read from the engine's live preset list, so a preset the person saves or deletes is in the
+     * next read with no second copy of the library to keep in step.
+     */
+    var brushSets by mutableStateOf<List<StudioBrushSet>>(emptyList())
+        private set
+
+    /** One artboard, as the Pages panel lists it: its group layer and its rect. */
+    data class Artboard(val id: Long, val name: String, val x: Int, val y: Int, val w: Int, val h: Int)
+
+    /** The document's artboards, as the Pages panel lists them. */
+    var artboards by mutableStateOf<List<Artboard>>(emptyList())
+        private set
+
+    /** The brush previews, by preset name, drawn once and kept: the grid asks for each one once. */
+    private val previews = HashMap<String, Bitmap>()
 
     val hasDocument: Boolean get() = status?.active != null
 
@@ -164,6 +194,14 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
             if (p.length() > 0) engine.execute("tools.setBrush", p)
         }
 
+    /** One key of the engine's brush, as the JSON it is (`"24.0"`, `"true"`, `"\"round\""`). */
+    suspend fun brushValue(key: String): String = withContext(Dispatchers.IO) {
+        engine.brushValue(key).trim('"')
+    }
+
+    /** The whole brush as JSON, for the settings panel's readouts. */
+    suspend fun brushJson(): JSONObject = withContext(Dispatchers.IO) { engine.brush() }
+
     suspend fun setColours(foreground: String? = null, background: String? = null) = withContext(Dispatchers.IO) {
         val p = JSONObject()
         if (foreground != null) p.put("foreground", foreground)
@@ -252,6 +290,110 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
         out
     }
 
+    // ---------------------------------------------------------------- vector and type
+
+    /**
+     * A shape layer from a drag: the Vector workspace's Rectangle and Ellipse tools. `kind` is the
+     * engine's (`rect`, `ellipse`, `line`, …) and the rect is in document pixels.
+     */
+    suspend fun createShape(kind: String, x: Float, y: Float, w: Float, h: Float, colour: String, strokeOnly: Boolean = false): String =
+        withContext(Dispatchers.IO) {
+            val rect = JSONObject()
+                .put("x", x.toDouble()).put("y", y.toDouble())
+                .put("w", w.coerceAtLeast(1f).toDouble()).put("h", h.coerceAtLeast(1f).toDouble())
+            val p = JSONObject().put("kind", kind).put("rect", rect)
+            // The studio's node toolbar: a stroke-only shape paints its outline, a filled one fills.
+            // A `fill` is the colour itself (`#rrggbb`, `[r, g, b, a]`, a gradient or a pattern),
+            // while a `stroke` takes an object with its `width` beside its colour.
+            if (strokeOnly) {
+                p.put("fill", JSONObject.NULL)
+                p.put("stroke", JSONObject().put("color", colour).put("width", 1.5))
+            } else {
+                p.put("fill", colour)
+                p.put("stroke", JSONObject.NULL)
+            }
+            val out = engine.execute("shape.create", p)
+            refreshAll()
+            out
+        }
+
+    /** A text layer where the text tool was tapped. */
+    suspend fun createText(x: Float, y: Float, text: String = "Text", size: Float = 64f, colour: String? = null): String =
+        withContext(Dispatchers.IO) {
+            val p = JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("text", text).put("size", size.toDouble())
+            if (colour != null) p.put("color", colour)
+            val out = engine.execute("type.create", p)
+            refreshAll()
+            out
+        }
+
+    /**
+     * The Layout workspace's page: a new artboard at a preset's size, which is what a document is
+     * in a layout — the text frames and placed pictures live on it.
+     */
+    suspend fun newArtboard(preset: String = "A4", name: String = "Page 1"): String = withContext(Dispatchers.IO) {
+        val out = engine.execute(
+            "layer.new.artboard",
+            JSONObject().put("preset", preset).put("name", name).put("background", "white"),
+        )
+        refreshAll()
+        out
+    }
+
+    /**
+     * The active document's artboards, top first (for [artboards]): an artboard is a group layer
+     * with an `artboard` rect, which is how `document.inspect` reports it (there is no separate
+     * artboard list).
+     */
+    suspend fun readArtboards(): List<Artboard> = withContext(Dispatchers.IO) {
+        runCatching {
+            val o = JSONObject(engine.execute("document.inspect", "{}"))
+            val boards = ArrayList<Artboard>()
+            fun walk(nodes: JSONArray?) {
+                if (nodes == null) return
+                for (i in 0 until nodes.length()) {
+                    val node = nodes.optJSONObject(i) ?: continue
+                    val board = node.optJSONObject("artboard")
+                    if (board != null) {
+                        // `rect` is [x, y, width, height] in document pixels.
+                        val r = board.optJSONArray("rect")
+                        boards += Artboard(
+                            id = node.optLong("id", -1L),
+                            name = node.optString("name").ifEmpty { "Page ${boards.size + 1}" },
+                            x = r?.optInt(0) ?: 0,
+                            y = r?.optInt(1) ?: 0,
+                            w = r?.optInt(2) ?: 0,
+                            h = r?.optInt(3) ?: 0,
+                        )
+                    }
+                    walk(node.optJSONArray("children"))
+                }
+            }
+            walk(o.optJSONArray("layers"))
+            boards
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Select an artboard (its group layer) and show it: the canvas centres on its rect, so picking
+     * a page in the Pages panel goes to that page rather than to the document's corner.
+     */
+    suspend fun selectArtboard(id: Long) = withContext(Dispatchers.IO) {
+        engine.execute("layer.select", JSONObject().put("layer", id))
+        refreshAll()
+    }
+
+    /** Put the page's next artboard beside the active one, as the Pages panel's + does. */
+    suspend fun addArtboardBeside(): String = withContext(Dispatchers.IO) {
+        val layer = activeLayer
+        val p = JSONObject()
+        if (layer != null) p.put("layer", layer)
+        p.put("side", "right").put("duplicate", false)
+        val out = engine.execute("layer.artboard.addBeside", p)
+        refreshAll()
+        out
+    }
+
     /** Export: the engine encodes the document and the shell writes the bytes. */
     suspend fun export(format: String, quality: Int = 90): ByteArray = withContext(Dispatchers.IO) {
         engine.exportBytes(format, quality)
@@ -259,10 +401,16 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
 
     // ---------------------------------------------------------------- reads
 
-    suspend fun refreshAll() = withContext(Dispatchers.IO) {
+    suspend fun refreshAll() {
         status = runCatching { engine.status() }.getOrNull()
         refreshPreview()
         refreshLayers()
+        refreshArtboards()
+    }
+
+    /** The document's artboards, for the Pages panel; recomposes the panel when they change. */
+    suspend fun refreshArtboards() {
+        artboards = readArtboards()
     }
 
     suspend fun refreshPreview(maxSide: Int = 2048) = withContext(Dispatchers.IO) {
@@ -317,7 +465,36 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
             val arr = o.optJSONArray("presets") ?: JSONArray()
             (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name")?.takeIf(String::isNotEmpty) }
         }.getOrDefault(emptyList())
+        brushSets = runCatching { engine.studioBrushSets() }.getOrDefault(emptyList())
     }
+
+    /**
+     * Put the drawing app's brush library in place of the engine's generic preset set. Called when
+     * the studio opens a document: the shelf becomes the drawing app's, the same sets and brushes.
+     */
+    suspend fun installBrushes() = withContext(Dispatchers.IO) {
+        runCatching { engine.studioInstallBrushes() }
+        refreshBrushes()
+        previews.clear()
+    }
+
+    /**
+     * A preset's preview: the brush's own stroke, drawn by the engine at [width] × [height]. Cached
+     * by preset name, so a grid that scrolls costs one render per brush.
+     */
+    suspend fun brushPreview(name: String, width: Int = 180, height: Int = 56): Bitmap? {
+        previews[name]?.let { return it }
+        val bmp = runCatching {
+            val params = JSONObject().put("preset", name)
+            engine.brushPreview(width, height, params.toString())
+        }.getOrNull() ?: return null
+        previews[name] = bmp
+        return bmp
+    }
+
+    /** Preview a brush setting patch (the sliders' own brush), for the settings panel's sample. */
+    suspend fun brushPreviewOf(params: JSONObject, width: Int = 240, height: Int = 72): Bitmap? =
+        runCatching { engine.brushPreview(width, height, params.toString()) }.getOrNull()
 
     fun release() = engine.release()
 }

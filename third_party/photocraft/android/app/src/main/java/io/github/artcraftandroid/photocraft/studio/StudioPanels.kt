@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +36,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -586,6 +588,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.histogram(
 @Composable
 private fun PagesBody(a: StudioActions) {
     val s = a.state
+    val scope = rememberCoroutineScope()
     val spreads = listOf(
         Triple("studio/reference/pages-2.webp", 2, "Nora Toth"),
         Triple("studio/reference/pages-4.webp", 4, "Paloma Rincon"),
@@ -602,14 +605,66 @@ private fun PagesBody(a: StudioActions) {
         Text("Pages", fontSize = 11.sp, color = Sc.Title)
         IconButton("chevron", "Next spread", small = true) { s.page = (s.page + 2).coerceAtMost(8) }
     }
+    // The document's own artboards, read once for the toolbar and the list below.
+    val pages = a.engine.artboards
     Row(Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(horizontal = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton("plus", "Add page", small = true) { a.feedback("A document's pages come from its artboards.") }
+        // A page is an artboard: the + puts the next one beside the active one, as the reference's
+        // page grid would, and the duplicate copies it with its contents.
+        IconButton("plus", "Add page", small = true) {
+            scope.engine {
+                val made = runCatching { a.engine.newArtboard() }.getOrNull()
+                if (made != null) a.feedback("A page was added beside the active one.") else a.feedback("No document to add a page to.")
+            }
+        }
         Spacer(Modifier.width(15.dp))
-        IconButton("duplicate", "Duplicate page", small = true) { a.feedback("Duplicate the artboard in the document instead.") }
+        IconButton("duplicate", "Duplicate page", small = true) {
+            scope.engine {
+                runCatching { a.engine.addArtboardBeside() }
+                    .onSuccess { a.feedback("The page was duplicated beside itself.") }
+                    .onFailure { a.feedback(it.message ?: "Nothing to duplicate.") }
+            }
+        }
         Spacer(Modifier.width(15.dp))
-        IconButton("trash", "Delete page", small = true) { a.feedback("Delete the page's artboard in the document.") }
+        IconButton("trash", "Delete page", small = true) {
+            scope.engine {
+                // A page is the active artboard's group layer: the engine deletes what is active,
+                // so the notice says which page went rather than claiming it was always one.
+                val page = pages.firstOrNull { board -> board.id == a.engine.activeLayer }
+                runCatching { a.engine.deleteLayer() }
+                    .onSuccess {
+                        a.feedback(
+                            if (page != null) "“${page.name}” was deleted." else "The active layer was deleted.",
+                        )
+                    }
+                    .onFailure { a.feedback(it.message ?: "Nothing to delete.") }
+            }
+        }
         Spacer(Modifier.weight(1f))
         IconButton("more", "Page options", small = true) { s.toggle("managePages") }
+    }
+    // The document's own artboards first: a page in this studio is an artboard, and the reference's
+    // spreads stand in only while the document has none.
+    if (pages.isNotEmpty()) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 140.dp).verticalScroll(rememberScrollState()).padding(horizontal = 11.dp)) {
+            pages.forEach { board ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 3.dp).clickable {
+                        scope.engine {
+                            a.engine.selectArtboard(board.id)
+                            a.feedback("“${board.name}” is the active page.")
+                        }
+                    },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    StudioIcons.Glyph("pages", Sc.Detail, 12.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(board.name, fontSize = 10.sp, color = Sc.Title, maxLines = 1)
+                    Spacer(Modifier.weight(1f))
+                    Text("${board.w}×${board.h}", fontSize = 9.sp, color = Sc.Detail)
+                }
+            }
+        }
+        PanelDivider()
     }
     Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()).padding(horizontal = 11.dp)) {
         spreads.forEach { (path, page, title) ->
@@ -645,9 +700,19 @@ private fun BrushesBody(a: StudioActions) {
     val s = a.state
     val e = a.engine
     val scope = rememberCoroutineScope()
-    // The reference's filter: the search text, and the Inking category's Ink-only rule.
-    val brushes = (if (e.brushPresets.isEmpty()) StudioBrushes else e.brushPresets)
-        .filter { it.lowercase().contains(s.search.lowercase()) && (s.category != "Inking" || it.contains("Ink")) }
+    // The drawing app's shelf: its sets, each with its brushes. The engine's preset list is the
+    // library, so a brush saved, renamed or deleted in the studio is in the next shelf.
+    val sets = e.brushSets
+    val shipped = remember(sets) { sets.map { it.name } }
+    val categories = shipped.ifEmpty { listOf("Sketching", "Inking", "Painting", "All Brushes") } + "All Brushes"
+    // Where a preset with no set of its own is filed: the library's group, or "Custom".
+    val all = remember(sets) { sets.flatMap { set -> set.brushes.map { it to set.name } } }
+    val shown = all.filter { (brush, set) ->
+        val category = s.category
+        val inSet = category == "All Brushes" || category == set
+        val named = s.search.isEmpty() || brush.name.contains(s.search, ignoreCase = true)
+        inSet && named
+    }
     // `.brush-search`
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 8.dp).height(27.dp)
@@ -675,33 +740,59 @@ private fun BrushesBody(a: StudioActions) {
     SelectField(
         label = "Brush category",
         value = s.category,
-        options = listOf("Sketching", "Pencils", "Inking", "All Brushes"),
+        options = categories,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp).height(25.dp),
     ) { s.category = it }
     Column(Modifier.fillMaxWidth().heightIn(max = 355.dp).verticalScroll(rememberScrollState())) {
-        brushes.forEachIndexed { i, name ->
-            val on = s.brush == name
+        shown.forEach { (brush, set) ->
+            val on = s.brush == brush.name
             Column(
                 Modifier.fillMaxWidth().height(49.dp)
                     .background(if (on) Color(0x07FFFFFF) else Color.Transparent)
                     .border(1.dp, if (on) Color(0xFF358ED9) else Color.Transparent)
                     .clickable {
-                        s.brush = name
-                        scope.engine { e.setBrush(preset = name) }
+                        s.brush = brush.name
+                        s.setValue("brushSize", brush.size.toInt().coerceAtLeast(1).toString())
+                        scope.engine {
+                            // The preset brings its own tip, dynamics and stabilisation: the
+                            // studio's brush is the drawing app's brush.
+                            e.setBrush(preset = brush.name)
+                            s.setValue("brushSize", (e.brushValue("size").toFloatOrNull() ?: brush.size).toInt().toString())
+                        }
                 }
                     .padding(horizontal = 10.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
-                BrushStrokeSample(i, Modifier.fillMaxWidth().height(31.dp))
-                Text(name, fontSize = 9.sp, color = Color(0xFFB9BEAF), maxLines = 1)
+                // The engine's own stroke with this brush, not a stand-in line.
+                val preview = remember(brush.name) { mutableStateOf<android.graphics.Bitmap?>(null) }
+                LaunchedEffect(brush.name) {
+                    val bmp = e.brushPreview(brush.name, 180, 34)
+                    if (bmp != null) preview.value = bmp
+                }
+                val bmp = preview.value
+                if (bmp != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxWidth().height(31.dp),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    )
+                } else {
+                    BrushStrokeSample(0, Modifier.fillMaxWidth().height(31.dp))
+                }
+                Text(brush.name, fontSize = 9.sp, color = Color(0xFFB9BEAF), maxLines = 1)
         }
         }
-        if (brushes.isEmpty()) {
+        if (shown.isEmpty()) {
             Column(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("No brushes match “${s.search}”.", fontSize = 11.sp, color = Color(0xFFA8AF9A))
+                Text(
+                    if (s.search.isNotEmpty()) "No brushes match \u201C${s.search}\u201D." else "This set is empty.",
+                    fontSize = 11.sp,
+                    color = Color(0xFFA8AF9A),
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Show all brushes",
@@ -718,8 +809,9 @@ private fun BrushesBody(a: StudioActions) {
             .border(width = 0.dp, color = Color.Transparent)
             .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 11.dp),
     ) {
-        FieldRow("Width") {
-            NumberField(s.value("brushSize"), "Brush width", suffix = "px") { v -> s.setValue("brushSize", v) }
+        // `.brush-controls > label` is 9 px, and its number field 22 px tall.
+        FieldRow("Width", labelSize = 9) {
+            NumberField(s.value("brushSize"), "Brush width", suffix = "px", height = 22) { v -> s.setValue("brushSize", v) }
         }
         StudioSlider(
             fraction = ((s.value("brushSize").toFloatOrNull() ?: 24f) - 1f) / 499f,
@@ -729,8 +821,8 @@ private fun BrushesBody(a: StudioActions) {
             s.setValue("brushSize", px.toString())
             scope.engine { e.setBrush(size = px.toFloat()) }
         }
-        FieldRow("Opacity") {
-            NumberField(s.value("brushOpacity"), "Brush opacity", suffix = "%") { v -> s.setValue("brushOpacity", v) }
+        FieldRow("Opacity", labelSize = 9) {
+            NumberField(s.value("brushOpacity"), "Brush opacity", suffix = "%", height = 22) { v -> s.setValue("brushOpacity", v) }
         }
         StudioSlider(
             fraction = (s.value("brushOpacity").toFloatOrNull() ?: 100f) / 100f,
@@ -739,33 +831,6 @@ private fun BrushesBody(a: StudioActions) {
             val pct = (f * 100f).toInt()
             s.setValue("brushOpacity", pct.toString())
             scope.engine { e.setBrush(opacity = pct / 100f) }
-        }
-    }
-}
-/** `.brush-preset svg`: the stroke sample, its width varying down the list. */
-@Composable
-private fun BrushStrokeSample(index: Int, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val w = size.width
-        val h = size.height
-        val width = 2f + (index % 5) * 2f
-        val path = Path().apply {
-            moveTo(w * 0.015f, h * 0.72f)
-            quadraticBezierTo(w * 0.26f, h * 0.15f, w * 0.5f, h * 0.47f)
-            quadraticBezierTo(w * 0.75f, h * 0.79f, w * 0.985f, h * 0.28f)
-        }
-        drawPath(
-            path,
-            Color(0xFFEEEEEE).copy(alpha = 0.85f),
-            style = Stroke(width = width, cap = StrokeCap.Round),
-        )
-        if (index < 5) {
-            val ghost = Path().apply {
-                moveTo(w * 0.03f, h * 0.81f)
-                quadraticBezierTo(w * 0.26f, h * 0.22f, w * 0.52f, h * 0.59f)
-                quadraticBezierTo(w * 0.76f, h * 0.96f, w * 0.985f, h * 0.37f)
-        }
-            drawPath(ghost, Color(0xFFAAAAAA), style = Stroke(width = 0.6f))
         }
     }
 }
