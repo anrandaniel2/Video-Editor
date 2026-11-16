@@ -570,7 +570,11 @@ class PhotoEditorViewModel : ViewModel() {
         }
         viewModelScope.launch {
             try {
-                engine.execute(strokeCommand(), strokeParams(points))
+                // A non-live path (a tap with the Heal tool, say) has no stamped samples: the
+                // positions become points with full pressure and no elapsed time, which is what
+                // the engine used for every point before the live pipeline existed.
+                val stamped = points.map { (x, y) -> StrokePoint(x, y) }
+                engine.execute(strokeCommand(), strokeParams(stamped))
                 refresh()
             } catch (e: Exception) {
                 error = e.message ?: "The stroke couldn't be painted."
