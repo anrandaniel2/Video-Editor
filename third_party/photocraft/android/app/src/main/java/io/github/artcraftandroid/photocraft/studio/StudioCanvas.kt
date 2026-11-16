@@ -133,6 +133,8 @@ fun StudioCanvas(
         // A long stroke lays many small rectangles; past a few dozen, fold them into one that
         // covers the stroke's whole reach, so a long stroke costs one bitmap, not one per frame.
         val kept = parts
+        // The fold starts from this frame, so the union covers the dabs already drawn *and* the
+        // new one; folding only the kept parts would drop a dab that fell outside their reach.
         val union = kept.fold(frame) { a, p -> Rect(minOf(a.left, p.doc.left), minOf(a.top, p.doc.top), maxOf(a.right, p.doc.right), maxOf(a.bottom, p.doc.bottom)) }
         val fetch = if (kept.size >= 24) union else frame
         val bmp = engine.strokePixels(
@@ -258,7 +260,9 @@ fun StudioCanvas(
                             ticker.cancel()
                             gate.withLock {
                                 // The commit: the engine takes the pixels it previewed, so this
-                                // stroke is one History step and nothing is re-rendered.
+                                // stroke is one History step and nothing is re-rendered. The
+                                // engine's refresh runs inside `strokeEnd`, so the composite it
+                                // reads back already has the stroke in it.
                                 val ended = runCatching { engine.strokeEnd() }
                                 if (ended.isFailure) {
                                     runCatching { engine.strokeCancel() }
@@ -266,8 +270,8 @@ fun StudioCanvas(
                                 }
                                 // The composite first, then the preview dropped: a frame between
                                 // the two must not show the canvas without the stroke it has just
-                                // committed.
-                                runCatching { engine.refreshAll() }
+                                // committed. That ordering is `strokeEnd`'s refresh, which has
+                                // landed by here.
                                 parts = emptyList()
                                 strokePoints = emptyList()
                             }

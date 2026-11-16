@@ -308,6 +308,15 @@ impl PhotoSession {
         brush.behind = false;
         brush.color = [PREVIEW_INK[0], PREVIEW_INK[1], PREVIEW_INK[2], 1.0];
         brush.background = brush.color;
+        // A thumbnail shows the brush's shape, not its size: a sampled tip is scaled so its larger
+        // side equals `size`, and the shelf's brushes run to 380 px against a thumbnail 34 px tall,
+        // so drawing them at their own size fills the box and every wide brush looks the same
+        // clipped slab. Fit the brush to the preview instead, keeping its proportions (a dual
+        // tip scales with it, as `resize_with_dual_brush` does for a picked preset).
+        let room = fw.min(fh) * PREVIEW_FIT;
+        if brush.size > room && brush.size.is_finite() && room > 0.0 {
+            brush.resize_with_dual_brush((room as f32).max(1.0));
+        }
         photocraft_paint::render_stroke_clipped(&mut surf, &brush, &points, None, false, 1.0, Some(rect));
         surface_frame(&surf, rect).ok_or_else(|| PhotoError::Render("the preview is empty".into()))
     }
@@ -315,6 +324,10 @@ impl PhotoSession {
 
 /// The ink a brush preview paints with: the studio panel's light stroke colour.
 const PREVIEW_INK: [f32; 3] = [0.93, 0.93, 0.93];
+
+/// How much of the preview's shorter side a brush may fill before it is scaled down to fit: the
+/// stroke's arc and its own radius stay inside the thumbnail, so the brush's edge is visible.
+const PREVIEW_FIT: f64 = 0.42;
 
 /// `points` as the command's JSON: `[[x, y, pressure, tiltX, tiltY, rotation, time, wheel], …]`.
 fn points_json(points: &[StrokePoint]) -> Value {
@@ -446,6 +459,28 @@ mod tests {
         // A preset patches it without being picked.
         let other = s.brush_preview(96, 40, r#"{"preset":"Soft Airbrush"}"#.into());
         assert!(other.is_ok(), "{:?}", other.err());
+    }
+
+    #[test]
+    fn a_wide_brush_still_shows_a_stroke_in_the_thumbnail() {
+        // The shelf's brushes run to 380 px against a 34 px thumbnail: drawn at their own size a
+        // sampled tip covers the whole box, so every wide brush's thumbnail was the same filled
+        // slab with no stroke to see. The preview fits the brush to the box instead.
+        let s = session();
+        for size in [70.0, 160.0, 380.0] {
+            let params = format!(r#"{{"size":{size}}}"#);
+            let f = s.brush_preview(180, 34, params).unwrap();
+            assert_eq!((f.width, f.height), (180, 34));
+            let painted = f.rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
+            let share = painted as f64 / f64::from(f.width * f.height);
+            // A stroke through the box, not a flood: at its own size the widest brush painted
+            // every pixel, which is why its thumbnail showed no shape at all.
+            assert!(share < 0.60, "size {size}: the preview is a flood, not a stroke ({share:.2})");
+            assert!(share > 0.02, "size {size}: the preview is blank ({share:.2})");
+            // And the stroke spans the box, as a stroke sample does.
+            let row_opaque = |y: u32| (0..f.width).filter(|&x| f.rgba[((y * f.width + x) * 4) as usize + 3] > 0).count();
+            assert!((0..f.height).any(|y| row_opaque(y) > f.width / 2), "size {size}: a stroke crosses the box");
+        }
     }
 
     #[test]

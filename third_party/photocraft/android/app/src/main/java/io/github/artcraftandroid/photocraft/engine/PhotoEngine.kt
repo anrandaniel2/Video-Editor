@@ -165,11 +165,6 @@ class PhotoEngine {
         session().strokeCancel()
     }
 
-    /** Whether a live stroke is in progress. */
-    suspend fun strokeActive(): Boolean = withContext(Dispatchers.IO) {
-        session().strokeActive()
-    }
-
     // -------------------------------------------------------------------- brushes
 
     /** The brush the engine will paint the next stroke with, as JSON (`tools.setBrush`'s shape). */

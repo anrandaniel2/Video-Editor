@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -743,8 +745,15 @@ private fun BrushesBody(a: StudioActions) {
         options = categories,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp).height(25.dp),
     ) { s.category = it }
-    Column(Modifier.fillMaxWidth().heightIn(max = 355.dp).verticalScroll(rememberScrollState())) {
-        shown.forEach { (brush, set) ->
+    // A lazy list, not a Column of 122 rows: every row composes its own preview, so a Column
+    // asked the engine for 122 strokes as the panel opened and stalled behind the canvas. This
+    // composes the rows on screen (a dozen) and asks for those.
+    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 355.dp)) {
+        items(
+            items = shown,
+            key = { row -> row.first.name },
+        ) { row ->
+            val (brush, _) = row
             val on = s.brush == brush.name
             Column(
                 Modifier.fillMaxWidth().height(49.dp)
@@ -759,14 +768,17 @@ private fun BrushesBody(a: StudioActions) {
                             e.setBrush(preset = brush.name)
                             s.setValue("brushSize", (e.brushValue("size").toFloatOrNull() ?: brush.size).toInt().toString())
                         }
-                }
+                    }
                     .padding(horizontal = 10.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
-                // The engine's own stroke with this brush, not a stand-in line.
+                // The engine's own stroke with this brush, not a stand-in line. Rendered at the
+                // sample's own shape (190 × 31, the reference's `.brush-preset svg`) and stretched
+                // to fill it: `Fit` letterboxed a 180 × 34 bitmap into a 31 dp box, so the stroke
+                // sat in a thin band with dead space above and below it.
                 val preview = remember(brush.name) { mutableStateOf<android.graphics.Bitmap?>(null) }
                 LaunchedEffect(brush.name) {
-                    val bmp = e.brushPreview(brush.name, 180, 34)
+                    val bmp = e.brushPreview(brush.name, 190, 31)
                     if (bmp != null) preview.value = bmp
                 }
                 val bmp = preview.value
@@ -775,32 +787,34 @@ private fun BrushesBody(a: StudioActions) {
                         bitmap = bmp.asImageBitmap(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxWidth().height(31.dp),
-                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                        contentScale = androidx.compose.ui.layout.ContentScale.FillWidth,
                     )
                 } else {
                     BrushStrokeSample(0, Modifier.fillMaxWidth().height(31.dp))
                 }
                 Text(brush.name, fontSize = 9.sp, color = Color(0xFFB9BEAF), maxLines = 1)
-        }
+            }
         }
         if (shown.isEmpty()) {
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 26.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    if (s.search.isNotEmpty()) "No brushes match \u201C${s.search}\u201D." else "This set is empty.",
-                    fontSize = 11.sp,
-                    color = Color(0xFFA8AF9A),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Show all brushes",
-                    fontSize = 11.sp,
-                    color = Color(0xFF7AB8FF),
-                    modifier = Modifier.clickable { s.search = ""; s.category = "All Brushes" },
-                )
-        }
+            item {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 26.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        if (s.search.isNotEmpty()) "No brushes match \u201C${s.search}\u201D." else "This set is empty.",
+                        fontSize = 11.sp,
+                        color = Color(0xFFA8AF9A),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Show all brushes",
+                        fontSize = 11.sp,
+                        color = Color(0xFF7AB8FF),
+                        modifier = Modifier.clickable { s.search = ""; s.category = "All Brushes" },
+                    )
+                }
+            }
         }
     }
     // `.brush-controls`: width and opacity, pill and slider.

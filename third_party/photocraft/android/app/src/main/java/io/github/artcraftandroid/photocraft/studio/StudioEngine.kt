@@ -44,13 +44,6 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
         private set
 
     /**
-     * The brush names, in the library's order. The Brushes panel reads it, and recomposes when the
-     * library changes.
-     */
-    var brushPresets by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    /**
      * The drawing app's brush shelf, set by set: the Brushes panel's column of sets and its grid.
      * Read from the engine's live preset list, so a preset the person saves or deletes is in the
      * next read with no second copy of the library to keep in step.
@@ -65,8 +58,12 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     var artboards by mutableStateOf<List<Artboard>>(emptyList())
         private set
 
-    /** The brush previews, by preset name, drawn once and kept: the grid asks for each one once. */
-    private val previews = HashMap<String, Bitmap>()
+    /**
+     * The brush previews, by preset name and size, drawn once and kept: the lazy list asks again
+     * for a row it scrolls back to, and the canvas asks for none. Guarded, because the rows render
+     * from their own coroutines and a plain `HashMap` written from two of them corrupts.
+     */
+    private val previews = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
 
     val hasDocument: Boolean get() = status?.active != null
 
@@ -248,14 +245,6 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     suspend fun strokeCancel() = withContext(Dispatchers.IO) {
         engine.strokeCancel()
     }
-
-    /** Whether a live stroke is in progress. */
-    suspend fun strokeActive(): Boolean = withContext(Dispatchers.IO) {
-        engine.strokeActive()
-    }
-
-    /** The whole brush as JSON, for the settings panel's readouts. */
-    suspend fun brushJson(): JSONObject = withContext(Dispatchers.IO) { engine.brush() }
 
     suspend fun setColours(foreground: String? = null, background: String? = null) = withContext(Dispatchers.IO) {
         val p = JSONObject()
@@ -515,11 +504,9 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     }
 
     suspend fun refreshBrushes() = withContext(Dispatchers.IO) {
-        brushPresets = runCatching {
-            val o = JSONObject(engine.execute("brush.presets.list", "{}"))
-            val arr = o.optJSONArray("presets") ?: JSONArray()
-            (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name")?.takeIf(String::isNotEmpty) }
-        }.getOrDefault(emptyList())
+        // One read: `studio_brush_sets` is the same live preset list, grouped into the panel's
+        // sets, so a second `brush.presets.list` for names the panel never showed only cost a
+        // lock on the session the canvas shares.
         brushSets = runCatching { engine.studioBrushSets() }.getOrDefault(emptyList())
     }
 
@@ -534,22 +521,23 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     }
 
     /**
-     * A preset's preview: the brush's own stroke, drawn by the engine at [width] × [height]. Cached
-     * by preset name, so a grid that scrolls costs one render per brush.
+     * A preset's preview: the brush's own stroke, drawn by the engine at [width] × [height] and
+     * fitted to it, so a wide brush still reads as a stroke rather than a flood. Cached by preset
+     * name and size, so a list that scrolls costs one render per brush.
      */
     suspend fun brushPreview(name: String, width: Int = 180, height: Int = 56): Bitmap? {
-        previews[name]?.let { return it }
+        // The size is part of the key: a thumbnail cached at one shape must not be handed out for
+        // another (the panel's row and the settings sample are different shapes).
+        val key = "$name@$width×$height"
+        previews[key]?.let { return it }
         val bmp = runCatching {
             val params = JSONObject().put("preset", name)
             engine.brushPreview(width, height, params.toString())
         }.getOrNull() ?: return null
-        previews[name] = bmp
+        previews[key] = bmp
         return bmp
     }
 
-    /** Preview a brush setting patch (the sliders' own brush), for the settings panel's sample. */
-    suspend fun brushPreviewOf(params: JSONObject, width: Int = 240, height: Int = 72): Bitmap? =
-        runCatching { engine.brushPreview(width, height, params.toString()) }.getOrNull()
 
     fun release() = engine.release()
 }
