@@ -2,6 +2,7 @@ package io.github.artcraftandroid.filmcraft.ui.editor.photo
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,10 +42,7 @@ internal fun PhotoPanel(session: PhotoSession, kind: PhotoPanelKind, modifier: M
             PhotoPanelKind.Adjust, PhotoPanelKind.Curves -> AdjustPanel(session)
             PhotoPanelKind.Colour -> ColourPanel(session)
             PhotoPanelKind.Brush -> BrushPanel(session)
-            PhotoPanelKind.Retouch -> RetouchPanel()
             PhotoPanelKind.Layers -> LayersPanel(session)
-            PhotoPanelKind.Crop -> CropPanel()
-            PhotoPanelKind.None -> {}
         }
     }
 }
@@ -190,16 +188,6 @@ private fun BrushPanel(session: PhotoSession) {
  * a slider. Rather than a control that does nothing, the panel says what the tool is waiting for.
  */
 @Composable
-private fun RetouchPanel() {
-    PanelTitle("Retouch")
-    Text(
-        "Tap the picture to set the source, then paint over what should go. The stroke samples the "
-            + "source and paints it, the way a healing brush does.",
-        color = PanelMuted,
-        fontSize = 10.sp,
-        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
-    )
-}
 
 @Composable
 private fun LayersPanel(session: PhotoSession) {
@@ -236,16 +224,6 @@ private fun LayersPanel(session: PhotoSession) {
 }
 
 @Composable
-private fun CropPanel() {
-    PanelTitle("Crop")
-    Text(
-        "Drag an edge of the crop box to trim the picture. Apply keeps the crop; the original is one "
-            + "undo away, because the engine keeps history as tiles rather than as files.",
-        color = PanelMuted,
-        fontSize = 10.sp,
-        modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
-    )
-}
 
 /**
  * A slider that reports both the drag and its end.
@@ -267,7 +245,7 @@ internal fun PhotoSlider(
         modifier
             .height(22.dp)
             .pointerInput(range, min, max) {
-                androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+                detectHorizontalDragGestures(
                     onDragStart = { offset ->
                         onChange(if (range) min!! + (max!! - min) * (offset.x / size.width).coerceIn(0f, 1f) else (offset.x / size.width).coerceIn(0f, 1f))
                     },

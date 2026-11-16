@@ -16,9 +16,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,8 +55,8 @@ internal fun PhotoEditorScreen(
     Row(Modifier.fillMaxSize().background(Color(0xFF1B1C1A))) {
         PhotoRail(
             tool = session.tool,
-            canUndo = session.info?.can_undo == true,
-            canRedo = session.info?.can_redo == true,
+            canUndo = session.info?.canUndo == true,
+            canRedo = session.info?.canRedo == true,
             onTool = { session.choose(it) },
             onUndo = { session.undo() },
             onRedo = { session.redo() },
@@ -76,19 +78,21 @@ internal fun PhotoEditorScreen(
     LaunchedEffect(photo) { session.loadRegion() }
 }
 
-/** The tools a photo is edited with. The order is the reference UI's Pixel workspace. */
+/**
+ * The tools a photo is edited with.
+ *
+ * Only tools the engine can actually carry out are here. The reference's Pixel workspace also has
+ * Move, Crop, Select, Fill, Heal and Clone; each needs engine work that does not exist yet (a crop
+ * that rewrites the document, a floating selection, a fill against float tiles). A button that
+ * opens a panel saying "not yet" is worse than not having the button, so they are absent until
+ * they work.
+ */
 internal enum class PhotoTool(val label: String, val panel: PhotoPanelKind?) {
-    Move("Move", null),
-    Crop("Crop", PhotoPanelKind.Crop),
-    Select("Select", PhotoPanelKind.None),
-    Brush("Paint", PhotoPanelKind.Brush),
-    Erase("Erase", PhotoPanelKind.Brush),
-    Heal("Heal", PhotoPanelKind.Retouch),
-    Clone("Clone", PhotoPanelKind.Retouch),
-    Fill("Fill", null),
     Adjust("Adjust", PhotoPanelKind.Adjust),
     Curves("Curves", PhotoPanelKind.Curves),
     Colour("Colour", PhotoPanelKind.Colour),
+    Brush("Paint", PhotoPanelKind.Brush),
+    Erase("Erase", PhotoPanelKind.Brush),
     Layers("Layers", PhotoPanelKind.Layers),
 }
 
@@ -112,7 +116,7 @@ private fun PhotoRail(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        RailButton("✓", "Done", false, onDone)
+        RailButton("✓", "Done", false, onClick = onDone)
         Spacer(Modifier.height(10.dp))
         PhotoTool.entries.forEach { entry ->
             RailButton(GLYPHS[entry] ?: "•", entry.label, entry == tool) { onTool(entry) }
@@ -129,10 +133,8 @@ private fun PhotoRail(
  * is the one place a real icon set should replace it.
  */
 private val GLYPHS = mapOf(
-    PhotoTool.Move to "✥", PhotoTool.Crop to "⧉", PhotoTool.Select to "⬚",
-    PhotoTool.Brush to "✎", PhotoTool.Erase to "⌫", PhotoTool.Heal to "✚",
-    PhotoTool.Clone to "⧉", PhotoTool.Fill to "◧", PhotoTool.Adjust to "◐",
-    PhotoTool.Curves to "∿", PhotoTool.Colour to "◉", PhotoTool.Layers to "▤",
+    PhotoTool.Adjust to "◐", PhotoTool.Curves to "∿", PhotoTool.Colour to "◉",
+    PhotoTool.Brush to "✎", PhotoTool.Erase to "⌫", PhotoTool.Layers to "▤",
 )
 
 @Composable
@@ -142,7 +144,8 @@ private fun RailButton(glyph: String, label: String, selected: Boolean, enabled:
             .size(46.dp, 42.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (selected) Color(0xFF328FFF) else Color.Transparent)
-            .clickable(enabled = enabled, onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -179,7 +182,9 @@ private fun PhotoHeader(title: String, onExport: () -> Unit, onClose: () -> Unit
  */
 @Composable
 private fun PhotoCanvas(session: PhotoSession, modifier: Modifier) {
-    val bitmap = session.region
+    // While an adjustment is being dragged the canvas shows the preview, which is the picture with
+    // the new value already in it. Otherwise it shows the committed picture.
+    val bitmap = session.preview ?: session.region
     Box(modifier.background(Color(0xFF141513)), contentAlignment = Alignment.Center) {
         if (bitmap != null) {
             val image = remember(bitmap) { bitmap.asImageBitmap() }
@@ -207,7 +212,7 @@ private fun PhotoCanvas(session: PhotoSession, modifier: Modifier) {
                     translate((size.width - image.width * scale) / 2f, (size.height - image.height * scale) / 2f)
                     scale(scale, scale, androidx.compose.ui.geometry.Offset.Zero)
                 }) {
-                    drawImage(image, contentScale = ContentScale.FillBounds, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
+                    drawImage(image, filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
                 }
             }
         } else {

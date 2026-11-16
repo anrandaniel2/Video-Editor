@@ -42,6 +42,18 @@ internal class PhotoSession(private val scope: CoroutineScope) {
     var region: Bitmap? by mutableStateOf(null)
         private set
 
+    /**
+     * The picture with the adjustments the sliders currently hold, at thumbnail cost.
+     *
+     * Non-null only while a slider is being dragged. The canvas draws this instead of [region], so
+     * the thumb sees the change immediately without the engine having to re-render the document.
+     * Lifting the finger commits the stack and clears this.
+     */
+    var preview: Bitmap? by mutableStateOf(null)
+        private set
+
+    private var previewJob: kotlinx.coroutines.Job? = null
+
     var tool: PhotoTool by mutableStateOf(PhotoTool.Adjust)
         private set
 
@@ -163,10 +175,44 @@ internal class PhotoSession(private val scope: CoroutineScope) {
 
     fun selectAdjustment(adjustment: Adjustment) { activeAdjustment = adjustment }
 
-    /** A slider moved. The value is kept and the *preview* is asked for, not the picture. */
+    /**
+     * A slider moved.
+     *
+     * The value is kept and a preview is asked for — a thumbnail with the new stack, not the
+     * document. A new drag cancels the previous preview, so a fast thumb does not queue renders.
+     */
     fun setAdjustment(value: Float) {
         val adjustment = activeAdjustment
         values = values + (adjustment to adjustment.clamp(value))
+        requestPreview()
+    }
+
+    private fun requestPreview() {
+        val photo = document ?: return
+        previewJob?.cancel()
+        val held = values.toAdjustments()
+        previewJob = scope.launch {
+            try {
+                val shown = displaySize
+                if (shown.width < 1f) return@launch
+                val next = withContext(Dispatchers.Default) {
+                    // One thumbnail: the same cost for a 2-megapixel photo and a 48-megapixel one.
+                    val pixels = photo.preview(
+                        held,
+                        (shown.width / 2f).roundToInt().coerceIn(16, 640).toUInt(),
+                        (shown.height / 2f).roundToInt().coerceIn(16, 640).toUInt(),
+                    )
+                    bitmapOf(pixels.rgba, pixels.width, pixels.height)
+                }
+                preview = next
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A preview that cannot render is not worth an error: the committed picture is
+                // still on screen and the commit will say if it fails.
+                preview = null
+            }
+        }
     }
 
     /** The slider released: commit it to the engine, which is the one undoable step. */
@@ -179,6 +225,7 @@ internal class PhotoSession(private val scope: CoroutineScope) {
                 // Back to neutral: the change is in the pixels now, and the sliders describe the
                 // *next* change rather than an absolute state the engine has no notion of.
                 values = Adjustment.entries.associateWith { it.neutral }
+                preview = null
                 loadRegion()
             } catch (e: Exception) {
                 status = e.message ?: "The adjustment couldn't be applied."

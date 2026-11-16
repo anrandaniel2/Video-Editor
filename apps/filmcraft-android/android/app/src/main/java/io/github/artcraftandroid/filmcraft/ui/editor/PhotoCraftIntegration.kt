@@ -128,7 +128,7 @@ internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             PhotoEditorScreen(
                 session = session,
-                title = ed.timeline?.name ?: "Untitled",
+                title = ed.project.name,
                 onExport = { session.flatten { bytes, w, h -> finish(bytes, w, h) } },
                 onClose = dismiss,
             )
