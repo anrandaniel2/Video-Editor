@@ -31,6 +31,10 @@ pub struct StudioBrush {
     pub hardness: f32,
     /// `"round"` or `"sampled"`: a computed tip or a bitmap.
     pub tip: String,
+    /// The brush's own stabilisation, 0..1, or `-1` when it has none. `tools.setBrush` keeps the
+    /// tool's smoothing otherwise (it is a tool option there), so the panel sends this back with
+    /// the preset to keep the stroke the way the brush was made.
+    pub smoothing: f32,
     /// The preset the engine ships (true) or one the person made or imported (false).
     pub builtin: bool,
 }
@@ -60,6 +64,7 @@ pub fn studio_shelf() -> Vec<StudioBrushSet> {
                     photocraft_paint::TipShape::Round => "round",
                     _ => "sampled",
                 },
+                "smoothing": if p.brush.smoothing.enabled { p.brush.smoothing.amount } else { -1.0 },
             })
         })
         .collect();
@@ -85,6 +90,7 @@ fn brush_of(v: &Value) -> Option<(String, StudioBrush)> {
         size: v.get("size").and_then(Value::as_f64).unwrap_or(20.0) as f32,
         hardness: v.get("hardness").and_then(Value::as_f64).unwrap_or(1.0) as f32,
         tip: v.get("tip").and_then(Value::as_str).unwrap_or("round").to_owned(),
+        smoothing: v.get("smoothing").and_then(Value::as_f64).unwrap_or(-1.0) as f32,
         builtin: v.get("builtin").and_then(Value::as_bool).unwrap_or(false),
     };
     // A preset with no group of its own is filed by the library, so imported and older presets
@@ -180,6 +186,24 @@ mod tests {
         assert_eq!(shelf[0].brushes[0].name, "Graphite");
         assert_eq!(shelf.iter().map(|s| s.brushes.len()).sum::<usize>(), studiobrush::library().len());
         assert!(shelf.iter().all(|s| s.brushes.iter().all(|b| b.size > 0.0)));
+    }
+
+    #[test]
+    fn a_brush_carries_its_own_stabilisation() {
+        // `tools.setBrush` keeps the *tool's* smoothing when a preset has its own (`picked_over`),
+        // so the shelf has to publish each brush's amount for the panel to send it back; without
+        // it every studio brush painted with the tool's default and lost its streamline.
+        let shelf = studio_shelf();
+        let pen = shelf.iter().flat_map(|s| &s.brushes).find(|b| b.name == "Ink Pen").expect("Ink Pen");
+        assert!(pen.smoothing > 0.0, "Ink Pen's stabilisation: {}", pen.smoothing);
+        let pencil = shelf.iter().flat_map(|s| &s.brushes).find(|b| b.name == "Soft Pencil").expect("Soft Pencil");
+        assert!(pencil.smoothing < 0.0, "Soft Pencil has no stabilisation: {}", pencil.smoothing);
+        // And sending it back puts it on the brush. (`tools.setBrush` needs no document.)
+        let s = PhotoSession::new();
+        s.execute("tools.setBrush".into(), json!({ "preset": "Ink Pen", "smoothing": pen.smoothing }).to_string()).unwrap();
+        let b: Value = serde_json::from_str(&s.brush()).unwrap();
+        assert_eq!(b["smoothing"]["enabled"], Value::Bool(true));
+        assert!((b["smoothing"]["amount"].as_f64().unwrap() - f64::from(pen.smoothing)).abs() < 1e-6);
     }
 
     #[test]

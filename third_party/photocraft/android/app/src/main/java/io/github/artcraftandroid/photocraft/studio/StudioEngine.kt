@@ -181,15 +181,24 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     // ---------------------------------------------------------------- paint
 
     /** The brush every painting tool uses: one command carries every setting the panels edit. */
-    suspend fun setBrush(size: Float? = null, hardness: Float? = null, opacity: Float? = null, preset: String? = null) =
-        withContext(Dispatchers.IO) {
-            val p = JSONObject()
-            if (size != null) p.put("size", size.toDouble().coerceIn(0.5, 5000.0))
-            if (hardness != null) p.put("hardness", hardness.toDouble().coerceIn(0.0, 1.0))
-            if (opacity != null) p.put("opacity", opacity.toDouble().coerceIn(0.0, 1.0))
-            if (preset != null) p.put("preset", preset)
-            if (p.length() > 0) engine.execute("tools.setBrush", p)
-        }
+    suspend fun setBrush(
+        size: Float? = null,
+        hardness: Float? = null,
+        opacity: Float? = null,
+        preset: String? = null,
+        // The preset's own stabilisation (0..1; negative for none). `tools.setBrush` keeps the
+        // tool's smoothing otherwise, which made every studio brush loose the streamline its
+        // library entry was made with.
+        smoothing: Float? = null,
+    ) = withContext(Dispatchers.IO) {
+        val p = JSONObject()
+        if (size != null) p.put("size", size.toDouble().coerceIn(0.5, 5000.0))
+        if (hardness != null) p.put("hardness", hardness.toDouble().coerceIn(0.0, 1.0))
+        if (opacity != null) p.put("opacity", opacity.toDouble().coerceIn(0.0, 1.0))
+        if (preset != null) p.put("preset", preset)
+        if (smoothing != null && smoothing >= 0f) p.put("smoothing", smoothing.toDouble().coerceIn(0.0, 1.0))
+        if (p.length() > 0) engine.execute("tools.setBrush", p)
+    }
 
     /** One key of the engine's brush, as the JSON it is (`"24.0"`, `"true"`, `"\"round\""`). */
     suspend fun brushValue(key: String): String = withContext(Dispatchers.IO) {

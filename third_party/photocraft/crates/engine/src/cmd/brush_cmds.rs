@@ -970,6 +970,10 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
                     TipShape::Stored(t) => json!(t.width.max(t.height)),
                 },
                 "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
+                // The brush's own stabilisation. It is a tool option, so picking the preset keeps
+                // the tool's (`picked_over`); a panel that wants the brush to feel the way its
+                // author made it (the studio does) reads this and sends it back as `smoothing`.
+                "smoothing": if pr.brush.smoothing.enabled { json!(pr.brush.smoothing.amount) } else { Value::Null },
             });
             if full {
                 // Full settings embed the bitmaps: load stored tips (a tip that can't be loaded

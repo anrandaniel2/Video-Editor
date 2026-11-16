@@ -106,6 +106,8 @@ data class BrushPreset(
     val builtin: Boolean,
     val size: Float,
     val hardness: Float,
+    /** The brush's own stabilisation (null: it has none), so a pick can keep its feel. */
+    val smoothing: Float? = null,
 )
 
 /** One command, as the engine's own registry lists it (`command.list`). */
@@ -870,7 +872,13 @@ class PhotoEditorViewModel : ViewModel() {
         viewModelScope.launch {
             error = null
             try {
-                engine.execute("tools.setBrush", JSONObject().put("preset", name))
+                val p = JSONObject().put("preset", name)
+                // Smoothing is a tool option, so `tools.setBrush` keeps the tool's instead of the
+                // preset's. The studio's brushes are made with their own stabilisation, and the
+                // photo editor is supposed to stroke the way the studio does, so send the
+                // preset's own amount back and let the brush be the brush it was drawn as.
+                brushes.firstOrNull { it.name == name }?.smoothing?.let { p.put("smoothing", it) }
+                engine.execute("tools.setBrush", p)
                 selectedBrush = name
                 readBrush()
                 renderInto()
@@ -1112,6 +1120,7 @@ class PhotoEditorViewModel : ViewModel() {
                         builtin = o.optBoolean("builtin", false),
                         size = o.optDouble("size", 32.0).toFloat(),
                         hardness = o.optDouble("hardness", 0.8).toFloat(),
+                        smoothing = if (o.isNull("smoothing")) null else o.optDouble("smoothing").toFloat(),
                     )
                     // The set the engine files the brush under (the studio's own grouping).
                     val set = o.optString("group").ifEmpty { "Custom" }

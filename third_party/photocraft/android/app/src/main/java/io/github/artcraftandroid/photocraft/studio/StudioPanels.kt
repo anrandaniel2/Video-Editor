@@ -763,9 +763,10 @@ private fun BrushesBody(a: StudioActions) {
                         s.brush = brush.name
                         s.setValue("brushSize", brush.size.toInt().coerceAtLeast(1).toString())
                         scope.engine {
-                            // The preset brings its own tip, dynamics and stabilisation: the
-                            // studio's brush is the drawing app's brush.
-                            e.setBrush(preset = brush.name)
+                            // The preset brings its own tip and dynamics; its stabilisation has
+                            // to be sent alongside, because `tools.setBrush` keeps the tool's
+                            // smoothing when the preset has its own (`picked_over`).
+                            e.setBrush(preset = brush.name, smoothing = brush.smoothing)
                             s.setValue("brushSize", (e.brushValue("size").toFloatOrNull() ?: brush.size).toInt().toString())
                         }
                     }
