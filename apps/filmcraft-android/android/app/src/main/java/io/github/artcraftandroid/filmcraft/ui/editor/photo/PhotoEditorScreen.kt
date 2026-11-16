@@ -65,7 +65,7 @@ internal fun PhotoEditorScreen(
         // The picture, and beside it the panel of whatever tool is open.
         BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
             Column(Modifier.fillMaxSize()) {
-                PhotoHeader(title, onExport, onClose)
+                PhotoHeader(session, title, onExport, onClose)
                 PhotoCanvas(session, Modifier.weight(1f).fillMaxWidth())
                 PhotoToolBar(session)
             }
@@ -96,7 +96,7 @@ internal enum class PhotoTool(val label: String, val panel: PhotoPanelKind?) {
     Layers("Layers", PhotoPanelKind.Layers),
 }
 
-internal enum class PhotoPanelKind { Adjust, Curves, Colour, Brush, Retouch, Layers, Crop, None }
+internal enum class PhotoPanelKind { Adjust, Curves, Colour, Brush, Layers }
 
 private val RailWidth = 56.dp
 private val PanelWidth = 264.dp
@@ -162,13 +162,25 @@ private fun RailButton(glyph: String, label: String, selected: Boolean, enabled:
 }
 
 @Composable
-private fun PhotoHeader(title: String, onExport: () -> Unit, onClose: () -> Unit) {
+private fun PhotoHeader(session: PhotoSession, title: String, onExport: () -> Unit, onClose: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().height(46.dp).background(Color(0xFF232420)).padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(title, color = Color(0xFFE8EAE0), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, modifier = Modifier.weight(1f))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Color(0xFFE8EAE0), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            // A picture bigger than the engine's working budget is edited at a smaller size. That
+            // has to be visible where the picture is, not discovered when the saved file is small.
+            session.info?.takeIf { it.reducedFromWidth != it.width || it.reducedFromHeight != it.height }?.let { info ->
+                Text(
+                    "Opened at ${info.width}×${info.height} from ${info.reducedFromWidth}×${info.reducedFromHeight} — larger than the editor holds",
+                    color = Color(0xFFE0A44C),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                )
+            }
+        }
         Text("Export", color = Color(0xFF7AB8FF), fontSize = 13.sp, modifier = Modifier.clickable(onClick = onExport))
         Text("Done", color = Color(0xFF7AB8FF), fontSize = 13.sp, modifier = Modifier.clickable(onClick = onClose))
     }

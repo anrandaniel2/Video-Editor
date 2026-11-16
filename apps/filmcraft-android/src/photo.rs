@@ -30,19 +30,51 @@ fn err(s: &str) -> MobileError {
 /// `write_region` accepts. Both limits are the engine's; every path that can exceed them tiles.
 const REGION_LIMIT: u32 = 2048;
 
+/// The most pixels that fit the engine's 192 MiB tile budget.
+///
+/// A tile is 64x64 RGBA f32 — 64 KiB — and the budget counts every allocated tile across the
+/// current state and its history. 12 megapixels is 2,961 tiles and 185 MiB: already the ceiling.
+/// A 48-megapixel phone photo is 734 MiB, so it cannot be held this way at all.
+const WORKING_PIXELS: u64 = 12_000_000;
+
+/// The largest picture side that fits the budget, keeping the aspect.
+fn working_size(width: u32, height: u32) -> (u32, u32) {
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels <= WORKING_PIXELS {
+        return (width, height);
+    }
+    // Scale the longer side to fit, so a panorama and a portrait both come in under the cap.
+    let side = (WORKING_PIXELS as f64).sqrt();
+    let scale = (side / width.max(height) as f64).min(1.0);
+    (((width as f64 * scale).round() as u32).max(1), ((height as f64 * scale).round() as u32).max(1))
+}
+
 /// One photo, open for editing.
 #[derive(uniffi::Object)]
 pub struct PhotoDocument {
     document: Arc<DrawingTiledDocument>,
+    /// The size being edited.
     width: u32,
     height: u32,
+    /// The size it was handed, which differs from the above when it was scaled to fit the budget.
+    from_width: u32,
+    from_height: u32,
 }
 
 /// What the editor needs to lay its canvas out: the picture's size and its layer stack.
 #[derive(uniffi::Record)]
 pub struct PhotoInfo {
+    /// The size being edited. A picture larger than the tile budget opens smaller than it is; see
+    /// [reduced_from_width].
     pub width: u32,
     pub height: u32,
+    /// The size the picture was, when it had to be scaled down to fit the engine's budget, as
+    /// `(width, height)`. Equal to [width] and [height] when it was not.
+    ///
+    /// This is reported rather than hidden because a photo that saves back smaller than it came in
+    /// is something the person editing it needs to know before they save, not after.
+    pub reduced_from_width: u32,
+    pub reduced_from_height: u32,
     pub active_layer: u32,
     pub layers: Vec<PhotoLayer>,
     pub can_undo: bool,
@@ -78,15 +110,24 @@ impl PhotoDocument {
         if rgba.len() != expected {
             return Err(err("The picture's size and its pixels disagree."));
         }
-        let document = DrawingTiledDocument::new(width, height)?;
+        // The tile budget is the engine's, and it is the one limit that a modern phone photo walks
+        // straight into. A picture larger than the budget is opened at the largest size that fits,
+        // keeping its aspect, rather than failing to open at all.
+        let (work_width, work_height) = working_size(width, height);
+        let (work_width, work_height, rgba) = if (work_width, work_height) == (width, height) {
+            (width, height, rgba)
+        } else {
+            (work_width, work_height, sample(rgba, width, height, work_width, work_height))
+        };
+        let document = DrawingTiledDocument::new(work_width, work_height)?;
         // The picture goes on layer 1 — the document's own first layer, which `new` creates. It is
         // written in tiles: one `write_region` per 2048 square, which is the most the engine takes.
-        write_picture(&document, 1, width, height, &rgba)?;
+        write_picture(&document, 1, work_width, work_height, &rgba)?;
         // Opening is not an edit. Each tile write is a history entry, so a large photo would arrive
         // with hundreds of undos behind it — pressing undo would slowly peel the picture off. The
         // import is the document's starting state, so its history starts empty.
         document.discard_history()?;
-        Ok(Self { document, width, height })
+        Ok(Self { document, width: work_width, height: work_height, from_width: width, from_height: height })
     }
 }
 
@@ -102,6 +143,8 @@ impl PhotoDocument {
         Ok(PhotoInfo {
             width: self.width,
             height: self.height,
+            reduced_from_width: self.from_width,
+            reduced_from_height: self.from_height,
             active_layer: info.active,
             layers,
             can_undo: info.can_undo,
@@ -478,6 +521,33 @@ mod tests {
         let small = PhotoDocument::from_rgba(10, 10, solid(10, 10, [90, 90, 90, 255]))?;
         let own = small.preview(neutral(), 100, 100)?;
         assert_eq!((own.width, own.height), (10, 10), "a small picture stays its own size");
+        Ok(())
+    }
+
+    #[test]
+    fn a_picture_too_large_for_the_tile_budget_opens_at_the_largest_size_that_fits() {
+        // The budget is the engine's 192 MiB; this is the arithmetic that keeps a phone photo from
+        // being refused outright.
+        assert_eq!(working_size(4000, 3000), (4000, 3000), "12 MP fits as it is");
+        let (w, h) = working_size(8000, 6000);
+        assert!(u64::from(w) * u64::from(h) <= WORKING_PIXELS, "{w}x{h} is over the budget");
+        assert!((f64::from(w) / f64::from(h) - 8000.0 / 6000.0).abs() < 0.01, "the aspect is kept");
+        let (pw, ph) = working_size(6000, 8000);
+        assert!(u64::from(pw) * u64::from(ph) <= WORKING_PIXELS, "a portrait fits the budget too");
+        assert!((f64::from(pw) / f64::from(ph) - 6000.0 / 8000.0).abs() < 0.01, "and keeps 3:4");
+        let (wide, thin) = working_size(20000, 1000);
+        // A panorama: the long side comes down, the short side hardly moves. Compared as a ratio,
+        // because truncating an integer aspect is off by a pixel.
+        let before = 20000.0 / 1000.0;
+        let after = f64::from(wide) / f64::from(thin);
+        assert!((before - after).abs() / before < 0.01, "{wide}x{thin} is not 20:1");
+    }
+
+    #[test]
+    fn a_reduced_picture_says_what_size_it_came_in_as() -> Result<(), MobileError> {
+        let photo = PhotoDocument::from_rgba(4, 3, solid(4, 3, [1, 2, 3, 255]))?;
+        let info = photo.info()?;
+        assert_eq!((info.reduced_from_width, info.reduced_from_height), (4, 3), "not reduced, so the size is its own");
         Ok(())
     }
 

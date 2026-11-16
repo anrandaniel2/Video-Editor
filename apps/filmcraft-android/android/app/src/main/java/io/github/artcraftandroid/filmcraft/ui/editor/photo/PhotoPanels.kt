@@ -183,12 +183,6 @@ private fun BrushPanel(session: PhotoSession) {
     }
 }
 
-/**
- * Healing and cloning need somewhere to take pixels from, which is a gesture on the canvas and not
- * a slider. Rather than a control that does nothing, the panel says what the tool is waiting for.
- */
-@Composable
-
 @Composable
 private fun LayersPanel(session: PhotoSession) {
     val layers = session.info?.layers.orEmpty()
@@ -222,8 +216,6 @@ private fun LayersPanel(session: PhotoSession) {
         modifier = Modifier.padding(start = 14.dp, bottom = 10.dp).clickable { session.addLayer() },
     )
 }
-
-@Composable
 
 /**
  * A slider that reports both the drag and its end.
