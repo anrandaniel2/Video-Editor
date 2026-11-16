@@ -49,6 +49,30 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # The engine's own tests. They had never run: this workflow only built the APK, so a test could
+  # not fail and could not catch anything. Host builds (x86_64 Linux) are what cargo test can run —
+  # the Android targets are cross-compiled and cannot execute on the runner.
+  rust-tests:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tests
+
+      # The photo engine's own module first: it is the one this branch added, and its failures are
+      # the ones that matter most here.
+      - name: The photo engine
+        run: cargo test -p filmcraft-android photo:: -- --nocapture
+
+      - name: The whole engine
+        run: cargo test -p filmcraft-android
+
   apk:
     name: APK
     runs-on: ubuntu-latest
