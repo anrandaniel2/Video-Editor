@@ -389,7 +389,10 @@ class PhotoEditorViewModel : ViewModel() {
         get() = tool in setOf(Tool.Brush, Tool.Pencil, Tool.Eraser, Tool.Clone, Tool.Heal)
 
     /** The Clone Stamp's source point, picked with the first tap (the engine samples under it). */
-    private var cloneSource: Pair<Float, Float>? = null
+    // A Compose state, not a plain field: the canvas keys its drag detector on it, and the
+    // detector has to be reinstalled the moment the source is picked (a plain `var` in a view
+    // model does not recompose, which is a trap this code has been in before).
+    private var cloneSource by mutableStateOf<Pair<Float, Float>?>(null)
 
     /** Where the Clone Stamp copies from, for the canvas to mark once it is picked. */
     val cloneFrom: Pair<Float, Float>? get() = cloneSource
@@ -723,7 +726,9 @@ class PhotoEditorViewModel : ViewModel() {
         val y = minOf(from.second, to.second)
         val w = kotlin.math.abs(to.first - from.first)
         val h = kotlin.math.abs(to.second - from.second)
-        val p = JSONObject().put("background", "white").put("name", "Page ${(status?.active?.index ?: 0) + 1}")
+        // `index` is a UInt (the engine's type), so it is widened before the arithmetic.
+        val page = (status?.active?.index?.toInt() ?: 0) + 1
+        val p = JSONObject().put("background", "white").put("name", "Page $page")
         if (w >= 8f && h >= 8f) {
             p.put("rect", org.json.JSONArray().put(x.toDouble()).put(y.toDouble()).put(w.toDouble()).put(h.toDouble()))
         } else {

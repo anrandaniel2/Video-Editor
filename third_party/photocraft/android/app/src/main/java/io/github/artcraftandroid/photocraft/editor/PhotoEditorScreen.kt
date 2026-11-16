@@ -212,12 +212,28 @@ private fun CanvasView(vm: PhotoEditorViewModel) {
                     if (pan != Offset.Zero) vm.pan(-pan.x.toInt(), -pan.y.toInt())
                 }
             }
-            .pointerInput(doc?.index, doc?.width, doc?.height, box, vm.tool) {
+            // `vm.cloneFrom` is a key because the Clone Stamp moves from the tap detector to this
+            // one as soon as its source is picked: without it the detector would stay uninstalled
+            // until the tool changed.
+            .pointerInput(doc?.index, doc?.width, doc?.height, box, vm.tool, vm.cloneFrom) {
                 // A drag paints: each move extends the stroke, and lifting sends it to the engine
                 // as one `paint.stroke`, so the History panel has one step per stroke and the
                 // canvas doesn't wait for a round trip per dab. Tools that work on a tap alone
                 // (Fill, the Wand, the Eyedropper) answer to the tap instead.
                 if (doc == null || vm.tool == Tool.Hand || vm.tool == Tool.Zoom) return@pointerInput
+                // This detector consumes every gesture it sees, so it must only be installed for
+                // the tools that want a drag. Left on for everything, it swallowed the taps that
+                // Fill, the Wand, the Eyedropper and the Clone Stamp work from (the tap detector
+                // below never ran).
+                // The Clone Stamp is the exception: its first tap picks the source, so it stays on
+                // the tap detector until that is set.
+                val dragTool = when (vm.tool) {
+                    Tool.Brush, Tool.Pencil, Tool.Eraser, Tool.Heal,
+                    Tool.Rect, Tool.Lasso, Tool.Ellipse, Tool.Line, Tool.Frame -> true
+                    Tool.Clone -> vm.cloneFrom != null
+                    else -> false
+                }
+                if (!dragTool) return@pointerInput
                 val toDoc: (Offset) -> Pair<Float, Float>? = { o ->
                     vm.documentView()?.let { view -> documentPoint(box.width, box.height, view, o.x, o.y) }
                 }
@@ -227,11 +243,9 @@ private fun CanvasView(vm: PhotoEditorViewModel) {
                 // a stroke here felt unlike the same brush in the drawing studio.
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    val start = toDoc(down.position)
-                    if (start == null) {
-                        // Outside the picture: let the gesture go to whatever else wants it.
-                        return@awaitEachGesture
-                    }
+                    // Non-null in its own val: a nullable local is not smart-cast inside the
+                    // closures below (the gesture loop and `stamp` both capture it).
+                    val start = toDoc(down.position) ?: return@awaitEachGesture
                     val startMs = android.os.SystemClock.uptimeMillis()
                     // A finger reports 1.0; a stylus reports the real pressure.
                     var pressure = down.pressure.takeIf { it > 0f } ?: 1f
@@ -419,6 +433,11 @@ private fun LeftToolbar(vm: PhotoEditorViewModel, modifier: Modifier = Modifier)
         ToolButton(Tool.Lasso, vm, Glyphs.Lasso)
         ToolButton(Tool.Wand, vm, Glyphs.Wand)
         ToolButton(Tool.Rect, vm, Glyphs.Rect)
+        // The other vector shapes and the Layout frame: without buttons the mode's tools were
+        // unreachable, so only Rectangle could ever be drawn.
+        ToolButton(Tool.Ellipse, vm, Glyphs.Rect)
+        ToolButton(Tool.Line, vm, Glyphs.Rect)
+        ToolButton(Tool.Frame, vm, Glyphs.Frame)
         ToolButton(Tool.Type, vm, Glyphs.BrushTip)
         ToolButton(Tool.Eyedropper, vm, Glyphs.Eyedropper)
         ToolButton(Tool.Hand, vm, Glyphs.Hand)
