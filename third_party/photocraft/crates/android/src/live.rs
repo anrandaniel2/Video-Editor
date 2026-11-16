@@ -313,9 +313,10 @@ impl PhotoSession {
         // so drawing them at their own size fills the box and every wide brush looks the same
         // clipped slab. Fit the brush to the preview instead, keeping its proportions (a dual
         // tip scales with it, as `resize_with_dual_brush` does for a picked preset).
-        let room = fw.min(fh) * PREVIEW_FIT;
+        // In f32 to match the brush: `fw`/`fh` are the frame's f64 size.
+        let room = (fw.min(fh) * PREVIEW_FIT) as f32;
         if brush.size > room && brush.size.is_finite() && room > 0.0 {
-            brush.resize_with_dual_brush((room as f32).max(1.0));
+            brush.resize_with_dual_brush(room.max(1.0));
         }
         photocraft_paint::render_stroke_clipped(&mut surf, &brush, &points, None, false, 1.0, Some(rect));
         surface_frame(&surf, rect).ok_or_else(|| PhotoError::Render("the preview is empty".into()))
