@@ -403,9 +403,11 @@ fun BrushLibrary(vm: CanvasViewModel, arrowX: Dp, modifier: Modifier = Modifier)
         // a phone the panel is narrower than a tablet's, so the column gives up a share of what is
         // there rather than leaving the brushes 160 dp — the width at which their names stop fitting.
         BoxWithConstraints {
+        // Bound to a local: inside the Row the implicit receiver is RowScope, which has no maxWidth.
+        val panelWidth = maxWidth
         Row(Modifier.fillMaxSize()) {
             LazyColumn(
-                Modifier.width(SetsWidth.coerceAtMost(maxWidth * 0.44f)).fillMaxHeight().background(Pc.SetColumn),
+                Modifier.width(SetsWidth.coerceAtMost(panelWidth * 0.44f)).fillMaxHeight().background(Pc.SetColumn),
                 contentPadding = PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
