@@ -48,8 +48,12 @@ fun BoxScope.CopyPastePanel(vm: CanvasViewModel) {
         f()
     }
     BoxWithConstraints(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { vm.copyPasteOpen = false } }) {
+        // 496 is the bar's measured width and it keeps that on a wide window. On a phone it comes
+        // in — the old centring, (maxWidth - 496) / 2, went negative and pushed the bar off the left
+        // edge, where its buttons could not be touched.
+        val bar = minOf(496.dp, maxWidth - 24.dp)
         Box(
-            Modifier.offset(x = (maxWidth - 496.dp) / 2, y = maxHeight * (617f / 1133f)).size(496.dp, 106.dp).clip(RoundedCornerShape(30.dp)).background(PanelFill)
+            Modifier.offset(x = (maxWidth - bar) / 2, y = maxHeight * (617f / 1133f)).size(bar, 106.dp).clip(RoundedCornerShape(30.dp)).background(PanelFill)
                 .pointerInput(Unit) { detectTapGestures { } },
         ) {
             Box(Modifier.align(Alignment.TopCenter).padding(top = 5.dp).size(40.dp, 4.dp).clip(CircleShape).background(Color(0xFF7C7C7C)))

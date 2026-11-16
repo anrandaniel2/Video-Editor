@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -273,7 +274,9 @@ private fun RepeatPanel(
     onMirror: (Boolean) -> Unit, onPyramid: (Boolean) -> Unit,
 ) {
     Column(
-        modifier.size(650.dp, 228.dp).clip(RoundedCornerShape(16.dp)).background(EditorPage).padding(16.dp),
+        // 650 is its measured width; on a phone the bar comes in to the window rather than
+        // running off it.
+        modifier.widthIn(max = 650.dp).fillMaxWidth().height(228.dp).clip(RoundedCornerShape(16.dp)).background(EditorPage).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
