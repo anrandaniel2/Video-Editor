@@ -199,6 +199,61 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
         engine.brushValue(key).trim('"')
     }
 
+    // ---------------------------------------------------------------- live strokes
+
+    /**
+     * Start a live stroke of `cmd` (`paint.stroke` or `paint.pencil`) with the command's params.
+     * Returns false when there is nothing to paint on, so the canvas can fall back to a tap.
+     */
+    suspend fun strokeBegin(cmd: String, params: String): Boolean = withContext(Dispatchers.IO) {
+        engine.strokeBegin(cmd, params)
+    }
+
+    /** Render more points into the live stroke; the damage rect as JSON, or null when unchanged. */
+    suspend fun strokeAdd(points: String): String? = withContext(Dispatchers.IO) {
+        engine.strokeAdd(points)
+    }
+
+    /** The rect the live stroke has touched so far, as [strokeAdd] returns one. */
+    suspend fun strokeBounds(): String? = withContext(Dispatchers.IO) {
+        engine.strokeBounds()
+    }
+
+    /** The live stroke's pixels over a document rect: what the canvas draws over the preview. */
+    suspend fun strokePixels(x: Int, y: Int, width: Int, height: Int): Bitmap? = withContext(Dispatchers.IO) {
+        engine.strokePixels(x, y, width, height)
+    }
+
+    /** Whether the stroke keeps changing while the pointer is still (airbrush, smoothing). */
+    suspend fun strokeWantsTime(): Boolean = withContext(Dispatchers.IO) {
+        engine.strokeWantsTime()
+    }
+
+    /** Let the stroke catch up where the pointer is; the damage rect, as [strokeAdd] returns one. */
+    suspend fun strokeTick(): String? = withContext(Dispatchers.IO) {
+        engine.strokeTick()
+    }
+
+    /**
+     * Finish the stroke: the engine commits the pixels it previewed, as one History step, then the
+     * panels read the document again so the brush's stroke is in the composite and the Undo list.
+     */
+    suspend fun strokeEnd(): String {
+        val out = withContext(Dispatchers.IO) { engine.strokeEnd() }
+        refreshAll()
+        return out
+    }
+
+    /** Throw the stroke away: the document never saw it. */
+    suspend fun strokeCancel() = withContext(Dispatchers.IO) {
+        engine.strokeCancel()
+    }
+
+    /** Whether a live stroke is in progress. */
+    suspend fun strokeActive(): Boolean = withContext(Dispatchers.IO) {
+        engine.strokeActive()
+    }
+
     /** The whole brush as JSON, for the settings panel's readouts. */
     suspend fun brushJson(): JSONObject = withContext(Dispatchers.IO) { engine.brush() }
 

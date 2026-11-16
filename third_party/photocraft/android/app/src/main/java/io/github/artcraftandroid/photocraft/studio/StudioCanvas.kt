@@ -113,7 +113,7 @@ fun StudioCanvas(
     /** The stroke's params: the tool's colour, size and opacity, and the point it starts at. */
     fun strokeParams(first: Pair<Float, Float>): JSONObject {
         val p = JSONObject()
-            .put("points", JSONArray().put(point(first, 1f, 0.0)))
+            .put("points", JSONArray().put(point(first, 1f, 0L)))
             .put("color", parseColour(state.value("colour")).toArgbHex())
             .put("size", (state.value("brushSize").toFloatOrNull() ?: 24f).toDouble())
             .put("opacity", (state.value("brushOpacity").toIntOrNull() ?: 100).coerceIn(1, 100))

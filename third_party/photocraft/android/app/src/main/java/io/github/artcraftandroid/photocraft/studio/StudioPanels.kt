@@ -811,7 +811,7 @@ private fun BrushesBody(a: StudioActions) {
     ) {
         // `.brush-controls > label` is 9 px, and its number field 22 px tall.
         FieldRow("Width", labelSize = 9) {
-            NumberField(s.value("brushSize"), "Brush width", suffix = "px", height = 22) { v -> s.setValue("brushSize", v) }
+            NumberField(s.value("brushSize"), "Brush width", suffix = "px", height = 22.dp) { v -> s.setValue("brushSize", v) }
         }
         StudioSlider(
             fraction = ((s.value("brushSize").toFloatOrNull() ?: 24f) - 1f) / 499f,
@@ -822,7 +822,7 @@ private fun BrushesBody(a: StudioActions) {
             scope.engine { e.setBrush(size = px.toFloat()) }
         }
         FieldRow("Opacity", labelSize = 9) {
-            NumberField(s.value("brushOpacity"), "Brush opacity", suffix = "%", height = 22) { v -> s.setValue("brushOpacity", v) }
+            NumberField(s.value("brushOpacity"), "Brush opacity", suffix = "%", height = 22.dp) { v -> s.setValue("brushOpacity", v) }
         }
         StudioSlider(
             fraction = (s.value("brushOpacity").toFloatOrNull() ?: 100f) / 100f,
@@ -831,6 +831,36 @@ private fun BrushesBody(a: StudioActions) {
             val pct = (f * 100f).toInt()
             s.setValue("brushOpacity", pct.toString())
             scope.engine { e.setBrush(opacity = pct / 100f) }
+        }
+    }
+}
+/**
+ * `.brush-preset svg`: a stroke sample drawn in Compose, for the moment before the engine's own
+ * preview answers (or when it cannot be drawn). The shelf's thumbnails are the engine's strokes.
+ */
+@Composable
+private fun BrushStrokeSample(index: Int, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val width = 2f + (index % 5) * 2f
+        val path = Path().apply {
+            moveTo(w * 0.015f, h * 0.72f)
+            quadraticBezierTo(w * 0.26f, h * 0.15f, w * 0.5f, h * 0.47f)
+            quadraticBezierTo(w * 0.75f, h * 0.79f, w * 0.985f, h * 0.28f)
+        }
+        drawPath(
+            path,
+            Color(0xFFEEEEEE).copy(alpha = 0.85f),
+            style = Stroke(width = width, cap = StrokeCap.Round),
+        )
+        if (index < 5) {
+            val ghost = Path().apply {
+                moveTo(w * 0.03f, h * 0.81f)
+                quadraticBezierTo(w * 0.26f, h * 0.22f, w * 0.52f, h * 0.59f)
+                quadraticBezierTo(w * 0.76f, h * 0.96f, w * 0.985f, h * 0.37f)
+            }
+            drawPath(ghost, Color(0xFFAAAAAA), style = Stroke(width = 0.6f))
         }
     }
 }
