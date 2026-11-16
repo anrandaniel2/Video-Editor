@@ -35,6 +35,9 @@ enum class Tool(val label: String) {
     Lasso("Lasso"),
     Wand("Wand"),
     Rect("Rectangle"),
+    Ellipse("Ellipse"),
+    Line("Line"),
+    Frame("Frame"),
     Type("Type"),
     Eyedropper("Eyedropper"),
     Hand("Hand"),
@@ -72,6 +75,30 @@ data class LayerRow(
     val active: Boolean,
     val depth: Int,
 )
+
+/**
+ * One point of a stroke as the engine's wire form needs it: position, pressure, tilt, and the time
+ * since the stroke began. The studio stamps every point this way; without the pressure and the
+ * clock the engine's pressure curves and its speed-based spacing never engage, which is what made
+ * the photo editor's strokes feel unlike the drawing app's.
+ */
+data class StrokePoint(
+    val x: Float,
+    val y: Float,
+    val pressure: Float = 1f,
+    val tiltX: Float = 0f,
+    val tiltY: Float = 0f,
+    val rotation: Float = 0f,
+    val timeMs: Long = 0L,
+    val wheel: Float = 0f,
+)
+
+/**
+ * The drawing app's brush shelf, as the panel lists it: the same 134 brushes the studio ships, in
+ * their sets. The photo editor's six generic presets are replaced by this on open, so a brush is
+ * the same brush in both editors.
+ */
+data class BrushSet(val name: String, val brushes: List<String>)
 
 /** One brush preset, as the Brushes panel lists it. */
 data class BrushPreset(
@@ -123,6 +150,9 @@ class PhotoEditorViewModel : ViewModel() {
     var layers by mutableStateOf<List<LayerRow>>(emptyList())
         private set
     var brushes by mutableStateOf<List<BrushPreset>>(emptyList())
+
+    /** The same brushes grouped by set, as the studio's shelf has them. */
+    var brushSets by mutableStateOf<List<BrushSet>>(emptyList())
         private set
     /** Every command the engine knows, from `command.list`; the panels filter it by menu. */
     var commands by mutableStateOf<List<CommandRow>>(emptyList())
@@ -147,6 +177,10 @@ class PhotoEditorViewModel : ViewModel() {
         private set
     var brushOpacity by mutableStateOf(1f)
         private set
+
+    /** The preset the panel picked last, for the row's highlight; null until one is picked. */
+    var selectedBrush by mutableStateOf<String?>(null)
+        private set
     // ARGB, as Android's Color: the literals are explicitly Int (0xFF000000 alone is a Long).
     var foreground by mutableStateOf(0xFF000000.toInt())
         private set
@@ -159,17 +193,52 @@ class PhotoEditorViewModel : ViewModel() {
 
     init {
         refreshCommands()
+        // The drawing app's brushes, not the engine's generic six: the panel paints with the same
+        // library as the studio, so a brush means the same thing in both editors.
+        installStudioBrushes()
     }
 
     fun chooseMode(m: Mode) {
         mode = m
-        // The reference UI's tabs switch the tool set; Pixel is the photo editor's home.
+        // Each mode brings the tool that mode is for. Vector used to select the *pixel* brush,
+        // which painted raster strokes, and Layout selected Move, which does nothing on a document
+        // with no artboards, so both modes looked broken: nothing a person did produced the
+        // Vector or Layout result.
         tool = when (m) {
             Mode.Pixel -> Tool.Brush
             Mode.Sketch -> Tool.Pencil
-            Mode.Vector -> Tool.Brush
-            Mode.Layout -> Tool.Move
+            // The shape tools: a drag makes a vector shape layer (`shape.create`).
+            Mode.Vector -> Tool.Rect
+            // A page to lay out on: the Layout mode's first move is an artboard.
+            Mode.Layout -> Tool.Frame
             Mode.Canva -> Tool.Wand
+        }
+        // Layout on a document with no artboard has nothing to lay out: make the page.
+        if (m == Mode.Layout) ensureArtboard()
+    }
+
+    /** Whether the current tool drags out a vector shape. */
+    private fun drawsVector(): Boolean = mode == Mode.Vector && tool in setOf(Tool.Rect, Tool.Ellipse, Tool.Line)
+
+    /**
+     * The Layout workspace's page. A document opened as a photo has one flat layer and no board,
+     * so the first thing Layout needs is a page; this adds one at A4 and selects it, once.
+     */
+    private fun ensureArtboard() {
+        viewModelScope.launch {
+            runCatching {
+                val has = JSONObject(engine.execute("document.inspect", "{}"))
+                    .optJSONArray("layers")?.length() ?: 0
+                // `layer.new.artboard` is cheap and idempotent enough for a mode switch: it only
+                // runs when the document has nothing that looks like a page yet.
+                if (has <= 1) {
+                    engine.execute(
+                        "layer.new.artboard",
+                        JSONObject().put("preset", "A4").put("name", "Page 1").put("background", "white"),
+                    )
+                    refresh()
+                }
+            }
         }
     }
 
@@ -341,17 +410,17 @@ class PhotoEditorViewModel : ViewModel() {
      * the whole path each move, so this is what makes only the new samples join the stroke.
      */
     private var liveSent = 0
-    private var liveQueue = kotlinx.coroutines.channels.Channel<Pair<Float, Float>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+    private var liveQueue = kotlinx.coroutines.channels.Channel<StrokePoint>(kotlinx.coroutines.channels.Channel.UNLIMITED)
     private var liveJob: Job? = null
     private val liveGate = kotlinx.coroutines.sync.Mutex()
 
     /** Whether the painting tools draw live (the Brush, Pencil and Eraser do). */
     private fun paintsLive(): Boolean = tool in setOf(Tool.Brush, Tool.Pencil, Tool.Eraser)
 
-    fun previewStroke(points: List<Pair<Float, Float>>) {
+    fun previewStroke(points: List<StrokePoint>) {
         // Until the engine's first pixels answer, the path stands in for the brush (see the canvas);
         // once they do, they are the stroke.
-        strokePts = points.map { (x, y) -> androidx.compose.ui.geometry.Offset(x, y) }
+        strokePts = points.map { androidx.compose.ui.geometry.Offset(it.x, it.y) }
         if (!paintsLive()) return
         if (points.size > liveSent) {
             points.drop(liveSent).forEach { liveQueue.trySend(it) }
@@ -363,7 +432,7 @@ class PhotoEditorViewModel : ViewModel() {
      * Start the live stroke under the finger: the engine paints it as it goes, and the commit on
      * release takes those pixels (one History step), so a long stroke is one Undo.
      */
-    fun beginStroke(first: Pair<Float, Float>) {
+    fun beginStroke(first: StrokePoint) {
         strokeParts = emptyList()
         liveSent = 1
         if (tool == Tool.Clone && cloneSource == null) {
@@ -376,7 +445,7 @@ class PhotoEditorViewModel : ViewModel() {
         // stroke's queue is closed in case the gesture never ended (a detached window).
         val previous = liveJob
         liveQueue.close()
-        val queue = kotlinx.coroutines.channels.Channel<Pair<Float, Float>>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val queue = kotlinx.coroutines.channels.Channel<StrokePoint>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         liveQueue = queue
         liveJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             previous?.join()
@@ -444,14 +513,21 @@ class PhotoEditorViewModel : ViewModel() {
         // The next stroke gets a new queue: closing a channel is final.
         liveQueue.close()
         // The next stroke gets a new queue, and waits on this one's commit (see beginStroke).
-        liveQueue = kotlinx.coroutines.channels.Channel(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        liveQueue = kotlinx.coroutines.channels.Channel<StrokePoint>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         liveSent = 0
     }
 
-    /** A batch of points as the engine's wire form: `[[x, y], …]`. */
-    private fun pointsJson(points: List<Pair<Float, Float>>): String {
+    /** A batch as the wire form: `[[x, y, pressure, tiltX, tiltY, rotation, timeMs, wheel], …]`. */
+    private fun pointsJson(points: List<StrokePoint>): String {
         val arr = org.json.JSONArray()
-        for ((x, y) in points) arr.put(org.json.JSONArray().put(x.toDouble()).put(y.toDouble()))
+        for (q in points) {
+            arr.put(
+                org.json.JSONArray().put(q.x.toDouble()).put(q.y.toDouble())
+                    .put(q.pressure.toDouble().coerceIn(0.0, 1.0))
+                    .put(q.tiltX.toDouble()).put(q.tiltY.toDouble()).put(q.rotation.toDouble())
+                    .put(q.timeMs.toDouble()).put(q.wheel.toDouble()),
+            )
+        }
         return arr.toString()
     }
 
@@ -513,10 +589,19 @@ class PhotoEditorViewModel : ViewModel() {
      * fractions; the retouching tools take them as 1..100 percentages, and the Clone Stamp's
      * source.
      */
-    private fun strokeParams(points: List<Pair<Float, Float>>): JSONObject {
+    private fun strokeParams(points: List<StrokePoint>): JSONObject {
         val p = JSONObject()
         val pts = org.json.JSONArray()
-        for ((x, y) in points) pts.put(org.json.JSONArray().put(x.toDouble()).put(y.toDouble()))
+        for (q in points) {
+            // The studio's eight values: the engine reads what it needs and ignores the rest, so a
+            // plain drag (no stylus, no tilt) still gets pressure 1 and a real clock.
+            pts.put(
+                org.json.JSONArray().put(q.x.toDouble()).put(q.y.toDouble())
+                    .put(q.pressure.toDouble().coerceIn(0.0, 1.0))
+                    .put(q.tiltX.toDouble()).put(q.tiltY.toDouble()).put(q.rotation.toDouble())
+                    .put(q.timeMs.toDouble()).put(q.wheel.toDouble()),
+            )
+        }
         p.put("points", pts)
         p.put("size", brushSize)
         if (tool == Tool.Clone || tool == Tool.Heal) {
@@ -543,24 +628,30 @@ class PhotoEditorViewModel : ViewModel() {
      * A finished drag: the painting tools paint it, the marquee and the lasso take it as a
      * selection, and the tap-only tools act on where it started, so a drag still does something.
      */
-    fun endDrag(points: List<Pair<Float, Float>>, live: Boolean = false) {
+    fun endDrag(points: List<StrokePoint>, live: Boolean = false) {
         strokePts = emptyList()
         val first = points.firstOrNull() ?: return
         val last = points.last()
+        // The other tools think in plain positions; the stroke's pressure and clock are the
+        // engine's business.
+        val flat = points.map { it.x to it.y }
         when {
             // A live stroke is already in the engine (it committed on release), so there is
             // nothing left to send for the painting tools.
+            // A Vector-mode drag makes a shape layer: the mode's whole point.
+            drawsVector() -> createShape(tool, first.x to first.y, last.x to last.y)
             live && paintsLive() -> Unit
-            paintsByDrag -> paintStroke(points)
-            tool == Tool.Rect -> dragSelection(first, last)
+            paintsByDrag -> paintStroke(flat)
+            tool == Tool.Frame -> createArtboard(first.x to first.y, last.x to last.y)
+            tool == Tool.Rect -> dragSelection(first.x to first.y, last.x to last.y)
             // The Lasso follows the finger: its path is the selection's outline, thinned to the
             // corners of the shape it drew, so a long gesture doesn't send hundreds of points.
-            tool == Tool.Lasso && simplify(points).size >= 3 -> {
+            tool == Tool.Lasso && simplify(flat).size >= 3 -> {
                 val array = org.json.JSONArray()
-                for ((x, y) in simplify(points)) array.put(org.json.JSONArray().put(x.toDouble()).put(y.toDouble()))
+                for ((x, y) in simplify(flat)) array.put(org.json.JSONArray().put(x.toDouble()).put(y.toDouble()))
                 command("select.lasso", JSONObject().put("points", array))
             }
-            else -> tapAt(first.first, first.second)
+            else -> tapAt(first.x, first.y)
         }
     }
 
@@ -574,7 +665,7 @@ class PhotoEditorViewModel : ViewModel() {
             Tool.Zoom -> zoomTo((zoom * 1.5f).coerceAtMost(16f))
             // Move has nothing to move yet (no layer transform in this build); the marquee tools
             // need a drag, and a tap gives them a 1x1 box, which selects nothing on purpose.
-            Tool.Move, Tool.Lasso, Tool.Rect -> Unit
+            Tool.Move, Tool.Lasso, Tool.Rect, Tool.Ellipse, Tool.Line -> Unit
             Tool.Type -> command(
                 "type.create",
                 JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("text", "Text").put("size", 24),
@@ -586,6 +677,53 @@ class PhotoEditorViewModel : ViewModel() {
             Tool.Heal -> paintStroke(listOf(x to y))
             else -> if (paintsByDrag) paintStroke(listOf(x to y)) else Unit
         }
+    }
+
+    /**
+     * A Vector-mode drag: the shape layer the engine draws, with the foreground as its fill and its
+     * outline. A drag too small to be a shape still makes a default-sized one, as the studio's
+     * shape tool does, so a tap in Vector mode produces something.
+     */
+    fun createShape(kind: Tool, from: Pair<Float, Float>, to: Pair<Float, Float>) {
+        val x = minOf(from.first, to.first)
+        val y = minOf(from.second, to.second)
+        val w = kotlin.math.abs(to.first - from.first)
+        val h = kotlin.math.abs(to.second - from.second)
+        val (bw, bh) = if (w < 3f || h < 3f) 160f to 120f else w to h
+        val kindName = when (kind) {
+            Tool.Ellipse -> "ellipse"
+            Tool.Line -> "line"
+            else -> "rect"
+        }
+        val p = JSONObject().put("kind", kindName)
+        if (kindName == "line") {
+            p.put("from", org.json.JSONArray().put(from.first.toDouble()).put(from.second.toDouble()))
+            p.put("to", org.json.JSONArray().put(to.first.toDouble()).put(to.second.toDouble()))
+        } else {
+            p.put("rect", org.json.JSONArray().put(x.toDouble()).put(y.toDouble()).put(bw.toDouble()).put(bh.toDouble()))
+        }
+        // `fill` takes the colour itself; `{"color": …}` is refused (that is the paint.* shape).
+        p.put("fill", hex(foreground))
+        p.put("stroke", JSONObject().put("width", 2).put("color", hex(foreground)))
+        command("shape.create", p)
+    }
+
+    /**
+     * A Layout-mode drag: a new artboard at the dragged rectangle. A tap makes an A4 page, which is
+     * what the mode is for.
+     */
+    fun createArtboard(from: Pair<Float, Float>, to: Pair<Float, Float>) {
+        val x = minOf(from.first, to.first)
+        val y = minOf(from.second, to.second)
+        val w = kotlin.math.abs(to.first - from.first)
+        val h = kotlin.math.abs(to.second - from.second)
+        val p = JSONObject().put("background", "white").put("name", "Page ${(status?.active?.index ?: 0) + 1}")
+        if (w >= 8f && h >= 8f) {
+            p.put("rect", org.json.JSONArray().put(x.toDouble()).put(y.toDouble()).put(w.toDouble()).put(h.toDouble()))
+        } else {
+            p.put("preset", "A4")
+        }
+        command("layer.new.artboard", p)
     }
 
     /** The Gradient tool's tap: a foreground to background sweep that ends at the canvas centre. */
@@ -720,6 +858,55 @@ class PhotoEditorViewModel : ViewModel() {
     }
 
     /**
+     * Pick a preset: the engine resolves it (its own tip, dynamics, stabilisation and size), and
+     * the panel's sliders take the values it settled on.
+     *
+     * Without the read-back the sliders kept the previous brush's numbers, so the next
+     * `commitBrush` wrote them straight back over the preset just picked: the brush did not change
+     * until something else refreshed the panel, which is why a picked brush only appeared after
+     * painting and opening the panel again.
+     */
+    fun pickPreset(name: String) {
+        viewModelScope.launch {
+            error = null
+            try {
+                engine.execute("tools.setBrush", JSONObject().put("preset", name))
+                selectedBrush = name
+                readBrush()
+                renderInto()
+            } catch (e: Exception) {
+                error = e.message ?: "The brush couldn't be picked."
+            }
+        }
+    }
+
+    /** The engine's current brush, as the panel's sliders show it. */
+    private suspend fun readBrush() {
+        val b = runCatching { engine.brush() }.getOrNull() ?: return
+        brushSize = b.optDouble("size", brushSize.toDouble()).toFloat().coerceIn(1f, 512f)
+        brushHardness = b.optDouble("hardness", brushHardness.toDouble()).toFloat().coerceIn(0f, 1f)
+        brushOpacity = b.optDouble("opacity", brushOpacity.toDouble()).toFloat().coerceIn(0f, 1f)
+    }
+
+    /** The panel's brush thumbnails, by preset name and size, drawn once and kept. Concurrent: the
+     * rows ask from their own coroutines. */
+    private val thumbs = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
+
+    /**
+     * A preset's thumbnail: the engine's own stroke with that brush, fitted to [width] × [height].
+     * Null when the engine cannot draw it (an unknown name), so the row keeps its placeholder.
+     */
+    suspend fun brushThumbnail(name: String, width: Int = 120, height: Int = 24): android.graphics.Bitmap? {
+        val key = "$name@$width×$height"
+        thumbs[key]?.let { return it }
+        val bmp = runCatching {
+            engine.brushPreview(width, height, JSONObject().put("preset", name).toString())
+        }.getOrNull() ?: return null
+        thumbs[key] = bmp
+        return bmp
+    }
+
+    /**
      * Send the panel's size, hardness and opacity to the engine as its current brush, once the
      * finger lifts: the next stroke is painted with them.
      */
@@ -799,6 +986,7 @@ class PhotoEditorViewModel : ViewModel() {
             status = engine.status()
             renderInto()
             if (panel == Panel.Layers) refreshLayers()
+            if (panel == Panel.Brushes) readBrush()
         } catch (e: Exception) {
             error = e.message
         }
@@ -915,18 +1103,37 @@ class PhotoEditorViewModel : ViewModel() {
                 val json = engine.execute("brush.presets.list", "{}")
                 val arr = JSONObject(json).optJSONArray("presets") ?: return@launch
                 val list = mutableListOf<BrushPreset>()
+                val sets = linkedMapOf<String, MutableList<String>>()
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
+                    val name = o.optString("name", "Brush")
                     list += BrushPreset(
-                        name = o.optString("name", "Brush"),
+                        name = name,
                         builtin = o.optBoolean("builtin", false),
                         size = o.optDouble("size", 32.0).toFloat(),
                         hardness = o.optDouble("hardness", 0.8).toFloat(),
                     )
+                    // The set the engine files the brush under (the studio's own grouping).
+                    val set = o.optString("group").ifEmpty { "Custom" }
+                    sets.getOrPut(set) { mutableListOf() }.add(name)
                 }
                 brushes = list
+                brushSets = sets.map { (k, v) -> BrushSet(k, v) }
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /**
+     * Put the drawing app's brush library in place of the engine's generic six, then list it. The
+     * studio does this for its own document; the photo editor's Brushes panel should paint with
+     * the same brushes, so the same shelf goes in before the list is read.
+     */
+    fun installStudioBrushes() {
+        viewModelScope.launch {
+            runCatching { engine.studioInstallBrushes() }
+            readBrush()
+            refreshBrushes()
         }
     }
 }

@@ -156,6 +156,10 @@ opt-level = 3
 opt-level = 3
 
 [profile.release]
+# Thin LTO across the whole workspace still inlines across crates; `codegen-units = 1` on top of it
+# is what made the APK's release build take ~26 minutes. The default 16 lets each crate's codegen
+# run in parallel, which is where nearly all of the time was, and costs a few percent of runtime in
+# the hot loops that were already vectorised.
 lto = "thin"
-codegen-units = 1
+codegen-units = 16
 

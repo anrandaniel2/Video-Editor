@@ -115,6 +115,18 @@ jobs:
         with:
           tool: cargo-ndk@4.1.2
 
+      # Gradle's own caches (configuration, Kotlin incremental compilation, the build cache). The
+      # Rust half dominates a cold run, but a warm one still reconfigures both projects and
+      # recompiles Kotlin from scratch without this.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/libs.versions.toml', '**/gradle-wrapper.properties', '**/gradle.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       # The key: the public test key when asked for and when the release key is unavailable, the
       # release key otherwise. A version tag with no release key is an error: its APK could not
       # update installed copies, which is what a release promises.
@@ -160,7 +172,7 @@ jobs:
         run: |
           set +e
           ./gradlew assembleRelease "-Pfilmcraft.abis=arm64-v8a" "-Pfilmcraft.version=$VERSION" \
-            -Pfilmcraft.unsigned=true > /tmp/android-build.log 2>&1
+            -Pfilmcraft.unsigned=true --build-cache > /tmp/android-build.log 2>&1
           rc=$?
           cat /tmp/android-build.log
           if [ "$rc" -ne 0 ]; then
@@ -179,7 +191,9 @@ jobs:
       # own Kotlin, not a second compile of the photo engine.
       - name: PhotoCraft standalone app
         working-directory: third_party/photocraft/android
-        run: ./gradlew :standalone:assembleRelease -Pphotocraft.abis=arm64-v8a
+        # Its own Gradle project (a different settings.gradle.kts), so it cannot join the run above;
+        # `--build-cache` at least shares the compiled library module with it.
+        run: ./gradlew :standalone:assembleRelease -Pphotocraft.abis=arm64-v8a --build-cache
 
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),

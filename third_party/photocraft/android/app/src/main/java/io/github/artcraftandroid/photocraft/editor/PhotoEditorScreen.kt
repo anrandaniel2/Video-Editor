@@ -5,6 +5,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -32,6 +35,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,21 +80,25 @@ fun PhotoEditorScreen(vm: PhotoEditorViewModel, onExport: (ByteArray, String) ->
         // Right toolbar.
         RightToolbar(vm, Modifier.align(Alignment.CenterEnd).padding(end = 12.dp))
 
-        // Floating panel.
+        // Floating panel: every panel opens beside the toolbar that opened it, not in the middle
+        // of the picture. The rail is 44 dp wide with 6 dp of padding inside a 12 dp margin, so
+        // 72 dp clears it; `CenterEnd` keeps the top edge at the button that was pressed, which is
+        // where the reference puts it.
+        val beside = Modifier.align(Alignment.CenterEnd).padding(end = 74.dp)
         when (vm.panel) {
             Panel.None -> {}
-            Panel.Brushes -> BrushesPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Layers -> LayersPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Curves -> CurvesPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Levels -> LevelsPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Adjustments -> AdjustmentsPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Filters -> FiltersPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Image -> ImagePanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Type -> TypePanel(vm, Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
-            Panel.Pages -> PagesPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.History -> HistoryPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Export -> ExportPanel(vm, onExport, Modifier.align(Alignment.Center).padding(end = 72.dp))
-            Panel.Colour -> ColourPanel(vm, Modifier.align(Alignment.Center).padding(end = 72.dp))
+            Panel.Brushes -> BrushesPanel(vm, beside)
+            Panel.Layers -> LayersPanel(vm, beside)
+            Panel.Curves -> CurvesPanel(vm, beside)
+            Panel.Levels -> LevelsPanel(vm, beside)
+            Panel.Adjustments -> AdjustmentsPanel(vm, beside)
+            Panel.Filters -> FiltersPanel(vm, beside)
+            Panel.Image -> ImagePanel(vm, beside)
+            Panel.Type -> TypePanel(vm, beside)
+            Panel.Pages -> PagesPanel(vm, beside)
+            Panel.History -> HistoryPanel(vm, beside)
+            Panel.Export -> ExportPanel(vm, onExport, beside)
+            Panel.Colour -> ColourPanel(vm, beside)
             // Classic opens the whole classic editor, which the host draws over this screen;
             // there is no panel of its own to show here.
             Panel.Classic -> {}
@@ -213,38 +221,46 @@ private fun CanvasView(vm: PhotoEditorViewModel) {
                 val toDoc: (Offset) -> Pair<Float, Float>? = { o ->
                     vm.documentView()?.let { view -> documentPoint(box.width, box.height, view, o.x, o.y) }
                 }
-                var stroke = mutableListOf<Offset>()
-                detectDragGestures(
-                    onDragStart = { start ->
-                        stroke = mutableListOf(start)
-                        // The engine starts the stroke where the finger did, so the brush's own
-                        // dabs show under the finger from the first touch. This runs only past the
-                        // touch slop, so a tap stays a tap (it is the other detector's).
-                        toDoc(start)?.let { vm.beginStroke(it) }
-                    },
-                    onDragEnd = {
-                        val points = stroke.mapNotNull(toDoc)
-                        stroke = mutableListOf()
-                        // The engine commits the stroke it was given: one History step, its own
-                        // previewed pixels. A drag the engine refused commits nothing.
-                        vm.endStroke()
-                        // The other tools read the drag's endpoints; the painting ones have
-                        // already been committed by the live stroke.
-                        vm.endDrag(points, live = true)
-                    },
-                    onDragCancel = {
-                        // The gesture was taken by something else (a system swipe): the stroke is
-                        // finished where it got to, so no half-stroke is left on the canvas.
-                        stroke = mutableListOf()
-                        vm.endStroke()
-                        vm.previewStroke(emptyList())
-                    },
-                ) { change, _ ->
-                    change.consume()
-                    // The pointer's own position, not the delta: a fast drag still leaves a
-                    // continuous line rather than a cluster of points at the start.
-                    stroke.add(change.position)
-                    vm.previewStroke(stroke.mapNotNull(toDoc))
+                // The pointer's own samples, each stamped with its pressure, tilt and the time
+                // since the touch: `detectDragGestures` reports only positions, and without those
+                // the engine's pressure curves and speed-based spacing never engage, which is why
+                // a stroke here felt unlike the same brush in the drawing studio.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val start = toDoc(down.position)
+                    if (start == null) {
+                        // Outside the picture: let the gesture go to whatever else wants it.
+                        return@awaitEachGesture
+                    }
+                    val startMs = android.os.SystemClock.uptimeMillis()
+                    // A finger reports 1.0; a stylus reports the real pressure.
+                    var pressure = down.pressure.takeIf { it > 0f } ?: 1f
+                    val points = mutableListOf(stamp(start, pressure, 0L))
+                    vm.beginStroke(points.first())
+                    points.firstOrNull()?.let { vm.previewStroke(listOf(it)) }
+                    var last = start
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        change.consume()
+                        pressure = change.pressure.takeIf { it > 0f } ?: pressure
+                        val at = toDoc(change.position) ?: continue
+                        // Real travel only: a resting finger does not add a point per frame (an
+                        // airbrush lays its own dabs over time, below).
+                        val dx = at.first - last.first
+                        val dy = at.second - last.second
+                        if (dx * dx + dy * dy < 0.25f) continue
+                        last = at
+                        points += stamp(at, pressure, android.os.SystemClock.uptimeMillis() - startMs)
+                        vm.previewStroke(points.toList())
+                    }
+                    // The engine commits the stroke it was given: one History step, its own
+                    // previewed pixels. A drag the engine refused commits nothing.
+                    vm.endStroke()
+                    // The other tools read the gesture's endpoints; the painting ones have
+                    // already been committed by the live stroke.
+                    vm.endDrag(points.toList(), live = true)
                 }
             }
             .pointerInput(doc?.index, doc?.width, doc?.height, box, vm.tool) {
@@ -459,10 +475,17 @@ private fun PanelButton(panel: Panel, vm: PhotoEditorViewModel, glyph: io.github
     }
 }
 
+/** A document position as one point of a stroke, stamped with its pressure and stroke time. */
+private fun stamp(at: Pair<Float, Float>, pressure: Float, atMs: Long): StrokePoint =
+    StrokePoint(x = at.first, y = at.second, pressure = pressure, timeMs = atMs)
+
 @Composable
-private fun PanelShell(title: String, onClose: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+private fun PanelShell(title: String, onClose: () -> Unit, anchor: Modifier = Modifier, content: @Composable () -> Unit) {
     Column(
-        modifier.width(320.dp).fillMaxHeight(0.9f)
+        // Beside the rail, never wider than the space the rail leaves: a fixed 320 dp ran off a
+        // phone in landscape and the panel's right edge (and its rounded corner) was cut away,
+        // which read as the contents being offset.
+        anchor.fillMaxWidth(0.62f).widthIn(max = 320.dp).fillMaxHeight(0.9f)
             .background(Pc.Panel.copy(alpha = 0.96f), RoundedCornerShape(16.dp))
             .border(1.dp, Pc.Hairline, RoundedCornerShape(16.dp))
             .padding(16.dp),
@@ -472,8 +495,10 @@ private fun PanelShell(title: String, onClose: () -> Unit, modifier: Modifier = 
             Text("Done", color = Pc.AccentLight, fontSize = 13.sp, modifier = Modifier.clickable(onClick = onClose))
         }
         Spacer(Modifier.height(12.dp))
-        // The panel's own content scrolls when it is taller than the space the panel is given.
-        Column(Modifier.verticalScroll(rememberScrollState())) { content() }
+        // The content takes the height the panel has left and scrolls inside it. Without the
+        // weight it laid out at its own height, ran past the panel's rounded bottom and was
+        // clipped mid-row, which is what made the last rows look offset.
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) { content() }
     }
 }
 
@@ -488,12 +513,20 @@ private fun SliderRow(
     onFinished: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            // The two texts are different weights, so `Top` sat the number's line box above the
+            // label's; centring the row is what keeps them on one line.
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(label, color = Pc.Secondary, fontSize = 12.sp)
             Text("%.0f".format(value), color = Pc.Title, fontSize = 12.sp)
         }
         Slider(
             value = value,
+            // The track is drawn inside a 28 dp touch target with no horizontal inset of its own,
+            // so the thumb's centre follows the row's label edge: no extra padding here.
             onValueChange = onChange,
             onValueChangeFinished = onFinished,
             valueRange = range,
@@ -522,19 +555,33 @@ private fun BrushesPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier
         SliderRow("Opacity", vm.brushOpacity * 100f, 0f..100f, { vm.chooseBrushOpacity(it / 100f) }) { vm.commitBrush() }
         Spacer(Modifier.height(8.dp))
         Text("Presets", color = Pc.Secondary, fontSize = 12.sp)
+        // The drawing app's sets, each a heading over its brushes, so the shelf reads the same as
+        // the studio's Brushes panel instead of one flat list of 134 names.
         LazyColumn(Modifier.fillMaxWidth().height(220.dp)) {
-            items(vm.brushes) { b ->
-                Row(
-                    Modifier.fillMaxWidth().clickable {
-                        val p = JSONObject()
-                        p.put("preset", b.name)
-                        vm.command("tools.setBrush", p)
-                    }.padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(24.dp).background(Pc.Raised, CircleShape))
-                    Spacer(Modifier.width(10.dp))
-                    Text(b.name, color = Pc.Title, fontSize = 13.sp)
+            vm.brushSets.forEach { set ->
+                item(key = "set-${set.name}") {
+                    Text(
+                        set.name,
+                        color = Pc.Secondary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 3.dp),
+                    )
+                }
+                items(set.brushes, key = { "b-$it" }) { name ->
+                    val b = vm.brushes.firstOrNull { it.name == name } ?: BrushPreset(name, true, 32f, 0.8f)
+                    val on = vm.selectedBrush == b.name
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .background(if (on) Pc.Raised else Color.Transparent, RoundedCornerShape(8.dp))
+                            .clickable { vm.pickPreset(b.name) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BrushThumb(vm, b.name)
+                        Spacer(Modifier.width(10.dp))
+                        Text(b.name, color = Pc.Title, fontSize = 13.sp)
+                    }
                 }
             }
         }
@@ -543,6 +590,30 @@ private fun BrushesPanel(vm: PhotoEditorViewModel, modifier: Modifier = Modifier
             ActionButton("New layer") { vm.command("layer.new.layer", JSONObject().put("name", "Brush")) }
             ActionButton("Clear") { vm.command("layer.delete", JSONObject()) }
         }
+    }
+}
+
+/**
+ * A preset's row thumbnail: the engine's own stroke with that brush, drawn once and kept. The
+ * placeholder disc shows until it arrives, so a long list does not blank as it scrolls.
+ */
+@Composable
+private fun BrushThumb(vm: PhotoEditorViewModel, name: String) {
+    val thumb = remember(name) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(name) {
+        val bmp = vm.brushThumbnail(name, 120, 24)
+        if (bmp != null) thumb.value = bmp
+    }
+    val bmp = thumb.value
+    if (bmp != null) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = null,
+            modifier = Modifier.size(width = 40.dp, height = 24.dp),
+            contentScale = ContentScale.FillWidth,
+        )
+    } else {
+        Box(Modifier.size(24.dp).background(Pc.Raised, CircleShape))
     }
 }
 
