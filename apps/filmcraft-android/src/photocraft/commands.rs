@@ -1,0 +1,592 @@
+//! The command surface: what the studio's panels and tools send.
+//!
+//! One function, [`execute`], takes a command id and its JSON parameters and returns the command's
+//! JSON result. That indirection is the point of the design: the restored UI is written against
+//! command ids, so every button, slider and tool in it is one of the ids below, and the engine
+//! cannot drift from the interface it serves.
+//!
+//! The ids are the ones the studio actually sends — nothing more. A command that is not here does
+//! not exist, and [`is_enabled`] answers for the ones that exist but cannot run yet (no document
+//! open, no layer to act on), so the UI greys its rows with a reason rather than failing on tap.
+
+use serde_json::{Value, json};
+
+use crate::photocraft::compose;
+use crate::photocraft::model::{
+    Adjustment, Blend, Content, Curves, Document, Kind, Layer, TextRun, hex, parse_colour,
+};
+use crate::photocraft::paint;
+use crate::photocraft::select;
+use crate::photocraft::Session;
+
+/// A command's failure, as the UI shows it: one message.
+pub type Fail = String;
+
+fn bad(what: impl std::fmt::Display) -> Fail {
+    what.to_string()
+}
+
+/// The ids [`execute`] knows, in the order the studio's command list shows them.
+///
+/// `command.list` returns this, so a panel can offer the commands that exist without hard-coding
+/// them, and a test can assert the surface has not shrunk.
+pub const IDS: &[&str] = &[
+    "brush.presets.list",
+    "command.list",
+    "document.inspect",
+    "document.sampleColor",
+    "file.new",
+    "layer.delete",
+    "layer.duplicate",
+    "layer.layerMask.revealAll",
+    "layer.new.group",
+    "layer.new.layer",
+    "layer.newAdjustmentLayer.curves",
+    "layer.newAdjustmentLayer.levels",
+    "layer.select",
+    "layer.setProps",
+    "paint.bucket",
+    "paint.cloneStamp",
+    "paint.gradient",
+    "paint.pencil",
+    "paint.spotHealing",
+    "paint.stroke",
+    "select.deselect",
+    "select.lasso",
+    "select.magicWand",
+    "select.rect",
+    "tools.setBrush",
+    "tools.setColors",
+    "tools.swapColors",
+    "type.create",
+];
+
+/// Whether `id` is a command this engine has.
+pub fn known(id: &str) -> bool {
+    IDS.contains(&id)
+}
+
+/// Run one command against the session.
+pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, Fail> {
+    match id {
+        // ---------------------------------------------------------------- introspection
+        "command.list" => Ok(json!(IDS)),
+        "brush.presets.list" => Ok(json!({ "presets": brush_presets() })),
+        "document.inspect" => {
+            let Some(doc) = session.active() else { return Ok(json!({ "layers": [] })) };
+            Ok(doc.doc.inspect(doc.active_layer, &doc.selected, &doc.history_labels()))
+        }
+        "document.sampleColor" => {
+            let doc = session.active().ok_or("Open a picture first.")?;
+            let (x, y) = (number(&params, "x")? as u32, number(&params, "y")? as u32);
+            let composite = compose::render_rect(&doc.doc, x, y, 1, 1);
+            if composite.is_empty() {
+                return Err("That point is outside the canvas.".into());
+            }
+            // The panels work in 0..1 floats, as the engine always has.
+            Ok(json!([
+                f64::from(composite[0]) / 255.0,
+                f64::from(composite[1]) / 255.0,
+                f64::from(composite[2]) / 255.0,
+                f64::from(composite[3]) / 255.0
+            ]))
+        }
+
+        // ---------------------------------------------------------------- documents
+        "file.new" => {
+            let width = number(&params, "width")?.max(1.0) as u32;
+            let height = number(&params, "height")?.max(1.0) as u32;
+            let background = params.get("background").and_then(Value::as_str).unwrap_or("white");
+            let doc = Document::new("Untitled", width, height, background).map_err(bad)?;
+            let index = session.push(doc);
+            session.select_index(index);
+            Ok(json!({ "document": index }))
+        }
+
+        // ---------------------------------------------------------------- layers
+        "layer.new.layer" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc.doc.take_id();
+            let layer = Layer {
+                id,
+                name: format!("Layer {id}"),
+                kind: Kind::Pixels,
+                visible: true,
+                locked: false,
+                opacity: 1.0,
+                blend: Blend::Normal,
+                clipped: false,
+                children: Vec::new(),
+                content: Content::Pixels(None),
+            };
+            // Above the active layer, or at the top, which is what "new layer" means.
+            match doc.active_layer.and_then(|a| doc.doc.remove(a).map(|l| (a, l))) {
+                Some((a, l)) => {
+                    doc.doc.layers.push(l);
+                    doc.doc.layers.push(layer);
+                    doc.active_layer = Some(id);
+                    let _ = a;
+                }
+                None => {
+                    doc.doc.layers.push(layer);
+                    doc.active_layer = Some(id);
+                }
+            }
+            doc.touch();
+            Ok(json!({ "layer": id }))
+        }
+        "layer.new.group" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc.doc.take_id();
+            doc.doc.layers.push(Layer {
+                id,
+                name: format!("Group {id}"),
+                kind: Kind::Group,
+                visible: true,
+                locked: false,
+                opacity: 1.0,
+                blend: Blend::Normal,
+                clipped: false,
+                children: Vec::new(),
+                content: Content::Group,
+            });
+            doc.active_layer = Some(id);
+            doc.touch();
+            Ok(json!({ "layer": id }))
+        }
+        "layer.duplicate" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc.active_layer.ok_or("Select a layer first.")?;
+            let source = doc.doc.find(id).cloned().ok_or("That layer is gone.")?;
+            let new_id = doc.doc.take_id();
+            let mut copy = source;
+            copy.id = new_id;
+            copy.name = format!("{} copy", copy.name);
+            rename_descendants(&mut copy, &mut doc.doc);
+            doc.doc.layers.push(copy);
+            doc.active_layer = Some(new_id);
+            doc.touch();
+            Ok(json!({ "layer": new_id }))
+        }
+        "layer.delete" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc.active_layer.ok_or("Select a layer first.")?;
+            if doc.doc.find(id).is_none() {
+                return Err("That layer is gone.".into());
+            }
+            doc.doc.remove(id);
+            doc.active_layer = doc.doc.layers.last().map(|l| l.id);
+            doc.touch();
+            Ok(json!({ "deleted": id }))
+        }
+        "layer.select" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = number(&params, "layer")? as u64;
+            if doc.doc.find(id).is_none() {
+                return Err("No such layer.".into());
+            }
+            doc.active_layer = Some(id);
+            doc.selected = vec![id];
+            doc.touch();
+            Ok(json!({ "layer": id }))
+        }
+        "layer.setProps" => set_props(session, &params),
+        "layer.layerMask.revealAll" => {
+            // A reveal-all mask changes nothing about the picture: the layer keeps its own alpha.
+            // It exists because the panel has the button, and it records a history step so the
+            // user sees the mask was added.
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc.active_layer.ok_or("Select a layer first.")?;
+            let _ = doc.doc.find(id).ok_or("That layer is gone.")?;
+            doc.push_history("Add layer mask");
+            doc.touch();
+            Ok(json!({ "layer": id, "mask": "revealAll" }))
+        }
+        "layer.newAdjustmentLayer.curves" => {
+            let adjustment = curves_from(&params)?;
+            new_adjustment(session, Adjustment::Curves(adjustment), "Curves")
+        }
+        "layer.newAdjustmentLayer.levels" => {
+            let adjustment = Adjustment::Levels {
+                black: number_or(&params, "black", 0.0).clamp(0.0, 1.0),
+                white: number_or(&params, "white", 1.0).clamp(0.0, 1.0),
+                gamma: number_or(&params, "gamma", 1.0).clamp(0.1, 10.0),
+            };
+            new_adjustment(session, adjustment, "Levels")
+        }
+
+        // ---------------------------------------------------------------- tools
+        "tools.setBrush" => {
+            let t = &mut session.tools;
+            if let Some(v) = params.get("size").and_then(Value::as_f64) {
+                t.brush_size = v.clamp(0.5, 5000.0);
+            }
+            if let Some(v) = params.get("hardness").and_then(Value::as_f64) {
+                t.brush_hardness = v.clamp(0.0, 1.0);
+            }
+            if let Some(v) = params.get("opacity").and_then(Value::as_f64) {
+                t.brush_opacity = v.clamp(0.0, 1.0);
+            }
+            if let Some(v) = params.get("preset").and_then(Value::as_str) {
+                t.brush_preset = v.to_string();
+            }
+            Ok(json!({
+                "size": t.brush_size,
+                "hardness": t.brush_hardness,
+                "opacity": t.brush_opacity,
+                "preset": t.brush_preset,
+            }))
+        }
+        "tools.setColors" => {
+            let t = &mut session.tools;
+            if let Some(v) = params.get("foreground").and_then(Value::as_str) {
+                t.foreground = parse_colour(v).map_err(bad)?.ok_or("The foreground cannot be empty.")?;
+            }
+            if let Some(v) = params.get("background").and_then(Value::as_str) {
+                t.background = parse_colour(v).map_err(bad)?.ok_or("The background cannot be empty.")?;
+            }
+            Ok(json!({ "foreground": hex(t.foreground), "background": hex(t.background) }))
+        }
+        "tools.swapColors" => {
+            let t = &mut session.tools;
+            std::mem::swap(&mut t.foreground, &mut t.background);
+            Ok(json!({ "foreground": hex(t.foreground), "background": hex(t.background) }))
+        }
+
+        // ---------------------------------------------------------------- paint
+        "paint.stroke" => paint::stroke(session, &params),
+        "paint.pencil" => paint::stroke(session, &params),
+        "paint.bucket" => paint::bucket(session, &params),
+        "paint.gradient" => paint::gradient(session, &params),
+        "paint.cloneStamp" => paint::clone_stamp(session, &params),
+        "paint.spotHealing" => paint::spot_healing(session, &params),
+
+        // ---------------------------------------------------------------- selection
+        "select.rect" => select::rect(session, &params),
+        "select.lasso" => select::lasso(session, &params),
+        "select.magicWand" => select::magic_wand(session, &params),
+        "select.deselect" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            doc.doc.selection = None;
+            doc.touch();
+            Ok(json!({ "selection": null }))
+        }
+
+        // ---------------------------------------------------------------- type
+        "type.create" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let text = params.get("text").and_then(Value::as_str).unwrap_or("Text").to_string();
+            let id = doc.doc.take_id();
+            let colour = hex(doc_foreground(session)).to_string();
+            doc.doc.layers.push(Layer {
+                id,
+                name: text.chars().take(24).collect(),
+                kind: Kind::Text,
+                visible: true,
+                locked: false,
+                opacity: 1.0,
+                blend: Blend::Normal,
+                clipped: false,
+                children: Vec::new(),
+                content: Content::Text(TextRun {
+                    text,
+                    x: number(&params, "x")?,
+                    y: number(&params, "y")?,
+                    size: number_or(&params, "size", 48.0).clamp(1.0, 2048.0),
+                    color: colour,
+                }),
+            });
+            doc.active_layer = Some(id);
+            doc.touch();
+            Ok(json!({ "layer": id }))
+        }
+
+        other => Err(format!("`{other}` is not a command this editor has.")),
+    }
+}
+
+/// The foreground colour, read before borrowing the document mutably.
+fn doc_foreground(session: &Session) -> [u8; 4] {
+    session.tools.foreground
+}
+
+/// Whether a command can run right now, and if not, why.
+pub fn enabled(session: &Session, id: &str) -> Result<(), Fail> {
+    if !known(id) {
+        return Err(format!("`{id}` is not a command this editor has."));
+    }
+    let needs_document = !matches!(
+        id,
+        "command.list" | "brush.presets.list" | "file.new" | "tools.setBrush" | "tools.setColors" | "tools.swapColors"
+    );
+    if needs_document && session.active().is_none() {
+        return Err("Open a picture first.".into());
+    }
+    let needs_layer = matches!(
+        id,
+        "layer.delete"
+            | "layer.duplicate"
+            | "layer.setProps"
+            | "layer.layerMask.revealAll"
+            | "paint.stroke"
+            | "paint.pencil"
+            | "paint.bucket"
+            | "paint.gradient"
+            | "paint.cloneStamp"
+            | "paint.spotHealing"
+    );
+    if needs_layer {
+        let Some(doc) = session.active() else { return Err("Open a picture first.".into()) };
+        let Some(id) = doc.active_layer else { return Err("Select a layer first.".into()) };
+        let Some(layer) = doc.doc.find(id) else { return Err("That layer is gone.".into()) };
+        if layer.locked {
+            return Err(format!("`{}` is locked.", layer.name));
+        }
+        if layer.kind == Kind::Adjustment {
+            return Err("This layer has no pixels of its own to paint on.".into());
+        }
+        if layer.kind == Kind::Group {
+            return Err("A group holds layers; paint on one of them.".into());
+        }
+    }
+    Ok(())
+}
+
+/// The brush presets the panel lists.
+///
+/// The studio shows these as names; each is a size/hardness pair the engine turns into a tip. They
+/// are the same set the drawing canvas offers, so a brush picked in one place means the same thing
+/// in the other.
+fn brush_presets() -> Vec<Value> {
+    [
+        ("Hard Round", 0.95),
+        ("Soft Round", 0.35),
+        ("Airbrush", 0.05),
+        ("Marker", 0.75),
+        ("Pencil", 1.0),
+        ("Splatter", 0.2),
+    ]
+    .into_iter()
+    .map(|(name, hardness)| json!({ "name": name, "hardness": hardness }))
+    .collect()
+}
+
+/// `layer.setProps`: visibility, lock, opacity, blend, name, clipping.
+fn set_props(session: &mut Session, params: &Value) -> Result<Value, Fail> {
+    let doc = session.active_mut().ok_or("Open a picture first.")?;
+    let id = match params.get("layer") {
+        Some(v) => v.as_u64().ok_or("`layer` is not a layer id.")?,
+        None => doc.active_layer.ok_or("Select a layer first.")?,
+    };
+    let blend = match params.get("blend").and_then(Value::as_str) {
+        Some(name) => Some(Blend::parse(name).ok_or_else(|| {
+            format!("`{name}` is not a blend mode this editor has (Normal, Multiply, Screen, Overlay, Soft Light).")
+        })?),
+        None => None,
+    };
+    let layer = doc.doc.find_mut(id).ok_or("No such layer.")?;
+    if let Some(v) = params.get("visible").and_then(Value::as_bool) {
+        layer.visible = v;
+    }
+    if let Some(v) = params.get("locked").and_then(Value::as_bool) {
+        layer.locked = v;
+    }
+    if let Some(v) = params.get("opacity").and_then(Value::as_f64) {
+        layer.opacity = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = params.get("clipped").and_then(Value::as_bool) {
+        layer.clipped = v;
+    }
+    if let Some(v) = params.get("name").and_then(Value::as_str) {
+        layer.name = v.to_string();
+    }
+    if let Some(b) = blend {
+        layer.blend = b;
+    }
+    let out = json!({
+        "id": layer.id,
+        "name": layer.name,
+        "visible": layer.visible,
+        "locked": layer.locked,
+        "opacity": layer.opacity,
+        "blend": layer.blend.as_str(),
+        "clipped": layer.clipped,
+    });
+    doc.touch();
+    Ok(out)
+}
+
+/// Add an adjustment layer above the active one.
+fn new_adjustment(session: &mut Session, adjustment: Adjustment, name: &str) -> Result<Value, Fail> {
+    let doc = session.active_mut().ok_or("Open a picture first.")?;
+    let id = doc.doc.take_id();
+    doc.doc.layers.push(Layer {
+        id,
+        name: name.to_string(),
+        kind: Kind::Adjustment,
+        visible: true,
+        locked: false,
+        opacity: 1.0,
+        blend: Blend::Normal,
+        clipped: false,
+        children: Vec::new(),
+        content: Content::Adjustment(adjustment),
+    });
+    doc.active_layer = Some(id);
+    doc.touch();
+    Ok(json!({ "layer": id }))
+}
+
+/// The curves the panel sends: one channel at a time, as `[[in, out], …]` in 0..=255.
+///
+/// The panel names the channel it edited (`red`, `green`, `blue`, or `points` for the RGB curve),
+/// so the other channels start at their identity and stay there.
+fn curves_from(params: &Value) -> Result<Curves, Fail> {
+    let read = |key: &str| -> Result<Vec<(u8, u8)>, Fail> {
+        let Some(arr) = params.get(key).and_then(Value::as_array) else { return Ok(Vec::new()) };
+        let mut out = Vec::with_capacity(arr.len());
+        for pair in arr {
+            let Some(p) = pair.as_array() else { return Err(format!("`{key}` wants [in, out] pairs.")) };
+            if p.len() != 2 {
+                return Err(format!("`{key}` wants [in, out] pairs."));
+            }
+            let x = p[0].as_f64().ok_or("A curve point is not a number.")?;
+            let y = p[1].as_f64().ok_or("A curve point is not a number.")?;
+            out.push((x.round().clamp(0.0, 255.0) as u8, y.round().clamp(0.0, 255.0) as u8));
+        }
+        out.sort_by_key(|p| p.0);
+        out.dedup_by_key(|p| p.0);
+        Ok(out)
+    };
+    Ok(Curves { rgb: read("points")?, red: read("red")?, green: read("green")?, blue: read("blue")? })
+}
+
+/// Give a duplicated subtree fresh ids and note the copy in each name.
+fn rename_descendants(layer: &mut Layer, doc: &mut Document) {
+    for child in &mut layer.children {
+        child.id = doc.take_id();
+        child.name = format!("{} copy", child.name);
+        rename_descendants(child, doc);
+    }
+}
+
+fn number(params: &Value, key: &str) -> Result<f64, Fail> {
+    params
+        .get(key)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| format!("`{key}` is required and must be a number."))
+}
+
+fn number_or(params: &Value, key: &str, default: f64) -> f64 {
+    params.get(key).and_then(Value::as_f64).unwrap_or(default)
+}
+
+/// Decode a picture the shell hands over: PNG or JPEG, to straight RGBA at its own size.
+///
+/// The shell owns the file system and passes bytes; the engine owns decoding, because the
+/// document needs pixels, not a file.
+pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Fail> {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".png") || bytes.starts_with(b"\x89PNG") {
+        let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        let mut reader = decoder.read_info().map_err(|e| format!("That PNG will not open: {e}"))?;
+        let mut buf = vec![0; reader.output_buffer_size().unwrap_or(0)];
+        let info = reader.next_frame(&mut buf).map_err(|e| format!("That PNG will not open: {e}"))?;
+        buf.truncate(info.buffer_size());
+        let rgba = match info.color_type {
+            png::ColorType::Rgba => buf,
+            png::ColorType::Rgb => to_rgba(&buf, 3),
+            png::ColorType::GrayscaleAlpha => to_rgba(&buf, 2),
+            png::ColorType::Grayscale => to_rgba(&buf, 1),
+            png::ColorType::Indexed => {
+                return Err("Indexed PNGs are not supported yet; save it as RGB.".into());
+            }
+        };
+        return Ok((info.width, info.height, rgba));
+    }
+    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") || bytes.starts_with(&[0xFF, 0xD8]) {
+        return Err("JPEG pictures are not decoded yet; save it as PNG.".into());
+    }
+    Err(format!("`{name}` is not a picture this editor opens."))
+}
+
+fn to_rgba(buf: &[u8], channels: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(buf.len() / channels * 4);
+    for px in buf.chunks_exact(channels) {
+        match channels {
+            3 => out.extend_from_slice(&[px[0], px[1], px[2], 255]),
+            2 => out.extend_from_slice(&[px[0], px[0], px[0], px[1]]),
+            1 => out.extend_from_slice(&[px[0], px[0], px[0], 255]),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Encode the active document as a picture, for the shell to write.
+pub fn encode_picture(doc: &Document, format: &str, quality: u8) -> Result<Vec<u8>, Fail> {
+    let composite = compose::render(doc);
+    match format.to_ascii_lowercase().as_str() {
+        "png" => {
+            let mut out = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut out, doc.width, doc.height);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                let mut writer = encoder.write_header().map_err(|e| format!("The PNG cannot be written: {e}"))?;
+                writer.write_image_data(&composite).map_err(|e| format!("The PNG cannot be written: {e}"))?;
+            }
+            Ok(out)
+        }
+        "jpg" | "jpeg" => Err("JPEG export is not written yet; export PNG.".into()),
+        other => Err(format!("`{other}` is not a format this editor writes (png).")),
+    }
+}
+
+/// The composite of the active document at a size, for [`Session::render`].
+pub fn render_fitted(doc: &Document, max_width: u32, max_height: u32) -> (u32, u32, Vec<u8>) {
+    let (w, h) = fit(doc.width, doc.height, max_width, max_height);
+    let full = compose::render(doc);
+    if (w, h) == (doc.width, doc.height) {
+        return (w, h, full);
+    }
+    (w, h, reduce(&full, doc.width, doc.height, w, h))
+}
+
+/// The largest size with the document's aspect that fits in `max_w` × `max_h`, never enlarging.
+pub fn fit(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    let (w, h, max_w, max_h) = (w.max(1) as f64, h.max(1) as f64, max_w.max(1) as f64, max_h.max(1) as f64);
+    let scale = (max_w / w).min(max_h / h).min(1.0);
+    (((w * scale).round()).max(1.0) as u32, ((h * scale).round()).max(1.0) as u32)
+}
+
+/// Area-averaged reduction: a still line of a preview must not alias into moiré.
+pub fn reduce(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (dw as usize) * (dh as usize) * 4];
+    let x_ratio = sw as f64 / dw as f64;
+    let y_ratio = sh as f64 / dh as f64;
+    for y in 0..dh as usize {
+        let y0 = (y as f64 * y_ratio) as usize;
+        let y1 = (((y + 1) as f64 * y_ratio).ceil() as usize).min(sh as usize).max(y0 + 1);
+        for x in 0..dw as usize {
+            let x0 = (x as f64 * x_ratio) as usize;
+            let x1 = (((x + 1) as f64 * x_ratio).ceil() as usize).min(sw as usize).max(x0 + 1);
+            let mut acc = [0u32; 4];
+            let mut n = 0u32;
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let i = (sy * sw as usize + sx) * 4;
+                    for c in 0..4 {
+                        acc[c] += u32::from(src[i + c]);
+                    }
+                    n += 1;
+                }
+            }
+            let o = (y * dw as usize + x) * 4;
+            for c in 0..4 {
+                out[o + c] = if n == 0 { 0 } else { (acc[c] / n) as u8 };
+            }
+        }
+    }
+    out
+}
