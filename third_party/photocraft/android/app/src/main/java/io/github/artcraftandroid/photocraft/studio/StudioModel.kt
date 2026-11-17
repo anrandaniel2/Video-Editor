@@ -150,7 +150,7 @@ object Workspaces {
                     "table", "rectangle", "frame" -> Tool.Rect
                     "pen" -> Tool.Pencil
                     "ellipse" -> Tool.Rect
-                    "image" -> Tool.Move
+                    "image" -> Tool.Place
                     "brush" -> Tool.Brush
                     "dropper" -> Tool.Eyedropper
                     "hand" -> Tool.Hand

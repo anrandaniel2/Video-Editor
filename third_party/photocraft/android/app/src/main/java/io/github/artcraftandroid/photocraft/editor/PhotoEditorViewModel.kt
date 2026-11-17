@@ -38,6 +38,8 @@ enum class Tool(val label: String) {
     Eyedropper("Eyedropper"),
     Hand("Hand"),
     Zoom("Zoom"),
+    /** The Layout workspace's Place Image tool: the picker, then a picture on the page. */
+    Place("Place Image"),
 }
 
 /** The floating panel the right toolbar opened, if any. */
@@ -425,6 +427,9 @@ class PhotoEditorViewModel : ViewModel() {
                 JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("text", "Text").put("size", 24),
             )
             Tool.Hand -> Unit
+            // The studio's Place Image tool opens the picker there; the classic panel has no
+            // picker of its own, and a tap must not leave a paint dab behind.
+            Tool.Place -> Unit
             // The Clone Stamp takes its source from the first tap (as ⌥-click does on a desktop);
             // the Healing Brush needs none, it reads the pixels around the stroke.
             Tool.Clone -> cloneSource = x to y // the next drag paints from here

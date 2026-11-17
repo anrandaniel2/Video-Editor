@@ -45,6 +45,7 @@ fun StudioCanvas(
     modifier: Modifier = Modifier,
     onPickedColour: (String) -> Unit,
     onFailure: (String) -> Unit,
+    onPlacePicture: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var viewport by remember { mutableStateOf(IntSize.Zero) }
@@ -146,6 +147,9 @@ fun StudioCanvas(
                             // The reference zooms a step per click, up to 250 %.
                             Tool.Zoom -> state.zoom = (state.zoom + 0.15f).coerceAtMost(2.5f)
                             Tool.Hand -> Unit
+                            // The Layout workspace's Place Image tool: a tap is how a picture
+                            // gets onto the page, rather than reaching for a menu.
+                            Tool.Place -> onPlacePicture()
                             else -> {
                                 val (x, y) = toDocument(pos)
                                 val colour = state.value("colour")

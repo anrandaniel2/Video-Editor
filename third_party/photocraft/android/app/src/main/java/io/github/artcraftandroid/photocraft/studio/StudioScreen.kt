@@ -152,6 +152,7 @@ fun StudioScreen(
                     toast = "Picked ${hex.uppercase()}."
                 },
                 onFailure = { toast = it },
+                onPlacePicture = onPickPicture,
             )
 
             if (!chromeHidden) {

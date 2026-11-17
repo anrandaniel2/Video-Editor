@@ -769,9 +769,15 @@ private fun SecondaryBody(name: String, a: StudioActions) {
         "Navigator" -> NavigatorBody(a)
         "History" -> HistoryBody(a)
         "Export" -> ExportBody(a)
+        // The rail's thirteen studios are all handled above, so this is a panel name the model
+        // does not have. It says so rather than pretending to be an Assets browser with nothing
+        // in it: a button that only explains itself is the kind of dead control this is meant to
+        // be free of.
         else -> SecondaryContent {
-            Text("No assets in this document.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
-            StandardButton("Import assets…") { a.feedback("Pictures are placed with Place Image.") }
+            Text(
+                "There is no panel called \"$name\".",
+                fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note,
+            )
         }
     }
 }
