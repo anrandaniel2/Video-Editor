@@ -70,7 +70,7 @@ jobs:
       - name: The photo engine
         run: |
           set +e
-          cargo test -p filmcraft-android photocraft:: -- --nocapture > /tmp/photo-tests.txt 2>&1
+          cargo test -p filmcraft-android photocraft -- --nocapture > /tmp/photo-tests.txt 2>&1
           status=$?
           # A compile error has no failing test to name, so the errors themselves are what has to
           # come back: the step log is not readable from where this is watched.

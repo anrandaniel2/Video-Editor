@@ -222,7 +222,11 @@ android {
     // this crate's engine through the same command ids. A separate module made sense when the Rust
     // library was separate; now that the engine is FilmCraft's own, one module is honest.
     sourceSets.getByName("main") {
+        // `java` and `kotlin` both: with AGP's built-in Kotlin the Kotlin sources live in the
+        // `kotlin` source set, and pointing only `java` at a directory of .kt files compiles
+        // nothing (the references stay unresolved, which is exactly how this first failed).
         java.srcDir("../../../../third_party/photocraft/android/app/src/main/java")
+        kotlin.srcDir("../../../../third_party/photocraft/android/app/src/main/java")
         assets.srcDir("../../../../third_party/photocraft/android/app/src/main/assets")
     }
 
