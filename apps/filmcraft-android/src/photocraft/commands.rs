@@ -400,11 +400,15 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             let Content::Shape(shape) = &mut layer.content else {
                 return Err("That layer is not a shape.".into());
             };
+            // The fill is stored as the colour text the draw resolves, so that a shape keeps the
+            // name it was given; it is parsed here to reject a colour that would never draw.
             if let Some(v) = params.get("fill").and_then(Value::as_str) {
-                shape.fill = parse_colour(v)?;
+                let colour = parse_colour(v)?;
+                shape.fill = colour.map(|_| v.to_string()).or(Some("none".into()));
             }
             if let Some(v) = params.get("stroke").and_then(Value::as_str) {
-                shape.stroke = parse_colour(v)?;
+                let colour = parse_colour(v)?;
+                shape.stroke = colour.map(|_| v.to_string());
             }
             if let Some(v) = params.get("strokeWidth").and_then(Value::as_f64) {
                 shape.stroke_width = v.clamp(0.0, 500.0);
