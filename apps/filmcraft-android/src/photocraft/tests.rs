@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::model::{Blend, Content, Document, Kind, Layer, PictureFit};
+use super::model::{Blend, Content, Document, Kind, Layer, LayerStyle, PictureFit};
 use super::Session;
 
 /// A session with one 32×32 document, active.

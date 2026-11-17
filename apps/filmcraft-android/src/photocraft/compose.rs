@@ -86,7 +86,10 @@ fn apply_style(one: &mut [u8], under: &mut [u8], style: &crate::photocraft::mode
     }
     if let Some(blur) = style.blur {
         if blur.radius >= 0.5 {
-            *one = box_blur(one, w, h, blur.radius.round() as usize);
+            // `one` is a slice, so the blurred copy is written back into it rather than replacing
+            // the binding.
+            let blurred = box_blur(one, w, h, blur.radius.round() as usize);
+            one.copy_from_slice(&blurred);
         }
     }
 }
@@ -186,8 +189,8 @@ fn blur_mask(src: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
     for _ in 0..3 {
         for y in 0..h {
             for x in 0..w {
-                let mut acc = 0.0;
-                let mut n = 0.0;
+                let mut acc = 0.0f64;
+                let mut n = 0.0f64;
                 for dx in -(radius as i64)..=(radius as i64) {
                     let sx = x as i64 + dx;
                     if sx >= 0 && sx < w as i64 {
@@ -201,8 +204,8 @@ fn blur_mask(src: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
         a.copy_from_slice(&out);
         for x in 0..w {
             for y in 0..h {
-                let mut acc = 0.0;
-                let mut n = 0.0;
+                let mut acc = 0.0f64;
+                let mut n = 0.0f64;
                 for dy in -(radius as i64)..=(radius as i64) {
                     let sy = y as i64 + dy;
                     if sy >= 0 && sy < h as i64 {
@@ -229,8 +232,8 @@ fn box_blur(src: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
         let mut sum = vec![0f64; w * h];
         for y in 0..h {
             for x in 0..w {
-                let mut acc = 0.0;
-                let mut n = 0.0;
+                let mut acc = 0.0f64;
+                let mut n = 0.0f64;
                 for dy in -(radius as i64)..=(radius as i64) {
                     for dx in -(radius as i64)..=(radius as i64) {
                         let (sx, sy) = (x as i64 + dx, y as i64 + dy);

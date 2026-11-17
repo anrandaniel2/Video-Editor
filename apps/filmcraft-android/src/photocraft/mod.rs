@@ -26,7 +26,7 @@ use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
-use model::{Document, Kind};
+use model::{Document, Kind, LayerStyle};
 
 /// What went wrong, as Kotlin shows it. Flat, so the bindings raise one exception with a message.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
