@@ -70,9 +70,19 @@ jobs:
       - name: The photo engine
         run: |
           set +e
-          cargo test -p filmcraft-android photo:: -- --nocapture > /tmp/photo-tests.txt 2>&1
+          cargo test -p filmcraft-android photocraft:: -- --nocapture > /tmp/photo-tests.txt 2>&1
           status=$?
-          grep -E '^test .* (FAILED|ok)$|^failures:|^ *[a-z_0-9:]+$|panicked at|^assertion' /tmp/photo-tests.txt | head -40
+          # A compile error has no failing test to name, so the errors themselves are what has to
+          # come back: the step log is not readable from where this is watched.
+          grep -E '^error(\[E[0-9]+\])?: ' /tmp/photo-tests.txt | head -20 | while read -r line; do
+            echo "::error title=Compile::$line"
+          done
+          grep -E '^  --> ' /tmp/photo-tests.txt | head -20 | while read -r line; do
+            echo "::warning title=At::$line"
+          done
+          grep -E '^test .* (FAILED|ok)$|^failures:|panicked at|^assertion' /tmp/photo-tests.txt | head -40 | while read -r line; do
+            echo "::error title=Test::$line"
+          done
           exit $status
 
       # Split out, because a failing test names a test and that name is the whole diagnosis. The
