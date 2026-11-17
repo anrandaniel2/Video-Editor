@@ -33,11 +33,25 @@ const REGION_LIMIT: u32 = 2048;
 /// The most pixels that fit the engine's 192 MiB tile budget.
 ///
 /// A tile is 64x64 RGBA f32 — 64 KiB — and the budget counts every allocated tile across the
-/// current state and its history. 12 megapixels is 2,961 tiles and 185 MiB: already the ceiling.
-/// A 48-megapixel phone photo is 734 MiB, so it cannot be held this way at all.
-const WORKING_PIXELS: u64 = 12_000_000;
+/// current state and its history. Two things keep this well below the 192 MiB ceiling:
+///
+/// * An edit copies every tile it touches before writing (`Arc::make_mut`), because the previous
+///   state holds the same tiles for undo. A whole-picture adjustment therefore needs the picture
+///   twice at its peak, and a phone that runs out of memory is killed rather than handed an error.
+/// * The budget also covers the undo history, and it is trimmed to fit: a picture that uses the
+///   whole budget gets its history thrown away to stay inside it. That is the failure that
+///   matters most, because it is silent — the slider works, the undo button goes grey, and the
+///   change cannot be taken back. So the picture must fit *twice*: once for itself and once for
+///   the state undo returns to.
+/// * Some of what is left is for painting on a second layer, which copies the tiles it touches.
+///
+/// Five megapixels is 1,271 tiles and 79 MiB. Twice is 159 MiB, which leaves 33 MiB — about 500
+/// tiles — for a second layer before the history has to be given up. A 2,582-pixel side is more
+/// than a phone screen shows, and a 48-megapixel phone photo is 734 MiB of tiles and cannot be
+/// held at all, so it comes in scaled down.
+const WORKING_PIXELS: u64 = 5_000_000;
 
-/// The largest picture side that fits the budget, keeping the aspect.
+/// The largest picture size that fits the budget with room to edit, keeping the aspect.
 fn working_size(width: u32, height: u32) -> (u32, u32) {
     let pixels = u64::from(width) * u64::from(height);
     if pixels <= WORKING_PIXELS {
@@ -526,9 +540,16 @@ mod tests {
 
     #[test]
     fn a_picture_too_large_for_the_tile_budget_opens_at_the_largest_size_that_fits() {
-        // The budget is the engine's 192 MiB; this is the arithmetic that keeps a phone photo from
-        // being refused outright.
-        assert_eq!(working_size(4000, 3000), (4000, 3000), "12 MP fits as it is");
+        // The budget is the engine's 192 MiB. What has to fit is not just the picture: an edit
+        // keeps the previous state for undo, so the picture has to fit twice.
+        const TILE_BYTES: u64 = 64 * 64 * 4 * 4;
+        const BUDGET: u64 = 192 * 1024 * 1024;
+        let tiles = |w: u32, h: u32| u64::from(w.div_ceil(64)) * u64::from(h.div_ceil(64));
+        for (sw, sh) in [(8000u32, 6000u32), (4000, 3000), (12000, 1000), (600, 800)] {
+            let (w, h) = working_size(sw, sh);
+            let twice = tiles(w, h) * TILE_BYTES * 2;
+            assert!(twice < BUDGET, "{sw}x{sh} comes in at {w}x{h}: {twice} bytes twice over does not leave room for undo");
+        }
         let (w, h) = working_size(8000, 6000);
         assert!(u64::from(w) * u64::from(h) <= WORKING_PIXELS, "{w}x{h} is over the budget");
         assert!((f64::from(w) / f64::from(h) - 8000.0 / 6000.0).abs() < 0.01, "the aspect is kept");
@@ -541,6 +562,31 @@ mod tests {
         let before = 20000.0 / 1000.0;
         let after = f64::from(wide) / f64::from(thin);
         assert!((before - after).abs() / before < 0.01, "{wide}x{thin} is not 20:1");
+    }
+
+    #[test]
+    fn opening_a_big_picture_reduces_it_and_still_works() -> Result<(), MobileError> {
+        // Small enough to build in a test, big enough to be over the cap on purpose: 2,400 x 2,400
+        // is 5.76 MP. Downsampled it must still open, adjust, paint and undo like any other.
+        let mut rgba = vec![0u8; 2400 * 2400 * 4];
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[90, 120, 150, 255]);
+        }
+        let photo = PhotoDocument::from_rgba(2400, 2400, rgba)?;
+        let info = photo.info()?;
+        assert!(u64::from(info.width) * u64::from(info.height) <= WORKING_PIXELS, "{}x{} was not reduced", info.width, info.height);
+        assert_eq!((info.reduced_from_width, info.reduced_from_height), (2400, 2400), "the size it came in as is kept");
+        assert!(info.width < 2400, "the working size is smaller than the original");
+        let region = photo.region(0, 0, info.width, info.height)?;
+        assert_eq!((region.width, region.height), (info.width, info.height));
+        assert!(region.rgba.chunks_exact(4).all(|p| p[3] == 255), "the picture is still opaque after being reduced");
+        // And an edit on it lands, with the undo history intact rather than trimmed away to fit.
+        let mut brighter = neutral();
+        brighter.exposure = 1.0;
+        photo.adjust(brighter, true)?;
+        assert!(photo.info()?.can_undo, "an edit on a reduced picture is still undoable");
+        photo.undo()?;
+        Ok(())
     }
 
     #[test]
