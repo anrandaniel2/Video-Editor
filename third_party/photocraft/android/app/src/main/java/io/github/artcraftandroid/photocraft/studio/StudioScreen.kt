@@ -232,7 +232,13 @@ fun StudioScreen(
                     )
                 }
                 if (workspace == WorkspaceId.Vector) {
-                    NodeToolbar(state, onStroke = { state.togglePanel("Stroke") }, modifier = Modifier.align(Alignment.BottomStart))
+                    NodeToolbar(
+                        state = state,
+                        engine = engine,
+                        onStroke = { state.togglePanel("Stroke") },
+                        onFailure = { toast = it },
+                        modifier = Modifier.align(Alignment.BottomStart),
+                    )
                 }
                 if (workspace == WorkspaceId.Sketch) {
                     SketchQuickControls(state, modifier = Modifier.align(Alignment.BottomStart))
@@ -544,7 +550,14 @@ private fun RailButton(icon: String, label: String, active: Boolean = false, onC
 
 /** The Vector workspace's node toolbar: six node actions, the stroke reading, and more. */
 @Composable
-private fun NodeToolbar(state: StudioState, onStroke: () -> Unit, modifier: Modifier = Modifier) {
+private fun NodeToolbar(
+    state: StudioState,
+    engine: StudioEngine,
+    onStroke: () -> Unit,
+    onFailure: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val scope = rememberCoroutineScope()
     Column(
         modifier.padding(start = 64.dp, bottom = 56.dp).width(43.dp)
             .clip(RoundedCornerShape(18.dp)).background(Sc.surfaceBrush)
@@ -554,12 +567,27 @@ private fun NodeToolbar(state: StudioState, onStroke: () -> Unit, modifier: Modi
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         MiniGrip(width = 23.dp)
+        // The labels against the engine's own actions: each one edits the selected path's nodes,
+        // so pressing it changes the drawing rather than only which button looks pressed.
         listOf(
             "node" to "Sharp node", "curve" to "Smooth node", "circle" to "Smart node",
             "transform" to "Break curve", "vector" to "Join curves", "stroke" to "Close curve",
         ).forEach { (icon, label) ->
+            val action = when (label) {
+                "Sharp node" -> "sharp"
+                "Smooth node" -> "smooth"
+                "Smart node" -> "smart"
+                "Break curve" -> "break"
+                "Join curves" -> "join"
+                else -> "close"
+            }
             IconButton(icon, label, small = true, active = state.value("nodeAction") == label, iconSize = 18.dp) {
                 state.setValue("nodeAction", label)
+                scope.launch {
+                    runCatching {
+                        engine.run("shape.editNodes", org.json.JSONObject().put("action", action))
+                    }.onFailure { onFailure(it.message ?: "There is no path selected to edit.") }
+                }
             }
         }
         Column(Modifier.clickable(onClick = onStroke), horizontalAlignment = Alignment.CenterHorizontally) {

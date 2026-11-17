@@ -882,3 +882,45 @@ fn a_pen_path_is_geometry_with_the_nodes_that_were_drawn() {
     .expect_err("one node is not a path");
     assert!(err.contains("two nodes"), "it says why: {err}");
 }
+
+#[test]
+fn the_node_toolbar_edits_the_path_it_names() {
+    let mut s = session();
+    let id = run(&mut s, "shape.create", json!({
+        "kind": "path",
+        "x": 4.0, "y": 4.0, "width": 20.0, "height": 20.0,
+        "nodes": [
+            { "x": 4.0, "y": 4.0 }, { "x": 24.0, "y": 4.0 }, { "x": 24.0, "y": 24.0 }
+        ],
+        "closed": false, "fill": null, "stroke": "#000000", "strokeWidth": 2.0,
+    }))["layer"].as_u64().expect("a path");
+
+    // Smooth gives every node handles; sharp takes them away again.
+    run(&mut s, "shape.editNodes", json!({ "action": "smooth" }));
+    let doc = s.active().expect("a document");
+    let Content::Shape(shape) = &doc.doc.find(id).expect("the path").content else { panic!("a shape") };
+    assert!(shape.nodes.iter().all(|n| n.smooth && n.out_x != 0.0), "every node has handles");
+
+    run(&mut s, "shape.editNodes", json!({ "action": "sharp" }));
+    let doc = s.active().expect("a document");
+    let Content::Shape(shape) = &doc.doc.find(id).expect("the path").content else { panic!("a shape") };
+    assert!(shape.nodes.iter().all(|n| !n.smooth && n.out_x == 0.0), "the handles are gone");
+
+    // Join closes the path, break opens it.
+    run(&mut s, "shape.editNodes", json!({ "action": "join" }));
+    let doc = s.active().expect("a document");
+    let Content::Shape(shape) = &doc.doc.find(id).expect("the path").content else { panic!("a shape") };
+    assert!(shape.closed, "joined");
+    run(&mut s, "shape.editNodes", json!({ "action": "break" }));
+    let doc = s.active().expect("a document");
+    let Content::Shape(shape) = &doc.doc.find(id).expect("the path").content else { panic!("a shape") };
+    assert!(!shape.closed, "broken");
+
+    // A rectangle has no nodes to edit, and the command says so rather than doing nothing.
+    run(&mut s, "shape.create", json!({
+        "kind": "rectangle", "x": 2.0, "y": 2.0, "width": 8.0, "height": 8.0, "fill": "#000000",
+    }));
+    let err = super::commands::execute(&mut s, "shape.editNodes", json!({ "action": "sharp" }))
+        .expect_err("a rectangle has no path nodes");
+    assert!(err.contains("path"), "it says why: {err}");
+}

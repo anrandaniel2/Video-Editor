@@ -64,6 +64,7 @@ pub const IDS: &[&str] = &[
     "select.magicWand",
     "select.rect",
     "shape.create",
+    "shape.editNodes",
     "shape.setNodes",
     "shape.setProps",
     "tools.setBrush",
@@ -406,6 +407,67 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             shape.closed = params.get("closed").and_then(Value::as_bool).unwrap_or(shape.closed);
             Ok(json!({ "layer": id, "nodes": shape.nodes.len() }))
         }
+        // The node toolbar's actions, applied to the selected path's own node list. Sharp,
+        // smooth and smart node set the handles; break, join and close set the ends. Each keeps
+        // the path geometry, which is what makes the toolbar do something rather than record
+        // which button was pressed last.
+        "shape.editNodes" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc
+                .active_layer
+                .ok_or("Select a path first.")?;
+            doc.push_history("Edit nodes");
+            doc.touch();
+            let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+            let Content::Shape(shape) = &mut layer.content else {
+                return Err("That layer is not a shape.".into());
+            };
+            if shape.kind != ShapeKind::Path {
+                return Err("Only a path has nodes to edit.".into());
+            }
+            let action = params
+                .get("action")
+                .and_then(Value::as_str)
+                .ok_or("`action` is required: sharp, smooth, smart, break, join or close.")?;
+            let n = shape.nodes.len();
+            match action {
+                // A sharp node's handles lie on its own point, so the join is a corner.
+                "sharp" => {
+                    for node in &mut shape.nodes {
+                        node.in_x = 0.0;
+                        node.in_y = 0.0;
+                        node.out_x = 0.0;
+                        node.out_y = 0.0;
+                        node.smooth = false;
+                    }
+                }
+                // A smooth node's handles follow the line through its neighbours, which is what
+                // makes the join continuous rather than a corner.
+                "smooth" | "smart" => {
+                    for i in 0..n {
+                        let prev = shape.nodes[(i + n - 1) % n];
+                        let next = shape.nodes[(i + 1) % n];
+                        let (dx, dy) = (next.x - prev.x, next.y - prev.y);
+                        let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+                        let (ux, uy) = (dx / len * 8.0, dy / len * 8.0);
+                        let node = &mut shape.nodes[i];
+                        if action == "smooth" {
+                            node.in_x = -ux;
+                            node.in_y = -uy;
+                            node.out_x = ux;
+                            node.out_y = uy;
+                        }
+                        node.smooth = true;
+                    }
+                }
+                // Breaking a closed path opens it at the end; joining closes it again.
+                "break" => shape.closed = false,
+                "join" | "close" => shape.closed = n >= 3,
+                other => return Err(format!("`{other}` is not a node action.")),
+            }
+            Ok(json!({ "layer": id, "nodes": n, "closed": shape.closed, "smooth": shape.nodes.iter().any(|n| n.smooth) }))
+        }
+
         "shape.setProps" => {
             let doc = session.active_mut().ok_or("Open a picture first.")?;
             // A panel that edits a shape by name passes its layer; a toolbar acting on what is
