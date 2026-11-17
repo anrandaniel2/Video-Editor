@@ -317,12 +317,19 @@ fn the_status_reports_what_the_shell_shows() {
 fn a_self_overlapping_stroke_records_one_step() {
     let mut s = session();
     run(&mut s, "layer.new.layer", json!({}));
+    let before = s.active().expect("a document").past.len();
+    // A single drag that crosses itself: three points, two segments, the second landing back on
+    // the first. Whatever the pointer did, the user did one thing.
     run(
         &mut s,
         "paint.stroke",
         json!({ "points": [[4.0, 4.0], [28.0, 28.0], [4.0, 28.0]], "color": "#000000", "size": 3.0 }),
     );
-    assert_eq!(s.active().expect("a document").past.len(), 1, "one drag is one undo step");
+    assert_eq!(
+        s.active().expect("a document").past.len() - before,
+        1,
+        "one drag is one undo step"
+    );
 }
 
 #[test]

@@ -34,6 +34,14 @@ pub fn render_rect(doc: &Document, x: u32, y: u32, width: u32, height: u32) -> V
     let mut layer = vec![0u8; (w as usize) * (h as usize) * 4];
 
     for l in &doc.layers {
+        // An adjustment changes what is already there, so it has to see the accumulated
+        // composite. Compositing it into a fresh buffer and blending that over would give it
+        // nothing to adjust — the layer under a curves layer would be untouched, which is the
+        // one thing the panel promises will not happen.
+        if matches!(l.content, Content::Adjustment(_)) {
+            composite_layer(l, doc, x0, y0, w, h, &mut out, 1.0);
+            continue;
+        }
         layer.fill(0);
         composite_layer(l, doc, x0, y0, w, h, &mut layer, 1.0);
         over(&mut out, &layer, w as usize, h as usize, w as usize);
@@ -63,6 +71,12 @@ fn composite_layer(
             // between a group and a folder.
             let mut group = vec![0u8; out.len()];
             for child in &l.children {
+                // Same rule inside a group: an adjustment among the children adjusts what its
+                // siblings have already painted, not an empty buffer.
+                if matches!(child.content, Content::Adjustment(_)) {
+                    composite_layer(child, doc, x0, y0, w, h, &mut group, 1.0);
+                    continue;
+                }
                 let mut one = vec![0u8; out.len()];
                 composite_layer(child, doc, x0, y0, w, h, &mut one, 1.0);
                 over(&mut group, &one, w as usize, h as usize, w as usize);
