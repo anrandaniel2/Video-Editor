@@ -868,7 +868,10 @@ fn a_pen_path_is_geometry_with_the_nodes_that_were_drawn() {
     // The path is stroked where it runs and not where it does not: the corner at 4,4 is inked,
     // the middle of the canvas is not.
     let px = pixels(&s);
-    assert!(at(&px, 32, 4, 5)[0] < 128, "the first segment is inked");
+    // The top segment runs along y = 4 with a 2px stroke, so it covers y 3..5; a pixel whose
+    // centre is on that band is inked, and one a row below it is not.
+    assert!(at(&px, 32, 10, 4)[0] < 128, "the first segment is inked");
+    assert_eq!(at(&px, 32, 10, 8), [255, 255, 255, 255], "one row clear of it is not");
     assert_eq!(at(&px, 32, 16, 16), [255, 255, 255, 255], "the open middle is untouched");
     // And a path needs two nodes to be a path at all.
     let err = super::commands::execute(
