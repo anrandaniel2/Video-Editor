@@ -68,7 +68,12 @@ jobs:
       # The photo engine's own module first: it is the one this branch added, and its failures are
       # the ones that matter most here.
       - name: The photo engine
-        run: 'cargo test -p filmcraft-android photo:: -- --nocapture'
+        run: |
+          set +e
+          cargo test -p filmcraft-android photo:: -- --nocapture > /tmp/photo-tests.txt 2>&1
+          status=$?
+          grep -E '^test .* (FAILED|ok)$|^failures:|^ *[a-z_0-9:]+$|panicked at|^assertion' /tmp/photo-tests.txt | head -40
+          exit $status
 
       # Split out, because a failing test names a test and that name is the whole diagnosis. The
       # step log is not always readable from the API, but a failure annotation is.

@@ -577,9 +577,11 @@ mod tests {
         assert!(u64::from(info.width) * u64::from(info.height) <= WORKING_PIXELS, "{}x{} was not reduced", info.width, info.height);
         assert_eq!((info.reduced_from_width, info.reduced_from_height), (2400, 2400), "the size it came in as is kept");
         assert!(info.width < 2400, "the working size is smaller than the original");
-        let region = photo.region(0, 0, info.width, info.height)?;
-        assert_eq!((region.width, region.height), (info.width, info.height));
-        assert!(region.rgba.chunks_exact(4).all(|p| p[3] == 255), "the picture is still opaque after being reduced");
+        // A region, not the whole picture: region() is capped at 2,048 pixels a side and the
+        // picture is deliberately bigger than that.
+        let region = photo.region(100, 100, 512, 512, 0.0)?;
+        assert_eq!(region.len(), 512 * 512 * 4);
+        assert!(region.chunks_exact(4).all(|p| p[3] == 255), "the picture is still opaque after being reduced");
         // And an edit on it lands, with the undo history intact rather than trimmed away to fit.
         let mut brighter = neutral();
         brighter.exposure = 1.0;
