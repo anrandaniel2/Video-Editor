@@ -419,3 +419,82 @@ fn an_adjustment_respects_the_selection() {
     assert!(inside > 128, "inside the selection was lifted: {inside}");
     assert_eq!(outside, 128, "outside it was untouched: {outside}");
 }
+
+#[test]
+fn the_eraser_takes_paint_away_instead_of_painting_transparent_on_it() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#123456", "tolerance": 0.0 }));
+    assert_eq!(at(&pixels(&s), 32, 16, 16), [0x12, 0x34, 0x56, 0xFF], "the layer is painted");
+    run(&mut s, "paint.stroke", json!({ "points": [[16.0, 16.0]], "size": 40.0, "erase": true }));
+    let after = at(&pixels(&s), 32, 16, 16);
+    assert_eq!(after[3], 0, "the eraser removed the alpha: {after:?}");
+}
+
+#[test]
+fn the_pencil_is_a_hard_tip_and_the_brush_is_not() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.pencil", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0 }));
+    let a = at(&pixels(&s), 32, 16, 16)[3];
+    assert_eq!(a, 255, "the pencil's centre is fully opaque");
+    // The same tap with the brush at a soft hardness must leave the edge partly open.
+    let mut s2 = session();
+    run(&mut s2, "layer.new.layer", json!({}));
+    run(&mut s2, "paint.stroke", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0, "hardness": 0.0 }));
+    let edge_brush = at(&pixels(&s2), 32, 20, 16)[3];
+    let mut s3 = session();
+    run(&mut s3, "layer.new.layer", json!({}));
+    run(&mut s3, "paint.pencil", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0 }));
+    let edge_pencil = at(&pixels(&s3), 32, 20, 16)[3];
+    assert!(
+        edge_pencil > edge_brush,
+        "the pencil's edge is harder: pencil {edge_pencil}, brush {edge_brush}"
+    );
+}
+
+#[test]
+fn a_stroke_sent_in_pieces_under_one_coalesce_key_is_one_step() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    let before = s.active().expect("a document").past.len();
+    // A drag arrives as several calls, each naming the gesture.
+    for x in [8.0, 12.0, 16.0, 20.0] {
+        run(
+            &mut s,
+            "paint.stroke",
+            json!({ "points": [[x, 16.0]], "color": "#000000", "coalesce": "photocraft.stroke" }),
+        );
+    }
+    assert_eq!(
+        s.active().expect("a document").past.len() - before,
+        1,
+        "one drag, one history row"
+    );
+}
+
+#[test]
+fn the_clone_stamp_reads_the_source_the_studio_sends() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#224466", "tolerance": 0.0 }));
+    // The studio sends the alt-tapped point as a two-element array.
+    let out = run(
+        &mut s,
+        "paint.cloneStamp",
+        json!({ "points": [[4.0, 4.0]], "source": [20.0, 20.0], "size": 6.0, "hardness": 100, "opacity": 100 }),
+    );
+    assert!(out.get("points").is_some(), "the stamp ran: {out}");
+}
+
+#[test]
+fn an_adjustment_layers_levels_read_the_panels_scale() {
+    // The panel's Input black slider is 0..=255; read as 0..=1 it would clamp to 1.0 and crush
+    // the picture to black. A black point of 128 must map mid-grey to black.
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#808080", "tolerance": 0.0 }));
+    run(&mut s, "layer.newAdjustmentLayer.levels", json!({ "inBlack": 128, "gamma": 1.0, "inWhite": 255 }));
+    let after = at(&pixels(&s), 32, 16, 16)[0];
+    assert!(after < 10, "a black point at 128 made the midtone black: {after}");
+}

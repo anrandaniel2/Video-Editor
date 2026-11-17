@@ -206,12 +206,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             new_adjustment(session, Adjustment::Curves(adjustment), "Curves")
         }
         "layer.newAdjustmentLayer.levels" => {
-            let adjustment = Adjustment::Levels {
-                black: number_or(&params, "black", 0.0).clamp(0.0, 1.0),
-                white: number_or(&params, "white", 1.0).clamp(0.0, 1.0),
-                gamma: number_or(&params, "gamma", 1.0).clamp(0.1, 10.0),
-            };
-            new_adjustment(session, adjustment, "Levels")
+            new_adjustment(session, levels_from(&params), "Levels")
         }
 
         // ------------------------------------------------- whole image adjustments
@@ -224,15 +219,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             let adjustment = Adjustment::Curves(curves_from(&params)?);
             apply_to_pixels(session, adjustment, "Curves", &params)
         }
-        "image.adjustments.levels" => {
-            // The panel sends 0..=255 for the two points and a gamma around 1.
-            let adjustment = Adjustment::Levels {
-                black: number_or(&params, "inBlack", 0.0).clamp(0.0, 255.0) / 255.0,
-                white: number_or(&params, "inWhite", 255.0).clamp(0.0, 255.0) / 255.0,
-                gamma: number_or(&params, "gamma", 1.0).clamp(0.1, 10.0),
-            };
-            apply_to_pixels(session, adjustment, "Levels", &params)
-        }
+        "image.adjustments.levels" => apply_to_pixels(session, levels_from(&params), "Levels", &params),
 
         // ---------------------------------------------------------------- tools
         "tools.setBrush" => {
@@ -274,7 +261,16 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
 
         // ---------------------------------------------------------------- paint
         "paint.stroke" => paint::stroke(session, &params),
-        "paint.pencil" => paint::stroke(session, &params),
+        // The pencil is the same stamper with a hard, aliased tip. Setting the flag here rather
+        // than asking the UI to send it keeps the command id authoritative: the tool rail already
+        // decided, and a pencil that drew a soft brush would be the rail lying.
+        "paint.pencil" => {
+            let mut p = params.clone();
+            if let Value::Object(ref mut o) = p {
+                o.insert("pencil".into(), Value::Bool(true));
+            }
+            paint::stroke(session, &p)
+        }
         "paint.bucket" => paint::bucket(session, &params),
         "paint.gradient" => paint::gradient(session, &params),
         "paint.cloneStamp" => paint::clone_stamp(session, &params),
@@ -513,6 +509,30 @@ fn apply_to_pixels(
         compose::adjust_pixels(px, &adjustment);
     }
     Ok(json!({ "layer": id }))
+}
+
+/// The Levels panel's three numbers, in the two shapes it is sent in.
+///
+/// The panel sends `inBlack`/`inWhite` on the 0..=255 scale the picture uses; the layer command
+/// and any caller reading the engine directly use `black`/`white` on 0..=1. Accepting both keeps
+/// the sliders meaning what they show, which the 0..=1 reader would have quietly broken: a black
+/// point of 40 would have clamped to 1.0 and crushed the whole picture.
+fn levels_from(params: &Value) -> Adjustment {
+    let (black, white) = match params.get("inBlack").and_then(Value::as_f64) {
+        Some(v) => (
+            (v / 255.0).clamp(0.0, 1.0),
+            (number_or(params, "inWhite", 255.0) / 255.0).clamp(0.0, 1.0),
+        ),
+        None => (
+            number_or(params, "black", 0.0).clamp(0.0, 1.0),
+            number_or(params, "white", 1.0).clamp(0.0, 1.0),
+        ),
+    };
+    Adjustment::Levels {
+        black,
+        white,
+        gamma: number_or(params, "gamma", 1.0).clamp(0.1, 10.0),
+    }
 }
 
 fn curves_from(params: &Value) -> Result<Curves, Fail> {

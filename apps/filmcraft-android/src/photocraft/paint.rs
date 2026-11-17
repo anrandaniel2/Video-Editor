@@ -32,7 +32,7 @@ fn target(session: &mut Session) -> Result<&mut Layer, Fail> {
 /// The colour a paint command uses: its own `color`, else the session's foreground.
 fn colour(params: &Value, session: &Session) -> Result<[u8; 4], Fail> {
     match params.get("color").and_then(Value::as_str) {
-        Some(text) => parse_colour(text).map_err(|e| e)?.ok_or_else(|| "That colour is empty.".to_string()),
+        Some(text) => parse_colour(text)?.ok_or_else(|| "That colour is empty.".to_string()),
         None => Ok(session.tools.foreground),
     }
 }
@@ -64,13 +64,21 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         .unwrap_or(session.tools.brush_size)
         .clamp(0.5, 5000.0);
     // A pencil is a hard, aliased tip; the brush falls off as its hardness says. The command id
-    // is what decides, because that is what the tool rail selected.
+    // is what decides, because that is what the tool rail selected — and the pencil command sets
+    // this flag, so `paint.pencil` is not simply the brush under another name.
     let straight = params.get("pencil").and_then(Value::as_bool).unwrap_or(false);
+    // The Eraser is the brush with `erase`, and rubbing a layer out is painting it transparent.
+    let erasing = params.get("erase").and_then(Value::as_bool).unwrap_or(false);
+    let colour = if erasing { [0, 0, 0, 0] } else { colour };
+    // The panel sends a `coalesce` name for the gesture: a drag that arrives as several calls is
+    // one history row, not one per call.
+    let coalesce = params.get("coalesce").and_then(Value::as_str);
 
     let (width, height) = {
         let doc = session.active_mut().ok_or("Open a picture first.")?;
         // The snapshot is the state to return to, so it is taken before the edit.
-        doc.push_history(if straight { "Pencil" } else { "Brush" });
+        let label = if erasing { "Eraser" } else if straight { "Pencil" } else { "Brush" };
+        doc.push_history_coalescing(label, coalesce);
         (doc.doc.width, doc.doc.height)
     };
     let selection = session.active().and_then(|d| d.doc.selection.clone());
@@ -84,10 +92,10 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
 
     let radius = (size / 2.0).max(0.25);
     for pair in points.windows(2) {
-        stamp_segment(px, width, height, pair[0], pair[1], radius, hardness, opacity, colour, straight, selection.as_deref());
+        stamp_segment(px, width, height, pair[0], pair[1], radius, hardness, opacity, colour, straight, erasing, selection.as_deref());
     }
     if points.len() == 1 {
-        stamp_segment(px, width, height, points[0], points[0], radius, hardness, opacity, colour, straight, selection.as_deref());
+        stamp_segment(px, width, height, points[0], points[0], radius, hardness, opacity, colour, straight, erasing, selection.as_deref());
     }
     session.active_mut().unwrap().touch();
     Ok(serde_json::json!({ "points": points.len() }))
@@ -106,6 +114,7 @@ fn stamp_segment(
     opacity: f64,
     colour: [u8; 4],
     straight: bool,
+    erasing: bool,
     selection: Option<&[u8]>,
 ) {
     let dx = b.0 - a.0;
@@ -118,7 +127,7 @@ fn stamp_segment(
         let t = if steps == 0 { 0.0 } else { i as f64 / steps as f64 };
         let cx = a.0 + dx * t;
         let cy = a.1 + dy * t;
-        stamp(pixels, width, height, cx, cy, radius, hardness, opacity, colour, straight, selection);
+        stamp(pixels, width, height, cx, cy, radius, hardness, opacity, colour, straight, erasing, selection);
     }
 }
 
@@ -135,6 +144,7 @@ fn stamp(
     opacity: f64,
     colour: [u8; 4],
     straight: bool,
+    erasing: bool,
     selection: Option<&[u8]>,
 ) {
     let x0 = ((cx - radius).floor() as i64).max(0);
@@ -170,6 +180,20 @@ fn stamp(
                 continue;
             }
             let i = ((y as usize) * width as usize + x as usize) * 4;
+            // The Eraser takes alpha away rather than painting transparent on top: painting
+            // transparent is a no-op source-over, so it would look like the tool did nothing.
+            if erasing {
+                let da = pixels[i + 3] as f64 / 255.0;
+                let out_a = (da * (1.0 - edge * opacity)).clamp(0.0, 1.0);
+                pixels[i + 3] = (out_a * 255.0).round() as u8;
+                // A pixel that keeps alpha keeps its colour; one that loses all of it holds none.
+                if out_a <= 0.0 {
+                    pixels[i] = 0;
+                    pixels[i + 1] = 0;
+                    pixels[i + 2] = 0;
+                }
+                continue;
+            }
             let sa = edge * opacity * (colour[3] as f64 / 255.0);
             if sa <= 0.0 {
                 continue;
@@ -217,7 +241,10 @@ pub fn bucket(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     let seed = pixel_at(&composite, width, x as usize, y as usize);
     let filled = flood(&composite, &selection, width, height, x as usize, y as usize, seed, tolerance);
 
-    session.active_mut().ok_or("Open a picture first.")?.push_history("Fill");
+    {
+        let doc = session.active_mut().ok_or("Open a picture first.")?;
+        doc.push_history_coalescing("Fill", params.get("coalesce").and_then(Value::as_str));
+    }
     let layer = target(session)?;
     let Content::Pixels(pixels) = &mut layer.content else { unreachable!() };
     // `make_mut` is what keeps the undo snapshot cheap: the clone happened when the snapshot was
@@ -319,11 +346,11 @@ pub fn gradient(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     let x1 = params.get("x2").and_then(Value::as_f64).unwrap_or(x0);
     let y1 = params.get("y2").and_then(Value::as_f64).unwrap_or(y0);
     let start = match params.get("color").and_then(Value::as_str) {
-        Some(c) => parse_colour(c).map_err(|e| e)?.ok_or("The gradient needs a colour.")?,
+        Some(c) => parse_colour(c)?.ok_or("The gradient needs a colour.")?,
         None => session.tools.foreground,
     };
     let end = match params.get("color2").and_then(Value::as_str) {
-        Some(c) => parse_colour(c).map_err(|e| e)?.ok_or("The gradient needs a second colour.")?,
+        Some(c) => parse_colour(c)?.ok_or("The gradient needs a second colour.")?,
         None => session.tools.background,
     };
     let (width, height) = {
@@ -337,7 +364,10 @@ pub fn gradient(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     if len2 <= 1e-9 {
         return Err("A gradient needs two different points.".into());
     }
-    session.active_mut().ok_or("Open a picture first.")?.push_history("Gradient");
+    {
+        let doc = session.active_mut().ok_or("Open a picture first.")?;
+        doc.push_history_coalescing("Gradient", params.get("coalesce").and_then(Value::as_str));
+    }
     let layer = target(session)?;
     let Content::Pixels(pixels) = &mut layer.content else { unreachable!() };
     // `make_mut` is what keeps the undo snapshot cheap: the clone happened when the snapshot was
@@ -378,15 +408,25 @@ pub fn gradient(session: &mut Session, params: &Value) -> Result<Value, Fail> {
 
 /// `paint.cloneStamp`: copy pixels from a source point to the stroke.
 ///
-/// The source is `sourceX`,`sourceY` — where the user alt-tapped — and the offset from the first
-/// stroke point is held for the whole stroke, which is how a clone stamp is expected to behave.
+/// The source is where the user alt-tapped, as `source: [x, y]` (the studio's shape) or
+/// `sourceX`/`sourceY`. The offset from the first stroke point is held for the whole stroke, which
+/// is how a clone stamp is expected to behave.
 pub fn clone_stamp(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     let points = read_points(params)?;
     if points.is_empty() {
         return Err("The stamp needs at least one point.".into());
     }
-    let sx = number(params, "sourceX")?;
-    let sy = number(params, "sourceY")?;
+    // The studio sends the source as a two-element array; the named pair is kept because a
+    // command is easier to drive from a test or a script that way.
+    let (sx, sy) = match params.get("source").and_then(Value::as_array) {
+        Some(pair) if pair.len() == 2 => {
+            let get = |i: usize| {
+                pair[i].as_f64().ok_or_else(|| "`source` wants two numbers.".to_string())
+            };
+            (get(0)?, get(1)?)
+        }
+        _ => (number(params, "sourceX")?, number(params, "sourceY")?),
+    };
     let size = params.get("size").and_then(Value::as_f64).unwrap_or(session.tools.brush_size).clamp(1.0, 5000.0);
     let opacity = params
         .get("opacity")
@@ -404,7 +444,10 @@ pub fn clone_stamp(session: &mut Session, params: &Value) -> Result<Value, Fail>
     let selection = session.active().unwrap().doc.selection.clone();
     let source = compose::render(&session.active().unwrap().doc);
 
-    session.active_mut().ok_or("Open a picture first.")?.push_history("Clone stamp");
+    {
+        let doc = session.active_mut().ok_or("Open a picture first.")?;
+        doc.push_history_coalescing("Clone stamp", params.get("coalesce").and_then(Value::as_str));
+    }
     let layer = target(session)?;
     let Content::Pixels(pixels) = &mut layer.content else { unreachable!() };
     // `make_mut` is what keeps the undo snapshot cheap: the clone happened when the snapshot was
@@ -493,7 +536,10 @@ pub fn spot_healing(session: &mut Session, params: &Value) -> Result<Value, Fail
     let before = compose::render(&session.active().unwrap().doc);
     // A small box blur of the whole composite, then mixed in under the brush.
     let blurred = box_blur(&before, width, height, (radius / 2.0).max(1.0) as usize);
-    session.active_mut().ok_or("Open a picture first.")?.push_history("Spot healing");
+    {
+        let doc = session.active_mut().ok_or("Open a picture first.")?;
+        doc.push_history_coalescing("Spot healing", params.get("coalesce").and_then(Value::as_str));
+    }
     let layer = target(session)?;
     let Content::Pixels(pixels) = &mut layer.content else { unreachable!() };
     // `make_mut` is what keeps the undo snapshot cheap: the clone happened when the snapshot was
