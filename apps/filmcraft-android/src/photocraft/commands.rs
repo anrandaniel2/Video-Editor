@@ -448,8 +448,17 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             copy.name = format!("{} copy", copy.name);
             // A copied layer is a new layer: it needs its own ids, or setProps on one of them
             // would change both.
+            // The ids come out first: a closure over `doc` cannot be handed to a loop that is
+            // already borrowing `doc`'s pages through `copy`.
+            let mut ids: Vec<u64> = Vec::new();
+            let count: usize = copy.layers.iter().map(layer_count).sum();
+            for _ in 0..count {
+                ids.push(doc.doc.take_id());
+            }
+            let mut next = ids.into_iter();
+            let mut give = || next.next().unwrap_or(0);
             for layer in &mut copy.layers {
-                give_ids(layer, &mut || doc.doc.take_id());
+                give_ids(layer, &mut give);
             }
             let to = at + 1;
             doc.doc.pages.insert(to, copy);
@@ -772,10 +781,15 @@ fn nodes_from(params: &Value, frame: &Frame) -> Vec<Node> {
 }
 
 /// Give a copied layer tree fresh ids, so a duplicate's layers are their own.
-fn give_ids(layer: &mut Layer, mut take: impl FnMut() -> u64) {
+/// How many ids a layer and its children need.
+fn layer_count(layer: &Layer) -> usize {
+    1 + layer.children.iter().map(layer_count).sum::<usize>()
+}
+
+fn give_ids(layer: &mut Layer, take: &mut dyn FnMut() -> u64) {
     layer.id = take();
     for child in &mut layer.children {
-        give_ids(child, &mut take);
+        give_ids(child, take);
     }
 }
 
