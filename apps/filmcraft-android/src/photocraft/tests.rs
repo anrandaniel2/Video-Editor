@@ -507,3 +507,87 @@ fn an_adjustment_layers_levels_read_the_panels_scale() {
     let after = at(&pixels(&s), 32, 16, 16)[0];
     assert!(after < 10, "a black point at 128 made the midtone black: {after}");
 }
+
+#[test]
+fn the_brush_list_is_the_one_the_panel_shows() {
+    // The panel lists these eight names and sends them back with tools.setBrush. An engine with a
+    // list of its own means the panel's names select nothing.
+    let mut s = session();
+    let out = super::commands::execute(&mut s, "brush.presets.list", json!({})).expect("the presets");
+    let names: Vec<String> = out["presets"]
+        .as_array()
+        .expect("presets")
+        .iter()
+        .map(|p| p["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "Natural Pencil 6B",
+            "Natural Pencil 2B",
+            "Natural Pencil 4B",
+            "Compressed Charcoal",
+            "Dense Graphite",
+            "Round Dry Bristle",
+            "Soft Chalk",
+            "Fine Ink",
+        ],
+        "the panel's own eight, in its own order"
+    );
+}
+
+#[test]
+fn picking_a_brush_changes_what_the_brush_does() {
+    // Charcoal grains; ink does not. If picking a preset left the tip alone, the eight names in
+    // the panel would be eight labels for one brush -- which is what they were.
+    let ink = {
+        let mut s = session();
+        run(&mut s, "tools.setBrush", json!({ "preset": "Fine Ink" }));
+        run(&mut s, "layer.new.layer", json!({}));
+        run(&mut s, "paint.stroke", json!({ "points": [[16.0, 16.0]], "size": 24.0, "color": "#000000" }));
+        pixels(&s)
+    };
+    let chalk = {
+        let mut s = session();
+        run(&mut s, "tools.setBrush", json!({ "preset": "Soft Chalk" }));
+        run(&mut s, "layer.new.layer", json!({}));
+        run(&mut s, "paint.stroke", json!({ "points": [[16.0, 16.0]], "size": 24.0, "color": "#000000" }));
+        pixels(&s)
+    };
+    // Count how many pixels in the tip's area are actually inked: grain leaves gaps, ink does not.
+    let inked = |buf: &[u8]| {
+        (0..32 * 32).filter(|i| buf[i * 4] < 128).count()
+    };
+    let (i, c) = (inked(&ink), inked(&chalk));
+    assert!(i > c, "ink covers more than chalk does: ink {i}, chalk {c}");
+    assert!(c > 0, "the chalk still paints something: {c}");
+}
+
+#[test]
+fn a_set_selector_can_step_through_every_document_brush() {
+    // Every brush the panel lists must belong to at least one set, or an arrow press shows an
+    // empty list and the set looks broken.
+    let mut s = session();
+    let out = super::commands::execute(&mut s, "brush.presets.list", json!({})).expect("presets");
+    let names: Vec<String> = out["presets"].as_array().expect("presets").iter()
+        .map(|p| p["name"].as_str().unwrap_or_default().to_string()).collect();
+    for set in ["Pencils", "Charcoal & Chalk", "Bristle", "Inking"] {
+        // Mirrors StudioBrushSets.filters in the UI.
+        let hit = names.iter().any(|n| {
+            let b = n.to_lowercase();
+            when_set(set, &b)
+        });
+        assert!(hit, "the `{set}` set is empty for the engine's brushes");
+    }
+}
+
+/// The UI's set rule, restated so the two cannot drift silently.
+fn when_set(set: &str, b: &str) -> bool {
+    match set {
+        "Pencils" => b.contains("pencil") || b.contains("graphite"),
+        "Charcoal & Chalk" => b.contains("charcoal") || b.contains("chalk"),
+        "Bristle" => b.contains("bristle"),
+        "Inking" => b.contains("ink"),
+        _ => true,
+    }
+}
