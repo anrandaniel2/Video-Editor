@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -874,7 +875,7 @@ private fun StrokeBody(a: StudioActions) {
     // pixel layer selected there is no stroke to change, and the panel says so rather than
     // writing a number that nothing reads.
     val isShape = active?.kind == "shape"
-    fun set(width: Float) {
+    fun applyStroke(width: Float) {
         val id = active?.id ?: return
         s.setValue("shapeStrokeWidth", width.toString())
         scope.launch {
@@ -897,13 +898,13 @@ private fun StrokeBody(a: StudioActions) {
         }
         FieldRow("Width") {
             NumberField(s.value("shapeStrokeWidth"), "Stroke width", suffix = "pt") {
-                it.toFloatOrNull()?.let(set)
+                it.toFloatOrNull()?.let { w -> applyStroke(w) }
             }
         }
         Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(0f, 1f, 2f, 4f, 8f).forEach { width ->
                 StandardButton(if (width == 0f) "None" else "${width.toInt()}") {
-                    if (isShape) set(width) else a.feedback("Select a shape first.")
+                    if (isShape) applyStroke(width) else a.feedback("Select a shape first.")
                 }
             }
         }
@@ -963,9 +964,12 @@ private fun TransformBody(a: StudioActions) {
     val movable = active?.kind == "shape" || active?.kind == "picture"
     // The numbers come from the engine's own shape, so they show where the shape is rather than
     // the last thing typed into the field.
-    val box = remember(active?.id, e.status?.revision) {
-        runCatching {
-            val doc = JSONObject(e.engine.execute("document.inspect", "{}"))
+    // `engine.execute` is the suspend wrapper the rest of the studio uses; the inspect itself is
+    // read from a background scope so the panel never blocks a frame on the engine's mutex.
+    var box by remember(active?.id, e.status?.revision) { mutableStateOf<JSONObject?>(null) }
+    LaunchedEffect(active?.id, e.status?.revision) {
+        box = runCatching {
+            val doc = JSONObject(e.run("document.inspect", refresh = false))
             val arr = doc.optJSONArray("layers")
             fun find(nodes: org.json.JSONArray?, id: Long): org.json.JSONObject? {
                 if (nodes == null) return null
@@ -982,9 +986,12 @@ private fun TransformBody(a: StudioActions) {
     val shape = box?.optJSONObject("shape") ?: box?.optJSONObject("picture")
     fun apply(key: String, value: Double) {
         val id = active?.id ?: return
+        // A shape and a picture both have frames, but they are different commands: sending a
+        // picture's id to the shape command would be refused as "not a shape".
+        val command = if (active?.kind == "picture") "picture.setProps" else "shape.setProps"
         scope.launch {
             runCatching {
-                e.run("shape.setProps", JSONObject().put("layer", id).put(key, value))
+                e.run(command, JSONObject().put("layer", id).put(key, value))
             }.onFailure { a.feedback(it.message ?: "The transform could not be applied.") }
         }
     }
