@@ -111,6 +111,9 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
         refreshAll()
     }
 
+    /** Whether the layer is locked, from the list the panel already holds. */
+    fun isLocked(id: Long): Boolean = layers.firstOrNull { it.id == id }?.locked == true
+
     suspend fun setLocked(id: Long, locked: Boolean) = withContext(Dispatchers.IO) {
         engine.execute("layer.setProps", JSONObject().put("layer", id).put("locked", locked))
         refreshAll()
@@ -467,6 +470,7 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
                         depth = depth,
                         group = kind == "group",
                         visible = o.optBoolean("visible", true),
+                        locked = o.optBoolean("locked", false),
                         opacity = o.optDouble("opacity", 1.0).toFloat(),
                         blend = o.optString("blend", "Normal"),
                         selected = o.optBoolean("selected", false),
@@ -536,6 +540,7 @@ data class StudioLayer(
     val depth: Int,
     val group: Boolean,
     val visible: Boolean,
+    val locked: Boolean,
     val opacity: Float,
     val blend: String,
     val selected: Boolean,

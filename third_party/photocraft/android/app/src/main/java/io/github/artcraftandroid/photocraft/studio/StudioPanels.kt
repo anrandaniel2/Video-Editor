@@ -135,7 +135,16 @@ private fun LayersBody(a: StudioActions) {
             s.setValue("blend", mode)
             scope.engine { e.setBlend(mode) }
         }
-        IconButton("settings", "Layer options", small = true) { a.feedback("Layer locks follow the document.") }
+        // The lock is the layer's own, and the engine refuses to paint on a locked layer.
+        IconButton(
+            "lock",
+            if (active?.let { e.isLocked(it.id) } == true) "Unlock layer" else "Lock layer",
+            small = true,
+            active = active?.let { e.isLocked(it.id) } == true,
+        ) {
+            val id = active?.id ?: return@IconButton
+            scope.engine { e.setLocked(id, !e.isLocked(id)) }
+        }
     }
     PanelDivider()
     Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
@@ -237,13 +246,15 @@ private fun CurvesBody(a: StudioActions) {
     // `.curves-options`: two selects over two dials.
     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 5.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
         Column(Modifier.width(77.dp)) {
+            // One option, because it is the one the engine works in. A list of four with three
+            // that change nothing is the dead-control pattern in a different shape.
             SelectField(
                 label = "Colour space",
-                value = s.value("colourSpace"),
-                options = listOf("RGB", "CMYK", "LAB", "Greyscale"),
+                value = "RGB",
+                options = listOf("RGB"),
                 height = 22.dp,
                 fontSize = 10,
-                onSelect = { s.setValue("colourSpace", it) },
+                onSelect = {},
             )
             Text("Colour space", fontSize = 9.sp, color = Sc.Note, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             SelectField(
