@@ -759,10 +759,8 @@ private fun SecondaryBody(name: String, a: StudioActions) {
     val s = a.state
     when (name) {
         "Colour", "Swatches" -> ColourBody(a)
-        "Text", "Paragraph" -> SecondaryContent {
-            TextControls(a, compact = false)
-            Text("Text formatting goes to the text layer.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
-        }
+        "Text" -> TextBody(a)
+        "Paragraph" -> ParagraphBody(a)
         "Stroke" -> StrokeBody(a)
         "Effects" -> EffectsBody(a)
         "Transform" -> TransformBody(a)
@@ -781,6 +779,85 @@ private fun SecondaryBody(name: String, a: StudioActions) {
         }
     }
 }
+/** The Text studio: the face, the size and the colour of the selected run. */
+@Composable
+private fun TextBody(a: StudioActions) {
+    val s = a.state
+    val e = a.engine
+    val scope = rememberCoroutineScope()
+    val active = e.layers.firstOrNull { it.active }
+    val isText = active?.kind == "text"
+    // Every field writes to the run itself, so what the panel shows is what the drawing carries.
+    fun set(params: JSONObject) {
+        val id = active?.id ?: return
+        params.put("layer", id)
+        scope.engine { e.run("type.setProps", params) }
+    }
+    SecondaryContent {
+        if (!isText) {
+            Text(
+                if (active == null) "Select a text layer to format it." else "The selected layer is not text.",
+                fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note,
+            )
+        }
+        TextControls(a, compact = false)
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("Regular", "Italic", "Bold", "Bold Italic").forEach { face ->
+                StandardButton(face) { if (isText) set(JSONObject().put("style", face)) }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(24, 48, 96, 200).forEach { size ->
+                StandardButton("${size}px") { if (isText) set(JSONObject().put("size", size.toDouble())) }
+            }
+        }
+        if (isText) {
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StandardButton("Colour it") { set(JSONObject().put("colour", s.value("colour"))) }
+            }
+        }
+    }
+}
+
+/** The Paragraph studio: how the run's lines line up, and how far apart they sit. */
+@Composable
+private fun ParagraphBody(a: StudioActions) {
+    val s = a.state
+    val e = a.engine
+    val scope = rememberCoroutineScope()
+    val active = e.layers.firstOrNull { it.active }
+    val isText = active?.kind == "text"
+    fun set(params: JSONObject) {
+        val id = active?.id ?: return
+        params.put("layer", id)
+        scope.engine { e.run("type.setProps", params) }
+    }
+    SecondaryContent {
+        if (!isText) {
+            Text(
+                if (active == null) "Select a text layer to align it." else "The selected layer is not text.",
+                fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note,
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Glyph names the studio actually has: an unknown name draws the placeholder
+            // rectangle, which would make four identical buttons.
+            listOf("align" to "left", "center" to "center", "list" to "right", "right" to "justify")
+                .forEach { (icon, value) ->
+                    IconButton(icon, "Align ${value}", small = true, active = isText) {
+                        if (isText) set(JSONObject().put("align", value))
+                    }
+                }
+        }
+        FieldRow("Leading") {
+            NumberField(s.value("leading"), "Leading", suffix = "×") { text ->
+                s.setValue("leading", text)
+                text.toDoubleOrNull()?.let { if (isText) set(JSONObject().put("leading", it)) }
+            }
+        }
+    }
+}
+
 /** `.colour-content`: the wheel, the value row and the twelve swatches. */
 @Composable
 private fun ColourBody(a: StudioActions) {
@@ -841,33 +918,67 @@ private fun ColourBody(a: StudioActions) {
 @Composable
 private fun TextControls(a: StudioActions, compact: Boolean) {
     val s = a.state
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        SelectField(
-            "Font family", s.value("font"),
-            listOf("Instrument Serif", "Arial", "Georgia", "Helvetica", "Times New Roman"),
-            modifier = Modifier.width(if (compact) 127.dp else 108.dp),
-        ) { s.setValue("font", it) }
-        SelectField(
-            "Font style", s.value("fontStyle"),
-            listOf("Regular", "Medium", "Bold", "Italic"),
-            modifier = Modifier.width(if (compact) 85.dp else 82.dp),
-        ) { s.setValue("fontStyle", it) }
-        NumberField(s.value("size"), "Font size", suffix = "pt", minWidth = 61.dp) { s.setValue("size", it) }
-        listOf("bold", "italic", "underline").forEach { icon ->
-            IconButton(icon, "${icon.replaceFirstChar { it.uppercase() }} text", small = false, active = s.isOn(icon)) { s.toggle(icon) }
+    val e = a.engine
+    val scope = rememberCoroutineScope()
+    val active = e.layers.firstOrNull { it.active }
+    val isText = active?.kind == "text"
+    // Every control edits the selected run. With nothing text selected the controls still show
+    // the values they will apply, and say so rather than writing into a copy of their own.
+    fun set(block: JSONObject.() -> Unit) {
+        val id = active?.id ?: return
+        if (!isText) return
+        val params = JSONObject().apply { put("layer", id); block() }
+        scope.engine { e.run("type.setProps", params) }
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SelectField(
+                "Font family", s.value("font"),
+                listOf("Inter", "Instrument Serif", "Arial", "Georgia", "Helvetica", "Times New Roman"),
+                modifier = Modifier.width(if (compact) 127.dp else 108.dp),
+            ) { family -> s.setValue("font", family); set { put("family", family) } }
+            SelectField(
+                "Font style", s.value("fontStyle"),
+                listOf("Regular", "Italic", "Bold", "Bold Italic"),
+                modifier = Modifier.width(if (compact) 85.dp else 82.dp),
+            ) { face -> s.setValue("fontStyle", face); set { put("style", face) } }
+            NumberField(s.value("size"), "Font size", suffix = "px", minWidth = 61.dp) { text ->
+                s.setValue("size", text)
+                text.toDoubleOrNull()?.let { size -> set { put("size", size) } }
+            }
+            listOf("bold" to "Bold", "italic" to "Italic").forEach { (icon, face) ->
+                IconButton(icon, "$face text", small = false, active = s.value("fontStyle") == face) {
+                    val next = if (s.value("fontStyle") == face) "Regular" else face
+                    s.setValue("fontStyle", next)
+                    set { put("style", next) }
+                }
+            }
+            // The text colour, as the reference's round colour input: it colours the run.
+            Box(
+                Modifier.size(26.dp).clip(RoundedCornerShape(13.dp)).background(parseColour(s.value("colour")))
+                    .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(13.dp))
+                    .clickable {
+                        if (isText) set { put("colour", s.value("colour")) }
+                        else a.feedback("Select a text layer to colour it.")
+                    },
+            )
+            listOf("align" to "left", "center" to "center", "right" to "right").forEach { (icon, align) ->
+                IconButton(icon, "Align $align", small = false, active = s.value("alignment") == icon) {
+                    s.setValue("alignment", icon)
+                    set { put("align", align) }
+                }
+            }
         }
-        // The text colour, as the reference's round colour input.
-        Box(
-            Modifier.size(26.dp).clip(RoundedCornerShape(13.dp)).background(parseColour(s.value("colour")))
-                .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(13.dp))
-                .clickable { a.feedback("The text colour is the foreground colour.") },
-        )
-        listOf("align", "center", "right", "list").forEach { icon ->
-            IconButton(icon, icon, small = false, active = s.value("alignment") == icon) { s.setValue("alignment", icon) }
+        if (!isText) {
+            Text(
+                if (active == null) "Select a text layer to format it." else "The selected layer is not text.",
+                fontSize = 9.5.sp, lineHeight = 15.sp, color = Sc.Note,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }
