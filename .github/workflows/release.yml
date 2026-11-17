@@ -70,10 +70,15 @@ jobs:
       - name: The photo engine
         run: |
           set +e
-          # Filter on the module path, not a bare word: `cargo test photocraft` would select a
-          # test *binary* by that name, find none, and exit 101 with no failing test to report.
-          cargo test -p filmcraft-android 'photocraft::' -- --nocapture > /tmp/photo-tests.txt 2>&1
+          # `--lib`: the tests live in the library, and without it cargo also looks for test
+          # targets (none exist) before deciding what to run. The filter is the module path.
+          cargo test -p filmcraft-android --lib 'photocraft::tests::' -- --nocapture > /tmp/photo-tests.txt 2>&1
           status=$?
+          # Zero tests running still exits non-zero on some cargo versions; say how many ran, so a
+          # silent 101 cannot be mistaken for a failing test.
+          grep -E '^running [0-9]+ tests?$' /tmp/photo-tests.txt | tail -1 | while read -r line; do
+            echo "::warning title=Ran::$line"
+          done
           # A compile error has no failing test to name, so the errors themselves are what has to
           # come back: the step log is not readable from where this is watched.
           grep -E '^error(\[E[0-9]+\])?: ' /tmp/photo-tests.txt | head -20 | while read -r line; do
