@@ -228,7 +228,10 @@ internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
     }
 
     // Picking a picture from the studio (or its menu) places it on the document it opened.
-    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    // OpenDocument rather than GetContent: it takes a list of types, so the formats with no
+    // registered MIME type are still offered, and it grants a readable URI rather than a
+    // one-shot content handle.
+    val pickPicture = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             try {
