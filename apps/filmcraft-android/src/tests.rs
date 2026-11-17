@@ -892,10 +892,16 @@ fn exported_video_keeps_the_mask_from_the_preview() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
     assert!(status.finished && status.error.is_none(), "{status:?}");
-    // Say what the file actually is when it cannot be opened: the size the export wrote, whether
-    // the file is there, and the decoder's own complaint. A bare unwrap hides all three.
+    // Read it back the way the app reads a file: through the media pool, which has the container
+    // and codec openers registered. `filmcraft_media::open_path` on its own takes the opener list
+    // as an argument, and passing an empty one means no MP4 can ever be recognised — the file opens
+    // as "unrecognised format" no matter what was written.
     let written = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-    let src = filmcraft_media::open_path(Path::new(&out), &[]).unwrap_or_else(|e| panic!("export wrote {written} bytes to {out} but it does not open: {e}"));
+    let src = {
+        let session = m.lock();
+        session.media.open_file(&out, session.services.as_ref())
+    }
+    .unwrap_or_else(|e| panic!("export wrote {written} bytes to {out} but it does not open: {e}"));
     let frame = src.video_frame(filmcraft_media::FrameRequest { time: Tick::ZERO, scale: 1.0 }).unwrap_or_else(|e| panic!("opened {written} bytes but the first frame does not decode: {e}"));
     assert_eq!((frame.width, frame.height), (144, 144));
     let rgba = frame.to_rgba8();
