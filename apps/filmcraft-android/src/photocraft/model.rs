@@ -229,7 +229,7 @@ impl Blend {
 }
 
 /// The document: a canvas and its layer tree.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Document {
     pub name: String,
     pub width: u32,
