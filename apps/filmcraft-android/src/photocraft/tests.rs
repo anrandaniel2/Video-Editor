@@ -1011,8 +1011,8 @@ fn a_text_run_can_be_restyled_after_it_is_placed() {
     run(&mut s, "type.setProps", json!({ "layer": id, "text": "Goodbye" }));
     let doc = s.active().expect("a document");
     assert_eq!(doc.doc.find(id).expect("the run").name, "Goodbye");
-    let Content::Text(run) = &doc.doc.find(id).expect("the run").content else { panic!("text") };
-    assert_eq!(run.text, "Goodbye");
+    let Content::Text(edited) = &doc.doc.find(id).expect("the run").content else { panic!("text") };
+    assert_eq!(edited.text, "Goodbye");
 
     // A layer that is not text is refused.
     run(&mut s, "layer.new.layer", json!({}));
