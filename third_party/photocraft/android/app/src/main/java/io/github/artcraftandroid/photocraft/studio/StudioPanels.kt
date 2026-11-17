@@ -979,7 +979,9 @@ private fun EffectsBody(a: StudioActions) {
             Text("Select a layer to give it an effect.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
         }
         effects.forEach { effect ->
-            CheckRow(effect, s.isOn(effect)) { on -> set(effect, on) }
+            // The row reports a click, not the new value; the panel owns the toggle, so the two
+            // cannot disagree.
+            CheckRow(effect, s.isOn(effect)) { set(effect, !s.isOn(effect)) }
         }
         Spacer(Modifier.height(8.dp))
         FieldRow("Radius") {
