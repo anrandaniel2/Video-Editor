@@ -423,12 +423,23 @@ fn an_adjustment_respects_the_selection() {
 #[test]
 fn the_eraser_takes_paint_away_instead_of_painting_transparent_on_it() {
     let mut s = session();
-    run(&mut s, "layer.new.layer", json!({}));
+    let id = run(&mut s, "layer.new.layer", json!({}))["layer"].as_u64().expect("a layer id");
     run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#123456", "tolerance": 0.0 }));
-    assert_eq!(at(&pixels(&s), 32, 16, 16), [0x12, 0x34, 0x56, 0xFF], "the layer is painted");
+    // The layer's own pixels, not the composite: the document's background layer sits under
+    // everything and is opaque, so a composite of an erased hole is simply the white beneath it.
+    let alpha = |s: &Session| {
+        let doc = s.active().expect("a document");
+        let Content::Pixels(Some(px)) = &doc.doc.find(id).expect("the layer").content else {
+            panic!("the layer kept its pixels")
+        };
+        px[(16 * 32 + 16) * 4 + 3]
+    };
+    assert_eq!(alpha(&s), 255, "the layer is painted");
     run(&mut s, "paint.stroke", json!({ "points": [[16.0, 16.0]], "size": 40.0, "erase": true }));
-    let after = at(&pixels(&s), 32, 16, 16);
-    assert_eq!(after[3], 0, "the eraser removed the alpha: {after:?}");
+    assert_eq!(alpha(&s), 0, "the eraser took the alpha away");
+    // And what shows through is the background, which is what the user sees.
+    let seen = at(&pixels(&s), 32, 16, 16);
+    assert_eq!(seen, [255, 255, 255, 255], "the white background shows through: {seen:?}");
 }
 
 #[test]
@@ -436,21 +447,17 @@ fn the_pencil_is_a_hard_tip_and_the_brush_is_not() {
     let mut s = session();
     run(&mut s, "layer.new.layer", json!({}));
     run(&mut s, "paint.pencil", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0 }));
-    let a = at(&pixels(&s), 32, 16, 16)[3];
-    assert_eq!(a, 255, "the pencil's centre is fully opaque");
-    // The same tap with the brush at a soft hardness must leave the edge partly open.
-    let mut s2 = session();
-    run(&mut s2, "layer.new.layer", json!({}));
-    run(&mut s2, "paint.stroke", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0, "hardness": 0.0 }));
-    let edge_brush = at(&pixels(&s2), 32, 20, 16)[3];
-    let mut s3 = session();
-    run(&mut s3, "layer.new.layer", json!({}));
-    run(&mut s3, "paint.pencil", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0 }));
-    let edge_pencil = at(&pixels(&s3), 32, 20, 16)[3];
-    assert!(
-        edge_pencil > edge_brush,
-        "the pencil's edge is harder: pencil {edge_pencil}, brush {edge_brush}"
-    );
+    assert_eq!(at(&pixels(&s), 32, 16, 16)[3], 255, "the pencil's centre is solid");
+    // A 9px tip centred on 16 covers up to about 20.5, so 20 is the outermost covered pixel and
+    // 21 is empty. The pencil must still be solid there; the soft brush must not be.
+    let mut soft = session();
+    run(&mut soft, "layer.new.layer", json!({}));
+    run(&mut soft, "paint.stroke", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0, "hardness": 0.0 }));
+    let pencil_edge = at(&pixels(&s), 32, 20, 16)[3];
+    let brush_edge = at(&pixels(&soft), 32, 20, 16)[3];
+    assert_eq!(pencil_edge, 255, "the pencil's edge is hard: {pencil_edge}");
+    assert!(brush_edge < 255, "the soft brush's edge falls off: {brush_edge}");
+    assert_eq!(at(&pixels(&s), 32, 22, 16)[3], 255, "and beyond the tip is background");
 }
 
 #[test]
