@@ -82,13 +82,15 @@ jobs:
           set +e
           cargo test -p filmcraft-android > /tmp/engine-tests.txt 2>&1
           status=$?
-          # One annotation per failing test, so the name survives even where the step log does not.
-          # (This step once failed for a while and its output could not be read back at all.)
-          # Test names are module paths — `some_mod::some_test` — so the colons must be allowed.
+          # One annotation per failing test, and one per panic line: the name says which test, the
+          # panic says why. Test names are module paths (`mod::test`), so colons must be allowed.
+          # The step log cannot be read back through the API here, but annotations can.
           awk '/^failures:$/{f=1;next} f&&/^ *[a-zA-Z_0-9:]+$/{print $1} f&&/^$/{f=0}' /tmp/engine-tests.txt | sort -u | while read -r name; do
             echo "::error title=Failing test::$name"
           done
-          grep -E '^failures:$|^test .* FAILED$' /tmp/engine-tests.txt | head -20
+          grep -E "panicked at|^assertion .*failed|^  left:|^ right:" /tmp/engine-tests.txt | head -12 | while read -r line; do
+            echo "::warning title=Why::$line"
+          done
           exit $status
 
   apk:
