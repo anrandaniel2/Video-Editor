@@ -316,6 +316,71 @@ fun StudioSlider(
     }
 }
 
+/**
+ * A slider laid out the way Procraft's brush controls are: the name at the left, its value in a
+ * rounded pill at the right, and the track underneath.
+ *
+ * The pill is the point of it. Procraft lets you tap the value to type a number instead of
+ * dragging, which is how you set an exact 37px brush; a track alone cannot express that. Tapping
+ * here focuses a small field the same way.
+ */
+@Composable
+fun StudioValueSlider(
+    label: String,
+    fraction: Float,
+    valueText: String,
+    modifier: Modifier = Modifier,
+    accent: Color = Sc.Blue,
+    onFraction: (Float) -> Unit,
+    onValue: ((String) -> Unit)? = null,
+) {
+    var typing by remember { mutableStateOf(false) }
+    var typed by remember { mutableStateOf(valueText) }
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().height(26.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, fontSize = 11.sp, color = Sc.Title, maxLines = 1)
+            if (typing && onValue != null) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = typed,
+                    onValueChange = { typed = it },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 11.sp,
+                        color = Color.White,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    ),
+                    modifier = Modifier
+                        .width(73.dp).height(24.dp)
+                        .clip(RoundedCornerShape(12.dp)).background(accent)
+                        .padding(horizontal = 10.dp),
+                )
+            } else {
+                Box(
+                    Modifier.height(24.dp).widthIn(min = 73.dp)
+                        .clip(RoundedCornerShape(12.dp)).background(Color(0xFF2A2C28))
+                        .then(if (onValue != null) Modifier.clickable { typed = valueText; typing = true } else Modifier)
+                        .padding(horizontal = 13.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(valueText, fontSize = 11.sp, color = Color(0xFFE9EDEA), maxLines = 1)
+                }
+            }
+        }
+        StudioSlider(fraction = fraction, accent = accent) { f ->
+            // Leaving the field open while dragging would show a stale number.
+            if (typing) {
+                typing = false
+                onValue?.invoke(typed)
+            }
+            onFraction(f)
+        }
+    }
+}
+
 /** A labelled row: the reference's `.field-row` (label left, control right). */
 @Composable
 fun FieldRow(label: String, modifier: Modifier = Modifier, trailing: @Composable () -> Unit) {

@@ -136,19 +136,25 @@ private fun LayersBody(a: StudioActions) {
     }
     PanelDivider()
     Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+        // Only the document's own layers. There used to be a hardcoded tree of the reference's
+        // fifteen rows shown "at rest", but they were not the document: tapping one asked the
+        // engine to select a layer that did not exist, which is where "select a layer first" came
+        // from. A panel that lists layers you cannot select is worse than an empty one.
         if (live) {
             e.layers.forEach { row -> LiveLayerRow(row, a) }
         } else {
-            MockLayers.filter { row ->
-                if (row.parent != null && row.parent in s.collapsed) return@filter false
-                if (row.id in setOf("stem", "highlights", "shadows", "stripes", "gradient", "mushroom", "flower") &&
-                    "illustration" in s.collapsed
-                ) return@filter false
-                true
-            }.forEach { row -> MockLayerRow(row, a) }
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("No layers yet.", fontSize = 11.sp, color = Color(0xFFA8AF9A))
+            }
         }
     }
-    PanelFooter(if (live) "${e.layers.size} layers" else "${MockLayers.size} layers", if (live) "PhotoCraft" else "Reference")
+    PanelFooter(
+        if (live) "${e.layers.size} ${if (e.layers.size == 1) "layer" else "layers"}" else "No document",
+        if (live) "PhotoCraft" else "",
+    )
 }
 @Composable
 private fun LiveLayerRow(row: StudioLayer, a: StudioActions) {
@@ -217,114 +223,6 @@ private fun LiveLayerRow(row: StudioLayer, a: StudioActions) {
         }
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x88171815)))
-}
-@Composable
-private fun MockLayerRow(row: MockLayer, a: StudioActions) {
-    val s = a.state
-    val selected = s.selectedLayer == row.id
-    val hidden = row.id in s.hidden
-    val collapsed = row.id in s.collapsed
-    Row(
-        Modifier.fillMaxWidth().height(34.dp)
-            .background(if (selected) Sc.Blue else Color.Transparent)
-            .clickable { s.selectedLayer = row.id },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.width((7 + row.depth * 5).dp).height(34.dp).background(Color(0x17181566)))
-        if (row.group) {
-            Box(
-                Modifier.size(width = 12.dp, height = 26.dp).clickable {
-                    if (collapsed) s.collapsed.remove(row.id) else s.collapsed.add(row.id)
-            },
-                contentAlignment = Alignment.Center,
-            ) {
-                StudioIcons.Glyph("chevron", if (selected) Color.White else Sc.IconInk, 11.dp, Modifier.rotate(if (collapsed) 0f else 90f))
-        }
-        } else {
-            Spacer(Modifier.width(7.dp))
-        }
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Thumb(row, selected)
-            Text(
-                row.name,
-                fontSize = 10.sp,
-                color = if (selected) Color.White else Sc.Title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.alpha(if (hidden) 0.3f else 1f),
-            )
-        }
-        Box(
-            Modifier.size(width = 17.dp, height = 27.dp).clickable {
-                if (row.id in s.locked) s.locked.remove(row.id) else s.locked.add(row.id)
-        },
-            contentAlignment = Alignment.Center,
-        ) {
-            StudioIcons.Glyph(
-                if (row.id in s.locked) "lock" else "unlock",
-                Sc.IconInk.copy(alpha = if (row.id in s.locked) 0.6f else 0.15f),
-                11.dp,
-            )
-        }
-        Box(
-            Modifier.size(width = 24.dp, height = 27.dp).clickable {
-                if (hidden) s.hidden.remove(row.id) else s.hidden.add(row.id)
-        },
-            contentAlignment = Alignment.Center,
-        ) {
-            StudioIcons.Glyph(if (hidden) "hidden" else "eye", Color(0xFFECEEE6), 13.dp)
-        }
-    }
-    Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x88171815)))
-}
-/** The reference's `.layer-thumb` variants: each row's own little picture. */
-@Composable
-private fun Thumb(row: MockLayer, selected: Boolean) {
-    val size = Modifier.size(width = 26.dp, height = 29.dp)
-    when (row.id) {
-        "illustration" -> Box(
-            size.clip(RoundedCornerShape(14.dp)).background(
-                androidx.compose.ui.graphics.Brush.sweepGradient(
-                    listOf(Color(0xFF10DF68), Color(0xFFEBB3FF), Color(0xFFFFDF19), Color(0xFFFF3068), Color(0xFF10DF68)),
-                ),
-            ),
-            contentAlignment = Alignment.Center,
-        ) { StudioIcons.Glyph(row.kind, Color(0xFFFF7797), 21.dp) }
-        "stem", "flower" -> Box(
-            size.background(
-                androidx.compose.ui.graphics.Brush.linearGradient(
-                    listOf(Color.Transparent, Color(0xFFFF387B), Color(0xFFFFB333), Color(0xFFFF296B), Color.Transparent),
-                    start = Offset(0f, 0f),
-                    end = Offset(26f, 29f),
-                ),
-            ),
-            contentAlignment = Alignment.Center,
-        ) { StudioIcons.Glyph(row.kind, Color(0xFFFFB336), 21.dp) }
-        "mushroom" -> Box(
-            size.background(
-                androidx.compose.ui.graphics.Brush.radialGradient(
-                    listOf(Color(0xFFFFE931), Color(0xFF14E564)),
-                    radius = 16f,
-                ),
-            ),
-            contentAlignment = Alignment.Center,
-        ) { StudioIcons.Glyph(row.kind, Color(0xFF112D19), 21.dp) }
-        "mask" -> Box(
-            size.background(
-                androidx.compose.ui.graphics.Brush.horizontalGradient(
-                    0f to Color.Black, 0.42f to Color.Black, 0.46f to Color.White,
-                    0.7f to Color.White, 0.75f to Color.Black, 1f to Color.Black,
-                ),
-            ),
-        )
-        else -> Box(size, contentAlignment = Alignment.Center) {
-            StudioIcons.Glyph(
-                row.kind,
-                if (row.id == "pixel") Color.White else if (row.id == "gradient") Color(0xFFFF1773) else if (selected) Color.White else Sc.ThumbInk,
-                21.dp,
-            )
-        }
-    }
 }
 // ---------------------------------------------------------------------------- Curves
 @Composable
@@ -645,9 +543,9 @@ private fun BrushesBody(a: StudioActions) {
     val s = a.state
     val e = a.engine
     val scope = rememberCoroutineScope()
-    // The reference's filter: the search text, and the Inking category's Ink-only rule.
+    // The search text narrows the list; the set does too, by which brushes belong to it.
     val brushes = (if (e.brushPresets.isEmpty()) StudioBrushes else e.brushPresets)
-        .filter { it.lowercase().contains(s.search.lowercase()) && (s.category != "Inking" || it.contains("Ink")) }
+        .filter { it.lowercase().contains(s.search.lowercase()) && StudioBrushSets.filters(s.category, it) }
     // `.brush-search`
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 8.dp).height(27.dp)
@@ -672,12 +570,37 @@ private fun BrushesBody(a: StudioActions) {
             Box(Modifier.clickable { s.search = "" }) { StudioIcons.Glyph("close", Color(0xFF989C8F), 12.dp) }
         }
     }
-    SelectField(
-        label = "Brush category",
-        value = s.category,
-        options = listOf("Sketching", "Pencils", "Inking", "All Brushes"),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp).height(25.dp),
-    ) { s.category = it }
+    // The set is switched with an arrow either side, as the reference's brush strip does, rather
+    // than dropped down: the name stays visible while the collection changes under it.
+    val sets = StudioBrushSets.names
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 9.dp).height(28.dp)
+            .clip(RoundedCornerShape(6.dp)).background(Color(0xFF1F201E)),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        val index = sets.indexOf(s.category).coerceAtLeast(0)
+        Box(
+            Modifier.fillMaxHeight().width(30.dp).clickable {
+                s.category = sets[(index - 1 + sets.size) % sets.size]
+            },
+            contentAlignment = Alignment.Center,
+        ) {
+            StudioIcons.Glyph("chevron-left", Color(0xFFB9BEAF), 13.dp)
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(sets[index], fontSize = 11.sp, color = Sc.Title, maxLines = 1)
+            Text("Set ${index + 1} of ${sets.size}", fontSize = 8.sp, color = Color(0xFF84887D), maxLines = 1)
+        }
+        Box(
+            Modifier.fillMaxHeight().width(30.dp).clickable {
+                s.category = sets[(index + 1) % sets.size]
+            },
+            contentAlignment = Alignment.Center,
+        ) {
+            StudioIcons.Glyph("chevron-right", Color(0xFFB9BEAF), 13.dp)
+        }
+    }
     Column(Modifier.fillMaxWidth().heightIn(max = 355.dp).verticalScroll(rememberScrollState())) {
         brushes.forEachIndexed { i, name ->
             val on = s.brush == name
@@ -718,23 +641,39 @@ private fun BrushesBody(a: StudioActions) {
             .border(width = 0.dp, color = Color.Transparent)
             .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 11.dp),
     ) {
-        FieldRow("Width") {
-            NumberField(s.value("brushSize"), "Brush width", suffix = "px") { v -> s.setValue("brushSize", v) }
-        }
-        StudioSlider(
+        // Name at the left, value in a pill at the right, track below -- Procraft's own brush
+        // control. The pill takes a typed number, so an exact width does not depend on hitting a
+        // track position with a thumb.
+        StudioValueSlider(
+            label = "Width",
             fraction = ((s.value("brushSize").toFloatOrNull() ?: 24f) - 1f) / 499f,
+            valueText = "${s.value("brushSize").toIntOrNull() ?: 24}px",
             modifier = Modifier.fillMaxWidth(),
+            onValue = { v ->
+                v.filter(Char::isDigit).toIntOrNull()?.let { px ->
+                    val clamped = px.coerceIn(1, 500)
+                    s.setValue("brushSize", clamped.toString())
+                    scope.engine { e.setBrush(size = clamped.toFloat()) }
+                }
+            },
         ) { f ->
             val px = (1f + f * 499f).toInt()
             s.setValue("brushSize", px.toString())
             scope.engine { e.setBrush(size = px.toFloat()) }
         }
-        FieldRow("Opacity") {
-            NumberField(s.value("brushOpacity"), "Brush opacity", suffix = "%") { v -> s.setValue("brushOpacity", v) }
-        }
-        StudioSlider(
+        Spacer(Modifier.height(8.dp))
+        StudioValueSlider(
+            label = "Opacity",
             fraction = (s.value("brushOpacity").toFloatOrNull() ?: 100f) / 100f,
+            valueText = "${s.value("brushOpacity").toIntOrNull() ?: 100}%",
             modifier = Modifier.fillMaxWidth(),
+            onValue = { v ->
+                v.filter(Char::isDigit).toIntOrNull()?.let { pct ->
+                    val clamped = pct.coerceIn(0, 100)
+                    s.setValue("brushOpacity", clamped.toString())
+                    scope.engine { e.setBrush(opacity = clamped / 100f) }
+                }
+            },
         ) { f ->
             val pct = (f * 100f).toInt()
             s.setValue("brushOpacity", pct.toString())

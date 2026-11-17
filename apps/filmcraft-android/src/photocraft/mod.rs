@@ -80,6 +80,11 @@ pub struct Tools {
     pub brush_hardness: f64,
     pub brush_opacity: f64,
     pub brush_preset: String,
+    /// The preset's own tip, so picking a brush changes what it does. Hardness alone cannot say
+    /// what charcoal is: these carry the grain that breaks the edge up and the wetness that makes
+    /// a stroke build rather than lay flat.
+    pub brush_grain: f64,
+    pub brush_wet: f64,
     pub foreground: [u8; 4],
     pub background: [u8; 4],
 }
@@ -90,7 +95,9 @@ impl Default for Tools {
             brush_size: 40.0,
             brush_hardness: 0.85,
             brush_opacity: 1.0,
-            brush_preset: "Hard Round".into(),
+            brush_preset: "Natural Pencil 4B".into(),
+            brush_grain: 0.42,
+            brush_wet: 0.0,
             foreground: [0, 0, 0, 255],
             background: [255, 255, 255, 255],
         }

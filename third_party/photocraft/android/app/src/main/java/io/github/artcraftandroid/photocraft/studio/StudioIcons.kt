@@ -29,6 +29,9 @@ object StudioIcons {
         "center" to "M4 5h16M7 10h10M4 15h16M7 20h10",
         "check" to "m4 12 5 5L20 6",
         "chevron" to "m9 5 7 7-7 7",
+        // The same chevron mirrored, for stepping a set backwards.
+        "chevron-left" to "m15 5-7 7 7 7",
+        "chevron-right" to "m9 5 7 7-7 7",
         "circle" to "M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",
         "clear" to "M3 3h18v18H3zM7 7l10 10M17 7 7 17",
         "clone" to "M9 3h6v6l3 5H6l3-5V3ZM5 15h14v6H5z",

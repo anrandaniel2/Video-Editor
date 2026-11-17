@@ -201,7 +201,7 @@ class StudioState(workspace: WorkspaceId) {
     var page by mutableStateOf(8)
     var brush by mutableStateOf("Natural Pencil 4B")
     var search by mutableStateOf("")
-    var category by mutableStateOf("Sketching")
+    var category by mutableStateOf("Pencils")
 
     /** The panel values, by the reference's keys. */
     var values by mutableStateOf(
@@ -265,7 +265,7 @@ class StudioState(workspace: WorkspaceId) {
         page = 8
         brush = "Natural Pencil 4B"
         search = ""
-        category = "Sketching"
+        category = "Pencils"
         values = values + mapOf(
             "opacity" to "100", "blend" to "Normal", "size" to "14", "brushSize" to "24",
             "brushOpacity" to "100", "colour" to "#f59ac9", "channel" to "Master",
@@ -293,6 +293,28 @@ val StudioBrushes = listOf(
     "Natural Pencil 6B", "Natural Pencil 2B", "Natural Pencil 4B", "Compressed Charcoal",
     "Dense Graphite", "Round Dry Bristle", "Soft Chalk", "Fine Ink",
 )
+
+/**
+ * The brush sets the Brushes panel steps through with its arrows.
+ *
+ * Each set is a rule over the brush's name rather than a second list, so a brush added to the
+ * engine shows up in the set it belongs to without being registered twice.
+ */
+object StudioBrushSets {
+    val names = listOf("Pencils", "Charcoal & Chalk", "Bristle", "Inking", "All Brushes")
+
+    /** Whether a brush belongs to a set. */
+    fun filters(set: String, brush: String): Boolean {
+        val b = brush.lowercase()
+        return when (set) {
+            "Pencils" -> b.contains("pencil") || b.contains("graphite")
+            "Charcoal & Chalk" -> b.contains("charcoal") || b.contains("chalk")
+            "Bristle" -> b.contains("bristle")
+            "Inking" -> b.contains("ink")
+            else -> true
+        }
+    }
+}
 
 /** The Colour panel's swatches. */
 val StudioSwatches = listOf(

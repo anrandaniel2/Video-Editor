@@ -49,9 +49,6 @@ fun StudioCanvas(
     val scope = rememberCoroutineScope()
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var cursor by remember { mutableStateOf<Offset?>(null) }
-    // The reference's own artwork stands in until the document has pixels of its own, so the studio
-    // looks like the design at rest; the first stroke replaces it with the engine's composite.
-    var showReference by remember { mutableStateOf(true) }
     var strokePoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     // The live stroke and the pointer are read outside the draw scope, as Compose requires.
     val liveStroke = strokePoints
@@ -61,12 +58,23 @@ fun StudioCanvas(
     }
     val painting = tool in setOf(Tool.Brush, Tool.Pencil, Tool.Eraser)
 
-    // Follow the engine's document: a new composite whenever its revision moves.
+    // Follow the engine's document: a new composite whenever its revision moves. `preview` and
+    // `status` are Compose state on the engine, so the canvas redraws when the stroke lands --
+    // without that it only redrew when the drag itself changed something, which is why a stroke
+    // appeared to vanish until the next one was drawn.
     val revision = engine.status?.revision
     LaunchedEffect(revision, viewport) {
         engine.refreshPreview()
         state.docWidth = engine.width
         state.docHeight = engine.height
+    }
+
+    // Open a document the first time the studio is shown: the panels and the canvas all act on
+    // one, and without it every tool answers "Open a picture first".
+    LaunchedEffect(Unit) {
+        if (!engine.hasDocument && viewport.width > 0) {
+            runCatching { engine.newDocument(state.docWidth, state.docHeight) }
+        }
     }
 
     /** The document's rect in the view: the reference's cover-fit, then pan and zoom. */
@@ -138,7 +146,7 @@ fun StudioCanvas(
             .pointerInput(tool) {
                 if (painting) {
                     detectDragGestures(
-                        onDragStart = { pos -> strokePoints = listOf(toDocument(pos)); showReference = false },
+                        onDragStart = { pos -> strokePoints = listOf(toDocument(pos)) },
                         onDragEnd = {
                             val points = strokePoints
                             strokePoints = emptyList()
@@ -168,11 +176,6 @@ fun StudioCanvas(
                 }
             },
     ) {
-        // A blank document still shows the reference's picture, as the design does at rest; the
-        // first stroke replaces it with the engine's pixels.
-        if (showReference && engine.layers.isEmpty()) {
-            WorkspaceArtwork(state.workspace, Modifier.fillMaxSize())
-        }
         val bitmap = engine.preview
         val cursorPoint = cursor
         val ring = ((state.value("brushSize").toFloatOrNull() ?: 24f) / state.docWidth.toFloat())

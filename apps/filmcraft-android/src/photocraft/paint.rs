@@ -69,6 +69,13 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     let straight = params.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     // The Eraser is the brush with `erase`, and rubbing a layer out is painting it transparent.
     let erasing = params.get("erase").and_then(Value::as_bool).unwrap_or(false);
+    // The preset's grain: how much the tip's edge is broken up. Without it charcoal and ink paint
+    // the same smooth disc, which is what made the panel's eight names look like one brush.
+    let grain = params
+        .get("grain")
+        .and_then(Value::as_f64)
+        .unwrap_or(session.tools.brush_grain)
+        .clamp(0.0, 1.0);
     let colour = if erasing { [0, 0, 0, 0] } else { colour };
     // The panel sends a `coalesce` name for the gesture: a drag that arrives as several calls is
     // one history row, not one per call.
@@ -92,10 +99,10 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
 
     let radius = (size / 2.0).max(0.25);
     for pair in points.windows(2) {
-        stamp_segment(px, width, height, pair[0], pair[1], radius, hardness, opacity, colour, straight, erasing, selection.as_deref());
+        stamp_segment(px, width, height, pair[0], pair[1], radius, hardness, opacity, colour, straight, erasing, grain, selection.as_deref());
     }
     if points.len() == 1 {
-        stamp_segment(px, width, height, points[0], points[0], radius, hardness, opacity, colour, straight, erasing, selection.as_deref());
+        stamp_segment(px, width, height, points[0], points[0], radius, hardness, opacity, colour, straight, erasing, grain, selection.as_deref());
     }
     session.active_mut().unwrap().touch();
     Ok(serde_json::json!({ "points": points.len() }))
@@ -115,6 +122,7 @@ fn stamp_segment(
     colour: [u8; 4],
     straight: bool,
     erasing: bool,
+    grain: f64,
     selection: Option<&[u8]>,
 ) {
     let dx = b.0 - a.0;
@@ -127,7 +135,7 @@ fn stamp_segment(
         let t = if steps == 0 { 0.0 } else { i as f64 / steps as f64 };
         let cx = a.0 + dx * t;
         let cy = a.1 + dy * t;
-        stamp(pixels, width, height, cx, cy, radius, hardness, opacity, colour, straight, erasing, selection);
+        stamp(pixels, width, height, cx, cy, radius, hardness, opacity, colour, straight, erasing, grain, selection);
     }
 }
 
@@ -145,6 +153,7 @@ fn stamp(
     colour: [u8; 4],
     straight: bool,
     erasing: bool,
+    grain: f64,
     selection: Option<&[u8]>,
 ) {
     let x0 = ((cx - radius).floor() as i64).max(0);
@@ -175,6 +184,26 @@ fn stamp(
                 } else {
                     1.0 - (d - inner) / (radius - inner).max(1e-6)
                 }
+            };
+            // Grain breaks the tip's edge up: charcoal skips and speckles, ink does not. The
+            // pattern is a hash of the pixel, not a random number, so the same stroke paints the
+            // same way twice -- an undo that came back speckled differently would be a lie.
+            let edge = if grain > 0.0 {
+                // A cheap integer hash of the pixel's position. Deterministic on purpose: the same
+                // stroke must paint the same way twice, or an undo would come back speckled
+                // differently from what it replaced.
+                let mut h = (x as u32).wrapping_mul(0x9E3779B1) ^ (y as u32).wrapping_mul(0x85EBCA77);
+                h ^= h >> 15;
+                h = h.wrapping_mul(0xC2B2AE3D);
+                h ^= h >> 13;
+                let n = (h & 0xFFFF) as f64 / 65535.0;
+                // Full strength at the tip's centre, thinning towards its rim, scaled by the
+                // preset's grain: a soft chalk breaks up all over its edge, fine ink not at all.
+                let radial = 1.0 - (d / radius).clamp(0.0, 1.0);
+                let tooth = 1.0 - grain * radial * (1.0 - n);
+                edge * tooth
+            } else {
+                edge
             };
             if edge <= 0.0 {
                 continue;

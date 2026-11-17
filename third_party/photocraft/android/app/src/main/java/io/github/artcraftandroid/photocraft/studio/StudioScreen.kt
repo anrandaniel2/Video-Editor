@@ -186,28 +186,32 @@ fun StudioScreen(
                     onHelp = { dialog = StudioDialog.About },
                     modifier = Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp),
                 )
-                // The floating panels, each at the place the reference gives it: the stack's own
-                // at `.floating-panel` (right 66, top 12), Curves at right 68 / top 100, Pages at
-                // the left / top 72, Brushes at the left / bottom 24 (Sketch 109), and the ones
-                // opened on top at `.extra-panel` (right 319 / top 75, or right 66 / top 75 when
-                // they belong to the document's own panel).
+                // The panels open beside the rail they were tapped on and stay there: every one
+                // is anchored to an edge and offset by the rail's own width, so opening a second
+                // and third stacks them inward from the same edge instead of landing in the
+                // middle of the canvas.
+                //
+                // The rail is 42 wide at the right edge with a 10 margin, so a panel that hugs it
+                // sits at end = 62; the ones on the left sit clear of the tool rail. A couple are
+                // deliberately elsewhere -- Pages belongs to the document and opens at the top
+                // left, Curves opens under the persona bar -- and those keep their own place.
                 val spec = Workspaces.of(workspace)
+                val railGap = 62.dp
                 state.panels.forEachIndexed { index, name ->
                     val extra = index > 0
                     val own = name == spec.panel
                     val place = when (name) {
-                        "Curves" -> Modifier.align(Alignment.TopEnd).padding(top = 100.dp, end = 68.dp)
                         "Pages" -> Modifier.align(Alignment.TopStart).padding(start = 66.dp, top = 72.dp)
                         "Brushes" -> Modifier.align(Alignment.BottomStart).padding(
                             start = if (workspace == WorkspaceId.Sketch) 109.dp else 68.dp,
                             bottom = 24.dp,
                         )
-                        else -> when {
-                            own -> Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 66.dp)
-                            extra && (workspace == WorkspaceId.Layout || workspace == WorkspaceId.Sketch) ->
-                                Modifier.align(Alignment.TopEnd).padding(top = 75.dp, end = 66.dp)
-                            else -> Modifier.align(Alignment.TopEnd).padding(top = 75.dp, end = 319.dp)
-                        }
+                        // Stack inward from the rail: the second panel sits one panel-width
+                        // further in than the first, so it does not cover it.
+                        else -> Modifier.align(Alignment.TopEnd).padding(
+                            top = 12.dp,
+                            end = railGap + 246.dp * (if (extra) index else 0),
+                        )
                     }
                     StudioPanel(
                         name = name,
@@ -385,8 +389,11 @@ private fun PersonaBar(
     onSnapping: () -> Unit,
     onMainMenu: () -> Unit,
 ) {
+    // Height follows the tabs rather than cutting them off: with a fixed 42 and 4 either side
+    // the 30-tall rows had 34 to sit in and were pushed down, which is why the workspace names
+    // read low against the bar.
     Row(
-        Modifier.padding(start = 64.dp, top = 12.dp).height(42.dp)
+        Modifier.padding(start = 64.dp, top = 12.dp).heightIn(min = 42.dp)
             .clip(RoundedCornerShape(16.dp)).background(Sc.surfaceBrush)
             .border(1.dp, Sc.Hairline, RoundedCornerShape(16.dp))
             .padding(horizontal = 6.dp, vertical = 4.dp),

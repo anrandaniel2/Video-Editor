@@ -1,6 +1,9 @@
 package io.github.artcraftandroid.photocraft.studio
 
 import android.graphics.Bitmap
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import io.github.artcraftandroid.filmcraft.core.PhotoStatus
 import io.github.artcraftandroid.photocraft.editor.Tool
 import io.github.artcraftandroid.photocraft.engine.PhotoEngine
@@ -20,22 +23,22 @@ import org.json.JSONObject
  * engine's encoded bytes to the host.
  */
 class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
-    var status: PhotoStatus? = null
+    var status: PhotoStatus? by mutableStateOf(null)
         private set
 
     /** The composited document, as the canvas paints it. */
-    var preview: Bitmap? = null
+    var preview: Bitmap? by mutableStateOf(null)
         private set
 
     /** The document's layers, top first, flattened from the engine's tree. */
-    var layers: List<StudioLayer> = emptyList()
+    var layers: List<StudioLayer> by mutableStateOf(emptyList())
         private set
 
     /** History labels, newest first. */
-    var history: List<String> = emptyList()
+    var history: List<String> by mutableStateOf(emptyList())
         private set
 
-    var brushPresets: List<String> = emptyList()
+    var brushPresets: List<String> by mutableStateOf(emptyList())
         private set
 
     val hasDocument: Boolean get() = status?.active != null
@@ -336,33 +339,3 @@ data class StudioLayer(
     val active: Boolean,
 )
 
-/**
- * A row of the reference's mock document. The studio shows these only until a document is open (the
- * engine's layers replace them), so the reference's own list is what the interface shows at rest.
- */
-data class MockLayer(
-    val id: String,
-    val name: String,
-    val kind: String,
-    val depth: Int,
-    val group: Boolean = false,
-    val parent: String? = null,
-)
-
-val MockLayers = listOf(
-    MockLayer("master", "Master A", "text", 0),
-    MockLayer("text", "Text", "text", 0),
-    MockLayer("illustration", "Illustration", "image", 0, group = true),
-    MockLayer("flower", "2", "brush", 1, group = true, parent = "illustration"),
-    MockLayer("stem", "Stem", "pen", 2, parent = "flower"),
-    MockLayer("highlights", "Highlights", "circle", 3, parent = "flower"),
-    MockLayer("shadows", "Shadows", "circle", 3, parent = "flower"),
-    MockLayer("stripes", "Stripes", "stroke", 2, parent = "flower"),
-    MockLayer("gradient", "Gradient", "curve", 2, parent = "flower"),
-    MockLayer("mushroom", "Mushroom", "image", 1, group = true, parent = "illustration"),
-    MockLayer("sketch", "Sketch", "pencil", 0),
-    MockLayer("pixel", "Pixel", "image", 0, group = true),
-    MockLayer("brightness", "Brightness / Contrast", "contrast", 1, parent = "pixel"),
-    MockLayer("curves", "Curves Adjustment", "curve", 1, parent = "pixel"),
-    MockLayer("mask", "Mask", "mask", 1, parent = "pixel"),
-)

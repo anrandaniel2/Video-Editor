@@ -235,12 +235,20 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             }
             if let Some(v) = params.get("preset").and_then(Value::as_str) {
                 t.brush_preset = v.to_string();
+                // The preset carries its own tip: selecting a brush the panel lists has to change
+                // what the brush does, or the list is eight names for one brush.
+                if let Some((hardness, grain, wet)) = brush_tip(v) {
+                    t.brush_hardness = hardness;
+                    t.brush_grain = grain;
+                    t.brush_wet = wet;
+                }
             }
             Ok(json!({
                 "size": t.brush_size,
                 "hardness": t.brush_hardness,
                 "opacity": t.brush_opacity,
                 "preset": t.brush_preset,
+                "grain": t.brush_grain,
             }))
         }
         "tools.setColors" => {
@@ -370,17 +378,44 @@ pub fn enabled(session: &Session, id: &str) -> Result<(), Fail> {
 /// The studio shows these as names; each is a size/hardness pair the engine turns into a tip. They
 /// are the same set the drawing canvas offers, so a brush picked in one place means the same thing
 /// in the other.
+/// The brushes the studio's panel lists, in its own order and with its own names.
+///
+/// These are the eight the interface declares — the same eight Procraft offers — and each one is
+/// a real tip, not a label: the hardness is where the falloff begins, the grain is how much the
+/// edge is broken up, and the wetness makes a stroke build up rather than lay down flat colour.
+/// The panel sends its brush name back with `tools.setBrush` and every stroke afterwards carries
+/// it, so picking "Compressed Charcoal" has to change what the brush does.
+/// A preset's tip: hardness, grain, wetness. `None` for a name the panel does not list.
+fn brush_tip(name: &str) -> Option<(f64, f64, f64)> {
+    Some(match name {
+        "Natural Pencil 6B" => (1.0, 0.55, 0.0),
+        "Natural Pencil 2B" => (0.95, 0.32, 0.0),
+        "Natural Pencil 4B" => (0.98, 0.42, 0.0),
+        "Compressed Charcoal" => (0.35, 0.85, 0.0),
+        "Dense Graphite" => (0.75, 0.60, 0.0),
+        "Round Dry Bristle" => (0.55, 0.70, 0.0),
+        "Soft Chalk" => (0.25, 0.90, 0.0),
+        "Fine Ink" => (1.0, 0.0, 0.0),
+        _ => return None,
+    })
+}
+
 fn brush_presets() -> Vec<Value> {
     [
-        ("Hard Round", 0.95),
-        ("Soft Round", 0.35),
-        ("Airbrush", 0.05),
-        ("Marker", 0.75),
-        ("Pencil", 1.0),
-        ("Splatter", 0.2),
+        // name, hardness, grain, wetness
+        ("Natural Pencil 6B", 1.0, 0.55, 0.0),
+        ("Natural Pencil 2B", 0.95, 0.32, 0.0),
+        ("Natural Pencil 4B", 0.98, 0.42, 0.0),
+        ("Compressed Charcoal", 0.35, 0.85, 0.0),
+        ("Dense Graphite", 0.75, 0.60, 0.0),
+        ("Round Dry Bristle", 0.55, 0.70, 0.0),
+        ("Soft Chalk", 0.25, 0.90, 0.0),
+        ("Fine Ink", 1.0, 0.0, 0.0),
     ]
     .into_iter()
-    .map(|(name, hardness)| json!({ "name": name, "hardness": hardness }))
+    .map(|(name, hardness, grain, wetness)| {
+        json!({ "name": name, "hardness": hardness, "grain": grain, "wetness": wetness })
+    })
     .collect()
 }
 
