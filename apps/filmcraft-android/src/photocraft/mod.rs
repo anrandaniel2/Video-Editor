@@ -138,7 +138,7 @@ const HISTORY: usize = 32;
 
 impl OpenDocument {
     pub fn new(doc: Document) -> Self {
-        let active = doc.layers.last().map(|l| l.id);
+        let active = doc.layers().last().map(|l| l.id);
         Self {
             doc,
             active_layer: active,
@@ -279,8 +279,8 @@ impl PhotoSession {
         Some(PhotoDocumentInfo {
             index: index as u32,
             name: d.doc.name.clone(),
-            width: d.doc.width,
-            height: d.doc.height,
+            width: d.doc.width(),
+            height: d.doc.height(),
             dirty: d.is_dirty(),
         })
     }
@@ -352,7 +352,7 @@ impl PhotoSession {
         let (w, h, rgba) = commands::decode_picture(&hint, &bytes).map_err(PhotoError::Import)?;
         let mut doc = Document::new(picture_name(&name), w, h, "none").map_err(PhotoError::Import)?;
         // The picture is the first layer, named for its file.
-        if let Some(first) = doc.layers.first_mut() {
+        if let Some(first) = doc.doc.layers_mut().first_mut() {
             first.name = picture_name(&name);
             first.kind = Kind::Pixels;
             first.content = model::Content::Pixels(Some(std::sync::Arc::new(rgba)));
@@ -371,24 +371,32 @@ impl PhotoSession {
         let id = doc.doc.take_id();
         // Placed at the document's size: the picture is scaled to fit the canvas's box, which is
         // what "place" means when the canvas is already decided.
-        let scaled = if (w, h) == (doc.doc.width, doc.doc.height) {
-            rgba
+        let (tw, th) = if (w, h) == (doc.doc.width(), doc.doc.height()) {
+            (w, h)
         } else {
-            let (tw, th) = commands::fit(w, h, doc.doc.width, doc.doc.height);
-            commands::reduce(&rgba, w, h, tw, th)
+            commands::fit(w, h, doc.doc.width(), doc.doc.height())
         };
+        let scaled = if (tw, th) == (w, h) { rgba } else { commands::reduce(&rgba, w, h, tw, th) };
         doc.push_history("Place picture");
-        doc.doc.layers.push(model::Layer {
+        // A placed picture is a picture, not a pixel layer: it keeps its frame, so the Place Image
+        // and Picture Frame tools can move and resize it afterwards without resampling it.
+        doc.doc.layers_mut().push(model::Layer {
             id,
             name: picture_name(&name),
-            kind: Kind::Pixels,
+            kind: Kind::Picture,
             visible: true,
             locked: false,
             opacity: 1.0,
             blend: model::Blend::Normal,
             clipped: false,
             children: Vec::new(),
-            content: model::Content::Pixels(Some(std::sync::Arc::new(scaled))),
+            content: model::Content::Picture(model::PictureRef {
+                frame: model::Frame::new(0.0, 0.0, f64::from(tw), f64::from(th)),
+                pixels: std::sync::Arc::new(scaled),
+                width: tw,
+                height: th,
+                fit: model::PictureFit::Stretch,
+            }),
         });
         doc.active_layer = Some(id);
         doc.selected = vec![id];

@@ -56,6 +56,10 @@ pub enum Kind {
     Adjustment,
     /// A run of text, drawn at `x`,`y`.
     Text,
+    /// A vector shape, kept as geometry until it is drawn.
+    Shape,
+    /// A placed picture, in a frame.
+    Picture,
 }
 
 impl Kind {
@@ -82,6 +86,10 @@ pub enum Content {
     Adjustment(Adjustment),
     /// A text layer.
     Text(TextRun),
+    /// A vector shape: held as geometry, rasterised when the page is composited.
+    Shape(Shape),
+    /// A picture in its own frame.
+    Picture(PictureRef),
 }
 
 /// The adjustments the studio offers.
@@ -187,6 +195,115 @@ pub struct TextRun {
     pub size: f64,
     /// `#RRGGBB`.
     pub color: String,
+    /// The frame the run was drawn in: a Layout text frame wraps its lines to this box, and a
+    /// plain artistic run has none and runs on as far as it likes.
+    pub frame: Option<Frame>,
+}
+
+/// A box on the page: where a shape, a picture or a text frame lives.
+///
+/// One type for all three because they are the same question — which rectangle, at what angle,
+/// with which roundness — and the studio's Transform and Stroke panels act on all of them alike.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Frame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// Corner radius in pixels: 0 is a sharp rectangle, half the short side is a pill.
+    pub radius: f64,
+    /// Degrees, clockwise, about the frame's centre.
+    pub rotation: f64,
+}
+
+impl Frame {
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self { x, y, width, height, radius: 0.0, rotation: 0.0 }
+    }
+
+    /// Whether the point is inside the frame, before rotation.
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
+/// A vector shape: the rectangle, ellipse and line tools, kept as geometry rather than pixels.
+///
+/// It is stored as a shape so the Stroke panel can change its width and colour after the fact and
+/// the Transform panel can move it without resampling — the thing a vector workspace is for. It is
+/// rasterised at composite time, which is where it stops being different from a pixel layer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shape {
+    pub frame: Frame,
+    /// What kind of outline the frame is drawn as.
+    pub kind: ShapeKind,
+    /// The fill, `None` for an unfilled shape.
+    pub fill: Option<String>,
+    /// The stroke, and its width in pixels. `None` for an unstroked shape.
+    pub stroke: Option<String>,
+    pub stroke_width: f64,
+    /// The node list of a path the Pen tool drew, in frame-relative coordinates.
+    pub nodes: Vec<Node>,
+    /// Whether the last node joins the first.
+    pub closed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShapeKind {
+    Rectangle,
+    Ellipse,
+    /// A path through `nodes`: the Pen tool's own curve, and what the Vector workspace edits.
+    Path,
+}
+
+/// One node of a path: the point, and the two control handles either side of it.
+///
+/// The handles are relative to the point, so moving a node moves its curve with it — which is what
+/// the Node toolbar's Sharp/Smooth/Smart buttons change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Node {
+    pub x: f64,
+    pub y: f64,
+    /// The handle towards the previous node; zero makes the join sharp.
+    pub in_x: f64,
+    pub in_y: f64,
+    /// The handle towards the next node.
+    pub out_x: f64,
+    pub out_y: f64,
+    /// A smart node stays on the shape's construction circle; a break node is a corner.
+    pub smooth: bool,
+}
+
+impl Node {
+    pub fn sharp(x: f64, y: f64) -> Self {
+        Self { x, y, in_x: 0.0, in_y: 0.0, out_x: 0.0, out_y: 0.0, smooth: false }
+    }
+
+    pub fn smooth(x: f64, y: f64, handle: f64) -> Self {
+        Self { x, y, in_x: -handle, in_y: 0.0, out_x: handle, out_y: 0.0, smooth: true }
+    }
+}
+
+/// A picture placed on the page, in its own frame: the Place Image tool and the Layout frames.
+#[derive(Clone, Debug)]
+pub struct PictureRef {
+    pub frame: Frame,
+    /// The picture's pixels at the size it was placed at. A frame scales them on draw.
+    pub pixels: Pixels,
+    pub width: u32,
+    pub height: u32,
+    /// How the picture fills its frame: `fit`, `fill` or `stretch`.
+    pub fit: PictureFit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PictureFit {
+    /// Whole picture visible, letterboxed.
+    Fit,
+    /// Whole frame covered, cropped.
+    Fill,
+    /// Stretched to the frame, aspect ignored.
+    Stretch,
 }
 
 /// The blend modes the studio offers.
@@ -228,15 +345,32 @@ impl Blend {
     }
 }
 
-/// The document: a canvas and its layer tree.
+/// A document is one or more pages, and each page has its own canvas and layer tree.
+///
+/// A single-page document is the ordinary case, and the API keeps it that way: `width`, `height`
+/// and `layers` are the active page's, so painting, compositing and exporting never ask which page
+/// they are working on. The Pages panel is what makes the plural real.
 #[derive(Clone, Debug)]
 pub struct Document {
+    pub name: String,
+    /// The pages, in the order the Pages panel lists them. Never empty.
+    pub pages: Vec<Page>,
+    /// Which page the canvas, the layers panel and every tool act on.
+    pub active_page: usize,
+    /// The one id counter for the whole document: a layer id is unique across pages, so a command
+    /// that names a layer cannot be ambiguous.
+    pub next_layer: u64,
+}
+
+/// One page: a canvas and its layer tree.
+#[derive(Clone, Debug)]
+pub struct Page {
+    /// What the Pages panel shows, and what an export names the file.
     pub name: String,
     pub width: u32,
     pub height: u32,
     /// Bottom first, as a painter's list; the studio lists them top first.
     pub layers: Vec<Layer>,
-    pub next_layer: u64,
     /// The selection mask, full canvas, 0 = not selected, 255 = selected. `None` = no selection.
     pub selection: Option<Vec<u8>>,
 }
@@ -257,9 +391,14 @@ impl Document {
             ));
         }
         let fill = parse_colour(background)?.map(|c| filled(width, height, c));
-        let mut doc = Self { name: name.into(), width, height, layers: Vec::new(), next_layer: 1, selection: None };
+        let mut doc = Self {
+            name: name.into(),
+            pages: vec![Page { name: "Page 1".into(), width, height, layers: Vec::new(), selection: None }],
+            active_page: 0,
+            next_layer: 1,
+        };
         let id = doc.take_id();
-        doc.layers.push(Layer {
+        doc.page_mut().layers.push(Layer {
             id,
             name: "Background".into(),
             kind: Kind::Pixels,
@@ -272,6 +411,60 @@ impl Document {
             content: Content::Pixels(fill),
         });
         Ok(doc)
+    }
+
+    /// Add a page after the active one and return its index.
+    ///
+    /// The new page starts with an empty transparent layer, which is what a new page in a
+    /// document with a background is: the paper is the background layer of page one, and a second
+    /// page is a fresh sheet rather than another copy of the first.
+    pub fn add_page(&mut self, name: Option<String>, width: u32, height: u32) -> Result<usize, String> {
+        if width == 0 || height == 0 {
+            return Err("A page needs a width and a height.".into());
+        }
+        if u64::from(width) * u64::from(height) > MAX_PIXELS {
+            return Err(format!(
+                "{} × {} is {} megapixels; the most this editor holds is {}.",
+                width,
+                height,
+                (u64::from(width) * u64::from(height)) as f64 / 1e6,
+                MAX_PIXELS / 1_000_000
+            ));
+        }
+        let at = (self.active_page + 1).min(self.pages.len());
+        let label = name.unwrap_or_else(|| format!("Page {}", self.pages.len() + 1));
+        self.pages.insert(at, Page { name: label, width, height, layers: Vec::new(), selection: None });
+        let id = self.take_id();
+        self.pages[at].layers.push(Layer {
+            id,
+            name: "Layer 1".into(),
+            kind: Kind::Pixels,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            blend: Blend::Normal,
+            clipped: false,
+            children: Vec::new(),
+            content: Content::Pixels(None),
+        });
+        Ok(at)
+    }
+
+    /// The active page's layers, bottom first.
+    pub fn layers(&self) -> &Vec<Layer> {
+        &self.page().layers
+    }
+
+    pub fn layers_mut(&mut self) -> &mut Vec<Layer> {
+        &mut self.page_mut().layers
+    }
+
+    pub fn selection(&self) -> &Option<Vec<u8>> {
+        &self.page().selection
+    }
+
+    pub fn selection_mut(&mut self) -> &mut Option<Vec<u8>> {
+        &mut self.page_mut().selection
     }
 
     pub fn take_id(&mut self) -> u64 {
@@ -288,6 +481,26 @@ impl Document {
         std::sync::Arc::new(vec![0u8; (self.width as usize) * (self.height as usize) * 4])
     }
 
+    /// The page every tool acts on.
+    pub fn page(&self) -> &Page {
+        &self.pages[self.active_page.min(self.pages.len() - 1)]
+    }
+
+    pub fn page_mut(&mut self) -> &mut Page {
+        let i = self.active_page.min(self.pages.len() - 1);
+        &mut self.pages[i]
+    }
+
+    /// The active page's canvas size. The rest of the engine reads these, not the page, so a
+    /// single-page document behaves exactly as it did before pages existed.
+    pub fn width(&self) -> u32 {
+        self.page().width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.page().height
+    }
+
     /// The layer with `id`, anywhere in the tree.
     pub fn find(&self, id: u64) -> Option<&Layer> {
         fn walk<'a>(layers: &'a [Layer], id: u64) -> Option<&'a Layer> {
@@ -301,7 +514,7 @@ impl Document {
             }
             None
         }
-        walk(&self.layers, id)
+        self.pages.iter().find_map(|p| walk(&p.layers, id))
     }
 
     pub fn find_mut(&mut self, id: u64) -> Option<&mut Layer> {
@@ -316,7 +529,7 @@ impl Document {
             }
             None
         }
-        walk(&mut self.layers, id)
+        self.pages.iter_mut().find_map(|p| walk(&mut p.layers, id))
     }
 
     /// Remove `id` from wherever it is in the tree.
@@ -332,7 +545,7 @@ impl Document {
             }
             None
         }
-        walk(&mut self.layers, id)
+        self.pages.iter_mut().find_map(|p| walk(&mut p.layers, id))
     }
 
     /// Every layer id in the tree, bottom first.
@@ -344,7 +557,9 @@ impl Document {
             }
         }
         let mut out = Vec::new();
-        walk(&self.layers, &mut out);
+        for page in &self.pages {
+            walk(&page.layers, &mut out);
+        }
         out
     }
 
@@ -373,28 +588,61 @@ impl Document {
             if let Some(a) = adjustment {
                 v["adjustment"] = a;
             }
+            if let Content::Shape(sh) = &l.content {
+                v["shape"] = json!({
+                    "x": sh.frame.x, "y": sh.frame.y,
+                    "width": sh.frame.width, "height": sh.frame.height,
+                    "radius": sh.frame.radius, "rotation": sh.frame.rotation,
+                    "fill": sh.fill, "stroke": sh.stroke, "strokeWidth": sh.stroke_width,
+                    "nodes": sh.nodes.len(), "closed": sh.closed,
+                });
+            }
+            if let Content::Picture(p) = &l.content {
+                v["picture"] = json!({
+                    "x": p.frame.x, "y": p.frame.y,
+                    "width": p.frame.width, "height": p.frame.height,
+                    "sourceWidth": p.width, "sourceHeight": p.height,
+                });
+            }
             if let Content::Text(t) = &l.content {
                 v["text"] = json!(t.text);
                 v["size"] = json!(t.size);
                 v["color"] = json!(t.color);
                 v["x"] = json!(t.x);
                 v["y"] = json!(t.y);
+                if let Some(f) = &t.frame {
+                    v["frame"] = json!({
+                        "x": f.x, "y": f.y, "width": f.width, "height": f.height,
+                        "radius": f.radius, "rotation": f.rotation,
+                    });
+                }
             }
             if !l.children.is_empty() {
                 v["children"] = Value::Array(l.children.iter().rev().map(|c| node(c, active, selected)).collect());
             }
             v
         }
+        let page = self.page();
         json!({
             "name": self.name,
-            "width": self.width,
-            "height": self.height,
+            "width": page.width,
+            "height": page.height,
             "activeLayer": active,
             "selectedLayers": selected,
-            "hasSelection": self.selection.is_some(),
-            "selectionBounds": self.selection.as_ref().map(|m| selection_bounds(m, self.width, self.height)),
-            "layers": self.layers.iter().rev().map(|l| node(l, active, selected)).collect::<Vec<_>>(),
+            "hasSelection": page.selection.is_some(),
+            "selectionBounds": page.selection.as_ref().map(|m| selection_bounds(m, page.width, page.height)),
+            "layers": page.layers.iter().rev().map(|l| node(l, active, selected)).collect::<Vec<_>>(),
             "history": history,
+            // The Pages panel needs the whole list, not just the one on screen.
+            "activePage": self.active_page,
+            "pages": self.pages.iter().enumerate().map(|(i, p)| json!({
+                "index": i,
+                "name": p.name,
+                "width": p.width,
+                "height": p.height,
+                "layers": p.layers.len(),
+                "active": i == self.active_page,
+            })).collect::<Vec<_>>(),
         })
     }
 }

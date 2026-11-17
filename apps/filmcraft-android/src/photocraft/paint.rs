@@ -86,9 +86,9 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         // The snapshot is the state to return to, so it is taken before the edit.
         let label = if erasing { "Eraser" } else if straight { "Pencil" } else { "Brush" };
         doc.push_history_coalescing(label, coalesce);
-        (doc.doc.width, doc.doc.height)
+        (doc.doc.width(), doc.doc.height())
     };
-    let selection = session.active().and_then(|d| d.doc.selection.clone());
+    let selection = session.active().and_then(|d| d.doc.selection().clone());
     let layer = target(session)?;
     let Content::Pixels(pixels) = &mut layer.content else { unreachable!() };
     // `make_mut` is what keeps the undo snapshot cheap: the clone happened when the snapshot was
@@ -255,12 +255,12 @@ pub fn bucket(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     let colour = colour(params, session)?;
 
     let doc = session.active().ok_or("Open a picture first.")?;
-    let (width, height) = (doc.doc.width, doc.doc.height);
+    let (width, height) = (doc.doc.width(), doc.doc.height());
     if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) {
         return Err("That point is outside the canvas.".into());
     }
     let composite = compose::render(&doc.doc);
-    let selection = doc.doc.selection.clone();
+    let selection = doc.doc.selection().clone();
     // A seed outside the selection has nothing it may fill.
     if let Some(mask) = &selection {
         if mask[(y as usize) * width as usize + x as usize] == 0 {
@@ -384,9 +384,9 @@ pub fn gradient(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     };
     let (width, height) = {
         let doc = session.active().ok_or("Open a picture first.")?;
-        (doc.doc.width, doc.doc.height)
+        (doc.doc.width(), doc.doc.height())
     };
-    let selection = session.active().unwrap().doc.selection.clone();
+    let selection = session.active().unwrap().doc.selection().clone();
     let dx = x1 - x0;
     let dy = y1 - y0;
     let len2 = dx * dx + dy * dy;
@@ -465,12 +465,12 @@ pub fn clone_stamp(session: &mut Session, params: &Value) -> Result<Value, Fail>
         .clamp(0.0, 1.0);
     let (width, height) = {
         let doc = session.active().ok_or("Open a picture first.")?;
-        (doc.doc.width, doc.doc.height)
+        (doc.doc.width(), doc.doc.height())
     };
     // The offset from the stroke's first point to the source stays fixed for the stroke.
     let dx = sx - points[0].0;
     let dy = sy - points[0].1;
-    let selection = session.active().unwrap().doc.selection.clone();
+    let selection = session.active().unwrap().doc.selection().clone();
     let source = compose::render(&session.active().unwrap().doc);
 
     {
@@ -559,9 +559,9 @@ pub fn spot_healing(session: &mut Session, params: &Value) -> Result<Value, Fail
         .clamp(1.0, 500.0);
     let (width, height) = {
         let doc = session.active().ok_or("Open a picture first.")?;
-        (doc.doc.width, doc.doc.height)
+        (doc.doc.width(), doc.doc.height())
     };
-    let selection = session.active().unwrap().doc.selection.clone();
+    let selection = session.active().unwrap().doc.selection().clone();
     let before = compose::render(&session.active().unwrap().doc);
     // A small box blur of the whole composite, then mixed in under the brush.
     let blurred = box_blur(&before, width, height, (radius / 2.0).max(1.0) as usize);

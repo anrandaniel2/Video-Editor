@@ -25,7 +25,7 @@ pub fn rect(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         return Err("A selection needs a width and a height.".into());
     }
     let doc = session.active_mut().ok_or("Open a picture first.")?;
-    let (dw, dh) = (doc.doc.width, doc.doc.height);
+    let (dw, dh) = (doc.doc.width(), doc.doc.height());
     let x0 = x.floor().max(0.0) as u32;
     let y0 = y.floor().max(0.0) as u32;
     let x1 = ((x + w).ceil().max(0.0) as u32).min(dw);
@@ -41,7 +41,7 @@ pub fn rect(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         }
     }
     doc.push_history("Select rectangle");
-    doc.doc.selection = Some(mask);
+    *doc.doc.selection_mut() = Some(mask);
     doc.touch();
     Ok(serde_json::json!({ "selection": [x0, y0, x1 - x0, y1 - y0] }))
 }
@@ -57,7 +57,7 @@ pub fn lasso(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         return Err("A lasso needs at least three points.".into());
     }
     let doc = session.active_mut().ok_or("Open a picture first.")?;
-    let (dw, dh) = (doc.doc.width, doc.doc.height);
+    let (dw, dh) = (doc.doc.width(), doc.doc.height());
     let mut mask = vec![0u8; (dw as usize) * (dh as usize)];
     for y in 0..dh {
         for x in 0..dw {
@@ -72,7 +72,7 @@ pub fn lasso(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         }
     }
     doc.push_history("Select lasso");
-    doc.doc.selection = Some(mask);
+    *doc.doc.selection_mut() = Some(mask);
     doc.touch();
     Ok(serde_json::json!({ "selection": "lasso", "points": points.len() }))
 }
@@ -84,10 +84,10 @@ pub fn magic_wand(session: &mut Session, params: &Value) -> Result<Value, Fail> 
     let tolerance = params.get("tolerance").and_then(Value::as_f64).unwrap_or(32.0).clamp(0.0, 255.0);
     let (dw, dh, composite) = {
         let doc = session.active().ok_or("Open a picture first.")?;
-        if x < 0.0 || y < 0.0 || x >= f64::from(doc.doc.width) || y >= f64::from(doc.doc.height) {
+        if x < 0.0 || y < 0.0 || x >= f64::from(doc.doc.width()) || y >= f64::from(doc.doc.height()) {
             return Err("That point is outside the canvas.".into());
         }
-        (doc.doc.width, doc.doc.height, compose::render(&doc.doc))
+        (doc.doc.width(), doc.doc.height(), compose::render(&doc.doc))
     };
     let seed = pixel_at(&composite, dw, x as usize, y as usize);
     let outline = flood(&composite, dw, dh, x as usize, y as usize, seed, tolerance);
@@ -99,7 +99,7 @@ pub fn magic_wand(session: &mut Session, params: &Value) -> Result<Value, Fail> 
     }
     let doc = session.active_mut().ok_or("Open a picture first.")?;
     doc.push_history("Select wand");
-    doc.doc.selection = Some(mask);
+    *doc.doc.selection_mut() = Some(mask);
     doc.touch();
     Ok(serde_json::json!({ "selection": "wand" }))
 }

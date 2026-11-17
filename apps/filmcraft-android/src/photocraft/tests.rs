@@ -359,9 +359,9 @@ fn a_new_layer_goes_on_top_without_reordering_the_tree() {
 fn creating_a_layer_is_undoable() {
     let mut s = session();
     run(&mut s, "layer.new.layer", json!({}));
-    assert_eq!(s.active().expect("a document").doc.layers.len(), 2);
+    assert_eq!(s.active().expect("a document").doc.layers().len(), 2);
     assert!(s.active_mut().expect("a document").undo(), "there is a step");
-    assert_eq!(s.active().expect("a document").doc.layers.len(), 1, "undo removed the layer");
+    assert_eq!(s.active().expect("a document").doc.layers().len(), 1, "undo removed the layer");
 }
 
 #[test]

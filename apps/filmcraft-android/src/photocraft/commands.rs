@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 
 use crate::photocraft::compose;
 use crate::photocraft::model::{
-    Adjustment, Blend, Content, Curves, Document, Kind, Layer, TextRun, hex, parse_colour,
+    Adjustment, Blend, Content, Curves, Document, Frame, Kind, Layer, Node, Shape, ShapeKind,
+    TextRun, hex, parse_colour,
 };
 use crate::photocraft::paint;
 use crate::photocraft::select;
@@ -47,6 +48,10 @@ pub const IDS: &[&str] = &[
     "layer.newAdjustmentLayer.levels",
     "layer.select",
     "layer.setProps",
+    "page.add",
+    "page.delete",
+    "page.duplicate",
+    "page.select",
     "paint.bucket",
     "paint.cloneStamp",
     "paint.gradient",
@@ -57,6 +62,9 @@ pub const IDS: &[&str] = &[
     "select.lasso",
     "select.magicWand",
     "select.rect",
+    "shape.create",
+    "shape.setNodes",
+    "shape.setProps",
     "tools.setBrush",
     "tools.setColors",
     "tools.swapColors",
@@ -125,7 +133,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             // studio's Layers panel expects to find it. (An earlier version pulled the active
             // layer out and re-pushed it, which silently reordered the document.)
             doc.push_history("New layer");
-            doc.doc.layers.push(layer);
+            doc.doc.layers_mut().push(layer);
             doc.active_layer = Some(id);
             doc.selected = vec![id];
             doc.touch();
@@ -135,7 +143,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             let doc = session.active_mut().ok_or("Open a picture first.")?;
             let id = doc.doc.take_id();
             doc.push_history("New group");
-            doc.doc.layers.push(Layer {
+            doc.doc.layers_mut().push(Layer {
                 id,
                 name: format!("Group {id}"),
                 kind: Kind::Group,
@@ -161,7 +169,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             copy.id = new_id;
             copy.name = format!("{} copy", copy.name);
             rename_descendants(&mut copy, &mut doc.doc);
-            doc.doc.layers.push(copy);
+            doc.doc.layers_mut().push(copy);
             doc.active_layer = Some(new_id);
             doc.touch();
             Ok(json!({ "layer": new_id }))
@@ -174,7 +182,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             }
             doc.push_history("Delete layer");
             doc.doc.remove(id);
-            doc.active_layer = doc.doc.layers.last().map(|l| l.id);
+            doc.active_layer = doc.doc.layers().last().map(|l| l.id);
             doc.touch();
             Ok(json!({ "deleted": id }))
         }
@@ -290,7 +298,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
         "select.magicWand" => select::magic_wand(session, &params),
         "select.deselect" => {
             let doc = session.active_mut().ok_or("Open a picture first.")?;
-            doc.doc.selection = None;
+            *doc.doc.selection_mut() = None;
             doc.touch();
             Ok(json!({ "selection": null }))
         }
@@ -302,7 +310,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             let text = params.get("text").and_then(Value::as_str).unwrap_or("Text").to_string();
             let doc = session.active_mut().ok_or("Open a picture first.")?;
             let id = doc.doc.take_id();
-            doc.doc.layers.push(Layer {
+            doc.doc.layers_mut().push(Layer {
                 id,
                 name: text.chars().take(24).collect(),
                 kind: Kind::Text,
@@ -318,11 +326,159 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                     y: number(&params, "y")?,
                     size: number_or(&params, "size", 48.0).clamp(1.0, 2048.0),
                     color: colour,
+                    // A Layout text frame wraps to its box; an artistic run has none.
+                    frame: frame_from(&params),
                 }),
             });
             doc.active_layer = Some(id);
             doc.touch();
             Ok(json!({ "layer": id }))
+        }
+
+        // ---------------------------------------------------------------- vector shapes
+        //
+        // The Vector workspace's rectangle, ellipse and pen: kept as geometry, not pixels, so the
+        // Stroke panel can change a width after the fact and Transform can move the shape without
+        // resampling its edge.
+        "shape.create" => {
+            let kind = match params.get("kind").and_then(Value::as_str).unwrap_or("rectangle") {
+                "ellipse" => ShapeKind::Ellipse,
+                "path" => ShapeKind::Path,
+                other => {
+                    if other == "rectangle" {
+                        ShapeKind::Rectangle
+                    } else {
+                        return Err(format!("`{other}` is not a shape this editor draws."));
+                    }
+                }
+            };
+            let mut frame = frame_from(&params).ok_or("A shape needs a frame: x, y, width and height.")?;
+            frame.radius = number_or(&params, "radius", 0.0).max(0.0);
+            frame.rotation = number_or(&params, "rotation", 0.0);
+            let nodes = nodes_from(&params, &frame);
+            if kind == ShapeKind::Path && nodes.len() < 2 {
+                return Err("A path needs at least two nodes.".into());
+            }
+            let colour = hex(session.tools.foreground);
+            let outline = hex(session.tools.background);
+            let shape = Shape {
+                frame,
+                kind,
+                fill: Some(params.get("fill").and_then(Value::as_str).unwrap_or(&colour).to_string()),
+                stroke: params
+                    .get("stroke")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or(Some(outline)),
+                stroke_width: number_or(&params, "strokeWidth", 0.0).clamp(0.0, 500.0),
+                nodes,
+                closed: params.get("closed").and_then(Value::as_bool).unwrap_or(kind == ShapeKind::Path && true),
+            };
+            new_shape(session, shape)
+        }
+        // The Vector workspace's node tools: they change the node list of the active path, which is
+        // what makes that workspace's toolbar do something rather than record a label.
+        "shape.setNodes" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc.active_layer.ok_or("Select a shape first.")?;
+            doc.push_history("Edit nodes");
+            doc.touch();
+            let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+            let Content::Shape(shape) = &mut layer.content else {
+                return Err("That layer is not a shape.".into());
+            };
+            shape.nodes = nodes_from(&params, &shape.frame);
+            shape.closed = params.get("closed").and_then(Value::as_bool).unwrap_or(shape.closed);
+            Ok(json!({ "layer": id, "nodes": shape.nodes.len() }))
+        }
+        "shape.setProps" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = doc.active_layer.ok_or("Select a shape first.")?;
+            doc.push_history("Shape");
+            doc.touch();
+            let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+            let Content::Shape(shape) = &mut layer.content else {
+                return Err("That layer is not a shape.".into());
+            };
+            if let Some(v) = params.get("fill").and_then(Value::as_str) {
+                shape.fill = parse_colour(v).map_err(bad)?;
+            }
+            if let Some(v) = params.get("stroke").and_then(Value::as_str) {
+                shape.stroke = parse_colour(v).map_err(bad)?;
+            }
+            if let Some(v) = params.get("strokeWidth").and_then(Value::as_f64) {
+                shape.stroke_width = v.clamp(0.0, 500.0);
+            }
+            if let Some(f) = frame_from(&params) {
+                shape.frame = f;
+            }
+            if let Some(v) = params.get("rotation").and_then(Value::as_f64) {
+                shape.frame.rotation = v;
+            }
+            doc.touch();
+            Ok(json!({ "layer": id }))
+        }
+
+        // ---------------------------------------------------------------- pages
+        //
+        // A page is a canvas and its own layer tree. The Pages panel adds, duplicates and deletes
+        // them, and the active page is what the canvas and every tool show.
+        "page.add" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            doc.push_history("Add page");
+            let (w, h) = (doc.doc.width(), doc.doc.height());
+            let width = number_or(&params, "width", f64::from(w)).clamp(1.0, 20000.0) as u32;
+            let height = number_or(&params, "height", f64::from(h)).clamp(1.0, 20000.0) as u32;
+            let name = params.get("name").and_then(Value::as_str).map(str::to_string);
+            let at = doc.doc.add_page(name, width, height).map_err(bad)?;
+            doc.doc.active_page = at;
+            doc.active_layer = doc.doc.layers().last().map(|l| l.id);
+            doc.touch();
+            Ok(json!({ "page": at, "pages": doc.doc.pages.len(), "width": width, "height": height }))
+        }
+        "page.duplicate" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            doc.push_history("Duplicate page");
+            let at = doc.doc.active_page;
+            let mut copy = doc.doc.pages[at].clone();
+            copy.name = format!("{} copy", copy.name);
+            // A copied layer is a new layer: it needs its own ids, or setProps on one of them
+            // would change both.
+            for layer in &mut copy.layers {
+                give_ids(layer, doc.doc.take_id);
+            }
+            let to = at + 1;
+            doc.doc.pages.insert(to, copy);
+            doc.doc.active_page = to;
+            doc.active_layer = doc.doc.layers().last().map(|l| l.id);
+            doc.touch();
+            Ok(json!({ "page": to, "pages": doc.doc.pages.len() }))
+        }
+        "page.delete" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            if doc.doc.pages.len() <= 1 {
+                return Err("A document needs at least one page.".into());
+            }
+            doc.push_history("Delete page");
+            let at = doc.doc.active_page;
+            doc.doc.pages.remove(at);
+            doc.doc.active_page = at.min(doc.doc.pages.len() - 1);
+            doc.active_layer = doc.doc.layers().last().map(|l| l.id);
+            doc.touch();
+            Ok(json!({ "page": doc.doc.active_page, "pages": doc.doc.pages.len() }))
+        }
+        "page.select" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let at = number(&params, "page")? as usize;
+            if at >= doc.doc.pages.len() {
+                return Err(format!("There is no page {}.", at + 1));
+            }
+            doc.doc.active_page = at;
+            doc.active_layer = doc.doc.layers().last().map(|l| l.id);
+            // A selection belongs to the page it was made on.
+            doc.selected.clear();
+            doc.touch();
+            Ok(json!({ "page": at, "name": doc.doc.pages[at].name }))
         }
 
         other => Err(format!("`{other}` is not a command this editor has.")),
@@ -469,7 +625,7 @@ fn new_adjustment(session: &mut Session, adjustment: Adjustment, name: &str) -> 
     let doc = session.active_mut().ok_or("Open a picture first.")?;
     doc.push_history(name);
     let id = doc.doc.take_id();
-    doc.doc.layers.push(Layer {
+    doc.doc.layers_mut().push(Layer {
         id,
         name: name.to_string(),
         kind: Kind::Adjustment,
@@ -517,8 +673,8 @@ fn apply_to_pixels(
     }
     doc.push_history_coalescing(label, coalesce);
     doc.touch();
-    let (width, height) = (doc.doc.width as usize, doc.doc.height as usize);
-    let selection = doc.doc.selection.clone();
+    let (width, height) = (doc.doc.width() as usize, doc.doc.height() as usize);
+    let selection = doc.doc.selection().clone();
     let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
     let Content::Pixels(slot) = &mut layer.content else { unreachable!() };
     let px = std::sync::Arc::make_mut(
@@ -568,6 +724,82 @@ fn levels_from(params: &Value) -> Adjustment {
         white,
         gamma: number_or(params, "gamma", 1.0).clamp(0.1, 10.0),
     }
+}
+
+/// A frame from a command's parameters: `x`,`y`,`width`,`height`, with optional roundness and
+/// rotation. `None` when the command carries no box at all, which is how an artistic text run
+/// says it has no frame.
+fn frame_from(params: &Value) -> Option<Frame> {
+    let get = |k: &str| params.get(k).and_then(Value::as_f64);
+    let (x, y) = (get("x").unwrap_or(0.0), get("y").unwrap_or(0.0));
+    let (width, height) = (get("width"), get("height"));
+    match (width, height) {
+        (Some(width), Some(height)) if width > 0.0 && height > 0.0 => Some(Frame {
+            x,
+            y,
+            width,
+            height,
+            radius: get("radius").unwrap_or(0.0).max(0.0),
+            rotation: get("rotation").unwrap_or(0.0),
+        }),
+        _ => None,
+    }
+}
+
+/// A path's node list, from `nodes: [{x, y, inX, inY, outX, outY, smooth}]`.
+///
+/// The points are document pixels; a path's nodes are stored relative to its frame, so a shape
+/// can be moved without rewriting every node.
+fn nodes_from(params: &Value, frame: &Frame) -> Vec<Node> {
+    let Some(arr) = params.get("nodes").and_then(Value::as_array) else { return Vec::new() };
+    arr.iter()
+        .filter_map(|n| {
+            let o = n.as_object()?;
+            let f = |k: &str| o.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+            let mut node = Node::sharp(f("x") - frame.x, f("y") - frame.y);
+            node.in_x = f("inX");
+            node.in_y = f("inY");
+            node.out_x = f("outX");
+            node.out_y = f("outY");
+            node.smooth = o.get("smooth").and_then(Value::as_bool).unwrap_or(false);
+            Some(node)
+        })
+        .collect()
+}
+
+/// Give a copied layer tree fresh ids, so a duplicate's layers are their own.
+fn give_ids(layer: &mut Layer, mut take: impl FnMut() -> u64) {
+    layer.id = take();
+    for child in &mut layer.children {
+        give_ids(child, &mut take);
+    }
+}
+
+/// Add a vector shape as a layer, on top and selected, with a history step.
+fn new_shape(session: &mut Session, shape: Shape) -> Result<Value, Fail> {
+    let doc = session.active_mut().ok_or("Open a picture first.")?;
+    doc.push_history("Shape");
+    let id = doc.doc.take_id();
+    let name = match shape.kind {
+        ShapeKind::Rectangle => "Rectangle",
+        ShapeKind::Ellipse => "Ellipse",
+        ShapeKind::Path => "Path",
+    };
+    doc.doc.layers_mut().push(Layer {
+        id,
+        name: name.to_string(),
+        kind: Kind::Shape,
+        visible: true,
+        locked: false,
+        opacity: 1.0,
+        blend: Blend::Normal,
+        clipped: false,
+        children: Vec::new(),
+        content: Content::Shape(shape),
+    });
+    doc.active_layer = Some(id);
+    doc.touch();
+    Ok(json!({ "layer": id }))
 }
 
 fn curves_from(params: &Value) -> Result<Curves, Fail> {
@@ -662,7 +894,7 @@ pub fn encode_picture(doc: &Document, format: &str, _quality: u8) -> Result<Vec<
         "png" => {
             let mut out = Vec::new();
             {
-                let mut encoder = png::Encoder::new(&mut out, doc.width, doc.height);
+                let mut encoder = png::Encoder::new(&mut out, doc.width(), doc.height());
                 encoder.set_color(png::ColorType::Rgba);
                 encoder.set_depth(png::BitDepth::Eight);
                 let mut writer = encoder.write_header().map_err(|e| format!("The PNG cannot be written: {e}"))?;
@@ -677,12 +909,12 @@ pub fn encode_picture(doc: &Document, format: &str, _quality: u8) -> Result<Vec<
 
 /// The composite of the active document at a size, for [`Session::render`].
 pub fn render_fitted(doc: &Document, max_width: u32, max_height: u32) -> (u32, u32, Vec<u8>) {
-    let (w, h) = fit(doc.width, doc.height, max_width, max_height);
+    let (w, h) = fit(doc.width(), doc.height(), max_width, max_height);
     let full = compose::render(doc);
-    if (w, h) == (doc.width, doc.height) {
+    if (w, h) == (doc.width(), doc.height()) {
         return (w, h, full);
     }
-    (w, h, reduce(&full, doc.width, doc.height, w, h))
+    (w, h, reduce(&full, doc.width(), doc.height(), w, h))
 }
 
 /// The largest size with the document's aspect that fits in `max_w` × `max_h`, never enlarging.
