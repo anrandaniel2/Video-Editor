@@ -68,7 +68,7 @@ jobs:
       # The photo engine's own module first: it is the one this branch added, and its failures are
       # the ones that matter most here.
       - name: The photo engine
-        run: cargo test -p filmcraft-android photo:: -- --nocapture
+        run: 'cargo test -p filmcraft-android photo:: -- --nocapture'
 
       - name: The whole engine
         run: cargo test -p filmcraft-android
