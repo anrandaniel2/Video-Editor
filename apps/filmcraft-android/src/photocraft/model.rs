@@ -70,6 +70,8 @@ impl Kind {
             Kind::Pixels => "pixels",
             Kind::Group => "group",
             Kind::Adjustment => "adjustment",
+            Kind::Shape => "shape",
+            Kind::Picture => "picture",
             Kind::Text => "text",
         }
     }

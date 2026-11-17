@@ -445,7 +445,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             // A copied layer is a new layer: it needs its own ids, or setProps on one of them
             // would change both.
             for layer in &mut copy.layers {
-                give_ids(layer, doc.doc.take_id);
+                give_ids(layer, &mut || doc.doc.take_id());
             }
             let to = at + 1;
             doc.doc.pages.insert(to, copy);
@@ -861,7 +861,7 @@ pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), F
     // should say so in the editor's terms.
     let limit = (crate::photocraft::model::MAX_PIXELS as usize).min(usize::MAX / 8);
     let raster = filmcraft_media::still::decode_raster_with_limit(name, bytes, limit)
-        .map_err(|e| format!("{}", explain_picture_error(name, &e)))?;
+        .map_err(|e| explain_picture_error(name, &e))?;
     Ok((raster.width, raster.height, raster.rgba))
 }
 
