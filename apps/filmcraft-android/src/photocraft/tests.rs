@@ -118,7 +118,7 @@ fn the_history_labels_name_what_happened() {
     run(&mut s, "paint.stroke", json!({ "points": [[8.0, 8.0]], "color": "#000000" }));
     run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#00FF00" }));
     let labels = s.active().expect("a document").history_labels();
-    assert_eq!(labels, vec!["Brush", "Fill"], "one row per edit, oldest first: {labels:?}");
+    assert_eq!(labels, vec!["New layer", "Brush", "Fill"], "one row per edit, oldest first: {labels:?}");
 }
 
 #[test]
@@ -323,4 +323,34 @@ fn a_self_overlapping_stroke_records_one_step() {
         json!({ "points": [[4.0, 4.0], [28.0, 28.0], [4.0, 28.0]], "color": "#000000", "size": 3.0 }),
     );
     assert_eq!(s.active().expect("a document").past.len(), 1, "one drag is one undo step");
+}
+
+#[test]
+fn a_new_layer_goes_on_top_without_reordering_the_tree() {
+    let mut s = session();
+    let a = run(&mut s, "layer.new.layer", json!({}))["layer"].as_u64().expect("a");
+    let b = run(&mut s, "layer.new.layer", json!({}))["layer"].as_u64().expect("b");
+    let tree: Vec<u64> = s
+        .active()
+        .expect("a document")
+        .doc
+        .layers
+        .iter()
+        .map(|l| l.id)
+        .collect();
+    // Bottom to top: the background, then a, then b. The first layer must still be under the
+    // second — an earlier version pulled the active layer out and re-pushed it, which moved `a`
+    // to the top and left the document reordered.
+    assert_eq!(tree.len(), 3, "background plus two layers: {tree:?}");
+    let position = |id: u64| tree.iter().position(|&x| x == id).expect("in the tree");
+    assert!(position(a) < position(b), "`a` is below `b`: {tree:?}");
+}
+
+#[test]
+fn creating_a_layer_is_undoable() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    assert_eq!(s.active().expect("a document").doc.layers.len(), 2);
+    assert!(s.active_mut().expect("a document").undo(), "there is a step");
+    assert_eq!(s.active().expect("a document").doc.layers.len(), 1, "undo removed the layer");
 }

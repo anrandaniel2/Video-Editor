@@ -119,25 +119,20 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                 children: Vec::new(),
                 content: Content::Pixels(None),
             };
-            // Above the active layer, or at the top, which is what "new layer" means.
-            match doc.active_layer.and_then(|a| doc.doc.remove(a).map(|l| (a, l))) {
-                Some((a, l)) => {
-                    doc.doc.layers.push(l);
-                    doc.doc.layers.push(layer);
-                    doc.active_layer = Some(id);
-                    let _ = a;
-                }
-                None => {
-                    doc.doc.layers.push(layer);
-                    doc.active_layer = Some(id);
-                }
-            }
+            // Straight to the top of the tree, which is where a new layer goes and where the
+            // studio's Layers panel expects to find it. (An earlier version pulled the active
+            // layer out and re-pushed it, which silently reordered the document.)
+            doc.push_history("New layer");
+            doc.doc.layers.push(layer);
+            doc.active_layer = Some(id);
+            doc.selected = vec![id];
             doc.touch();
             Ok(json!({ "layer": id }))
         }
         "layer.new.group" => {
             let doc = session.active_mut().ok_or("Open a picture first.")?;
             let id = doc.doc.take_id();
+            doc.push_history("New group");
             doc.doc.layers.push(Layer {
                 id,
                 name: format!("Group {id}"),
@@ -158,6 +153,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             let doc = session.active_mut().ok_or("Open a picture first.")?;
             let id = doc.active_layer.ok_or("Select a layer first.")?;
             let source = doc.doc.find(id).cloned().ok_or("That layer is gone.")?;
+            doc.push_history("Duplicate layer");
             let new_id = doc.doc.take_id();
             let mut copy = source;
             copy.id = new_id;
@@ -174,6 +170,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             if doc.doc.find(id).is_none() {
                 return Err("That layer is gone.".into());
             }
+            doc.push_history("Delete layer");
             doc.doc.remove(id);
             doc.active_layer = doc.doc.layers.last().map(|l| l.id);
             doc.touch();
@@ -274,10 +271,11 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
 
         // ---------------------------------------------------------------- type
         "type.create" => {
-            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            // Read the colour before borrowing the document: `active_mut` holds the whole session.
+            let colour = hex(session.tools.foreground);
             let text = params.get("text").and_then(Value::as_str).unwrap_or("Text").to_string();
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
             let id = doc.doc.take_id();
-            let colour = hex(doc_foreground(session)).to_string();
             doc.doc.layers.push(Layer {
                 id,
                 name: text.chars().take(24).collect(),
@@ -303,11 +301,6 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
 
         other => Err(format!("`{other}` is not a command this editor has.")),
     }
-}
-
-/// The foreground colour, read before borrowing the document mutably.
-fn doc_foreground(session: &Session) -> [u8; 4] {
-    session.tools.foreground
 }
 
 /// Whether a command can run right now, and if not, why.
@@ -419,6 +412,7 @@ fn set_props(session: &mut Session, params: &Value) -> Result<Value, Fail> {
 /// Add an adjustment layer above the active one.
 fn new_adjustment(session: &mut Session, adjustment: Adjustment, name: &str) -> Result<Value, Fail> {
     let doc = session.active_mut().ok_or("Open a picture first.")?;
+    doc.push_history(name);
     let id = doc.doc.take_id();
     doc.doc.layers.push(Layer {
         id,
