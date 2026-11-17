@@ -175,11 +175,28 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
             if (p.length() > 0) engine.execute("tools.setBrush", p)
         }
 
+    /**
+     * The colour well: the tools' colours, and the fill of the selected shape.
+     *
+     * A shape keeps its fill as text, so recolouring one is a change to its geometry -- and while
+     * a shape is selected, picking a colour and having nothing happen would be the dead control
+     * this is meant to be free of.
+     */
     suspend fun setColours(foreground: String? = null, background: String? = null) = withContext(Dispatchers.IO) {
         val p = JSONObject()
         if (foreground != null) p.put("foreground", foreground)
         if (background != null) p.put("background", background)
         if (p.length() > 0) engine.execute("tools.setColors", p)
+        val active = layers.firstOrNull { it.active }
+        if (foreground != null && active?.kind == "shape") {
+            runCatching {
+                engine.execute(
+                    "shape.setProps",
+                    JSONObject().put("layer", active.id).put("fill", foreground),
+                )
+            }
+            refreshAll()
+        }
     }
 
     /** A finished drag as one stroke, so the History panel shows one step. */
