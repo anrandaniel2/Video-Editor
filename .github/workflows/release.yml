@@ -72,15 +72,17 @@ jobs:
           set +e
           # `--lib`: the tests live in the library, and without it cargo also looks for test
           # targets (none exist) before deciding what to run. The filter is the module path.
-          cargo test -p filmcraft-android --lib 'photocraft::tests::' -- --nocapture > /tmp/photo-tests.txt 2>&1
+          cargo test -p filmcraft-android --lib 'photocraft::tests::' -- --nocapture > /tmp/raw.txt 2>&1
           status=$?
-          # Zero tests running still exits non-zero on some cargo versions; say how many ran, so a
-          # silent 101 cannot be mistaken for a failing test.
+          # Strip the colour codes first: cargo emits them here, and `^error` does not match
+          # "\x1b[1m\x1b[91merror". That is exactly how this step failed silently twice.
+          sed 's/\x1b\[[0-9;]*m//g' /tmp/raw.txt > /tmp/photo-tests.txt
+          # How many ran, so a compile failure cannot be mistaken for a failing test.
           grep -E '^running [0-9]+ tests?$' /tmp/photo-tests.txt | tail -1 | while read -r line; do
             echo "::warning title=Ran::$line"
           done
-          # A compile error has no failing test to name, so the errors themselves are what has to
-          # come back: the step log is not readable from where this is watched.
+          # A compile error has no failing test to name, so the errors themselves come back as
+          # annotations: the step log is not readable from where this is watched.
           grep -E '^error(\[E[0-9]+\])?: ' /tmp/photo-tests.txt | head -20 | while read -r line; do
             echo "::error title=Compile::$line"
           done
@@ -90,19 +92,13 @@ jobs:
           grep -E '^test .* (FAILED|ok)$|^failures:|panicked at|^assertion' /tmp/photo-tests.txt | head -40 | while read -r line; do
             echo "::error title=Test::$line"
           done
-          # Whatever happened, the first lines of the output say what: a build error, a missing
-          # target, a refusal. They go to the summary, which renders.
-          if [ $status -ne 0 ]; then
-            { echo "## photo engine step output (status $status)"; echo '```'; head -c 40000 /tmp/photo-tests.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          fi
-          # The step summary is the one channel that renders reliably here: the log download and
-          # the annotations both come back truncated, so the whole output goes in the summary.
+          # And the whole output in the summary, which renders.
           if [ $status -ne 0 ]; then
             {
-              echo "## The photo engine did not build or pass"
-              echo "\`\`\`"
+              echo "## The photo engine did not build or pass (status $status)"
+              echo '```'
               head -c 60000 /tmp/photo-tests.txt
-              echo "\`\`\`"
+              echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit $status
