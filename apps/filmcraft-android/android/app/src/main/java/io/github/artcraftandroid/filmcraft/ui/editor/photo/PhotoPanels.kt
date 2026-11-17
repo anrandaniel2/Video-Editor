@@ -153,7 +153,7 @@ private fun BrushPanel(session: PhotoSession) {
         PhotoSlider(
             position = (session.brushSize - 1f) / 199f,
             modifier = Modifier.fillMaxWidth(),
-            onChange = { session.setBrushSize(1f + it * 199f) },
+            onChange = { session.changeBrushSize(1f + it * 199f) },
         )
         Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
             Text("Opacity", color = PanelBody, fontSize = 11.sp, modifier = Modifier.weight(1f))
@@ -162,7 +162,7 @@ private fun BrushPanel(session: PhotoSession) {
         PhotoSlider(
             position = session.brushOpacity,
             modifier = Modifier.fillMaxWidth(),
-            onChange = { session.setBrushOpacity(it) },
+            onChange = { session.changeBrushOpacity(it) },
         )
         Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
             Text("Hardness", color = PanelBody, fontSize = 11.sp, modifier = Modifier.weight(1f))
@@ -171,7 +171,7 @@ private fun BrushPanel(session: PhotoSession) {
         PhotoSlider(
             position = session.brushHardness,
             modifier = Modifier.fillMaxWidth(),
-            onChange = { session.setBrushHardness(it) },
+            onChange = { session.changeBrushHardness(it) },
         )
         Spacer(Modifier.height(10.dp))
         Text(

@@ -169,9 +169,11 @@ internal class PhotoSession(private val scope: CoroutineScope) {
         if (next == PhotoTool.Layers) info?.let { info = document?.info() }
     }
 
-    fun setBrushSize(value: Float) { brushSize = value.coerceIn(1f, 200f) }
-    fun setBrushOpacity(value: Float) { brushOpacity = value.coerceIn(0f, 1f) }
-    fun setBrushHardness(value: Float) { brushHardness = value.coerceIn(0f, 1f) }
+    // Named `change`, not `set`: `var brushSize` already generates setBrushSize on the JVM, and
+    // two of them is a compile error.
+    fun changeBrushSize(value: Float) { brushSize = value.coerceIn(1f, 200f) }
+    fun changeBrushOpacity(value: Float) { brushOpacity = value.coerceIn(0f, 1f) }
+    fun changeBrushHardness(value: Float) { brushHardness = value.coerceIn(0f, 1f) }
 
     fun selectAdjustment(adjustment: Adjustment) { activeAdjustment = adjustment }
 

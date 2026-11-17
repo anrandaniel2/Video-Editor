@@ -247,7 +247,7 @@ private fun PhotoToolBar(session: PhotoSession) {
                 PhotoSlider(
                     position = (session.brushSize - 1f) / 199f,
                     modifier = Modifier.weight(1f),
-                    onChange = { session.setBrushSize(1f + it * 199f) },
+                    onChange = { session.changeBrushSize(1f + it * 199f) },
                 )
                 Text("${session.brushSize.roundToInt()}", color = Color(0xFFE8EAE0), fontSize = 11.sp, modifier = Modifier.width(34.dp))
             }

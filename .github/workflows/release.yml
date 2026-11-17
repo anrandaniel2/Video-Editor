@@ -70,8 +70,15 @@ jobs:
       - name: The photo engine
         run: 'cargo test -p filmcraft-android photo:: -- --nocapture'
 
+      # Split out, because a failing test names a test and that name is the whole diagnosis. The
+      # step log is not always readable from the API, but a failure annotation is.
       - name: The whole engine
-        run: cargo test -p filmcraft-android
+        run: |
+          set +e
+          cargo test -p filmcraft-android > /tmp/engine-tests.txt 2>&1
+          status=$?
+          grep -E '^test .* (FAILED|ok)$|^failures:|^ *[a-z_0-9:]+$|panicked at' /tmp/engine-tests.txt | head -60
+          exit $status
 
   apk:
     name: APK
