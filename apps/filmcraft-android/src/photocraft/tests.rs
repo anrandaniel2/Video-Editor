@@ -591,3 +591,152 @@ fn when_set(set: &str, b: &str) -> bool {
         _ => true,
     }
 }
+
+#[test]
+fn the_engine_opens_more_formats_than_the_drawing_canvas() {
+    // A PNG is written by hand here so the test needs no fixture file: the point is that the
+    // importer accepts a real file, not that it recognises a header.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 4, 3);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().expect("a PNG header");
+        w.write_image_data(&[200u8; 4 * 3 * 4]).expect("PNG data");
+    }
+    let (w, h, rgba) = super::commands::decode_picture("tiny.png", &png).expect("a PNG opens");
+    assert_eq!((w, h), (4, 3));
+    assert_eq!(rgba.len(), 4 * 3 * 4);
+
+    // A JPEG: the format phones take pictures in, and the one that used to be refused outright.
+    let jpeg = filmcraft_export::encode_still_with_quality(
+        filmcraft_export::Format::JpegSequence,
+        vec![128u8; 8 * 8 * 4],
+        8,
+        8,
+        false,
+        90,
+    )
+    .expect("a JPEG is written");
+    assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "it really is a JPEG");
+    let (w, h, _) = super::commands::decode_picture("photo.jpg", &jpeg).expect("a JPEG opens");
+    assert_eq!((w, h), (8, 8));
+
+    // And a file that is not a picture says what is supported rather than just failing.
+    let err = super::commands::decode_picture("notes.txt", b"hello").expect_err("not a picture");
+    assert!(err.contains("PNG") && err.contains("JPEG"), "the message lists the formats: {err}");
+}
+
+#[test]
+fn the_engine_writes_the_formats_it_claims() {
+    for (format, magic) in [
+        ("png", &[0x89u8, b'P', b'N', b'G'][..]),
+        ("jpg", &[0xFF, 0xD8][..]),
+        ("bmp", b"BM"),
+        ("tiff", &[b'I', b'I', 0x2A, 0x00][..]),
+    ] {
+        let mut s = session();
+        let doc = s.active().expect("a document");
+        let bytes = super::commands::encode_picture(&doc.doc, format, 90)
+            .unwrap_or_else(|e| panic!("{format} export: {e}"));
+        assert!(bytes.starts_with(magic), "{format} does not start with its magic number");
+    }
+    let mut s = session();
+    let doc = s.active().expect("a document");
+    let err = super::commands::encode_picture(&doc.doc, "psd", 90).expect_err("psd is not written");
+    assert!(err.contains("PNG"), "the message lists what is written: {err}");
+}
+
+#[test]
+fn a_document_can_have_pages_and_the_active_one_is_the_canvas() {
+    let mut s = session();
+    assert_eq!(s.active().expect("a document").doc.pages.len(), 1);
+    let out = run(&mut s, "page.add", json!({}));
+    assert_eq!(out["pages"], 2);
+    // The new page is the active one, and it is blank rather than a copy of page one.
+    let doc = s.active().expect("a document");
+    assert_eq!(doc.doc.active_page, 1);
+    assert_eq!(doc.doc.page().layers.len(), 1, "its own empty layer");
+    assert_eq!(at(&pixels(&s), 32, 16, 16)[3], 0, "a new page is transparent");
+
+    // Switching back shows page one's white background.
+    run(&mut s, "page.select", json!({ "page": 0 }));
+    assert_eq!(at(&pixels(&s), 32, 16, 16), [255, 255, 255, 255]);
+
+    // A layer id stays unique across pages, so a command naming one is never ambiguous.
+    let ids = s.active().expect("a document").doc.ids();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), ids.len(), "no id is reused across pages");
+}
+
+#[test]
+fn a_page_cannot_be_deleted_out_of_a_document() {
+    let mut s = session();
+    let err = super::commands::execute(&mut s, "page.delete", json!({})).expect_err("the last page stays");
+    assert!(err.contains("one page"), "it says why: {err}");
+}
+
+#[test]
+fn duplicating_a_page_copies_its_layers_under_new_ids() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#123456", "tolerance": 0.0 }));
+    let before: Vec<u64> = s.active().expect("a document").doc.page().layers.iter().map(|l| l.id).collect();
+    run(&mut s, "page.duplicate", json!({}));
+    let doc = s.active().expect("a document");
+    assert_eq!(doc.doc.pages.len(), 2);
+    let copy: Vec<u64> = doc.doc.page().layers.iter().map(|l| l.id).collect();
+    assert!(!copy.iter().any(|id| before.contains(id)), "a copy has its own ids");
+    // And the copy carries the paint.
+    assert_eq!(at(&pixels(&s), 32, 16, 16), [0x12, 0x34, 0x56, 0xFF]);
+}
+
+#[test]
+fn a_vector_shape_is_geometry_that_can_change_after_it_is_drawn() {
+    let mut s = session();
+    let out = run(&mut s, "shape.create", json!({
+        "kind": "rectangle", "x": 4.0, "y": 4.0, "width": 20.0, "height": 20.0,
+        "fill": "#FF0000", "stroke": null, "strokeWidth": 0.0,
+    }));
+    let id = out["layer"].as_u64().expect("a shape layer");
+    let doc = s.active().expect("a document");
+    assert_eq!(doc.doc.find(id).expect("the shape").kind, Kind::Shape);
+
+    // The middle is filled, a corner outside the frame is not.
+    assert_eq!(at(&pixels(&s), 32, 14, 14), [255, 0, 0, 255]);
+    assert_eq!(at(&pixels(&s), 32, 1, 1), [255, 255, 255, 255], "untouched background");
+
+    // Changing the fill changes the picture without redrawing the shape.
+    run(&mut s, "shape.setProps", json!({ "fill": "#00FF00" }));
+    assert_eq!(at(&pixels(&s), 32, 14, 14), [0, 255, 0, 255], "the shape is recoloured");
+}
+
+#[test]
+fn a_vector_stroke_width_is_respected_and_undoable() {
+    let mut s = session();
+    let out = run(&mut s, "shape.create", json!({
+        "kind": "rectangle", "x": 8.0, "y": 8.0, "width": 16.0, "height": 16.0,
+        "fill": null, "stroke": "#000000", "strokeWidth": 4.0,
+    }));
+    assert!(out["layer"].as_u64().is_some());
+    // The outline sits on the frame's edge, so a pixel just outside the frame is inked.
+    let edge = at(&pixels(&s), 32, 6, 16);
+    assert!(edge[0] < 128, "the 4px stroke reaches the frame's edge: {edge:?}");
+    // And the fill, being none, leaves the middle alone.
+    assert_eq!(at(&pixels(&s), 32, 16, 16), [255, 255, 255, 255], "no fill");
+}
+
+#[test]
+fn an_ellipse_is_round_not_a_rectangle() {
+    let mut s = session();
+    run(&mut s, "shape.create", json!({
+        "kind": "ellipse", "x": 4.0, "y": 4.0, "width": 24.0, "height": 24.0,
+        "fill": "#000000", "strokeWidth": 0.0,
+    }));
+    let px = pixels(&s);
+    // The centre of the ellipse is filled; a corner of its bounding box is not.
+    assert_eq!(at(&px, 32, 16, 16), [0, 0, 0, 255], "the centre");
+    assert_eq!(at(&px, 32, 5, 5), [255, 255, 255, 255], "the box's corner");
+}

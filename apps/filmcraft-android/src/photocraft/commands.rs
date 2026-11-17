@@ -846,30 +846,39 @@ fn number_or(params: &Value, key: &str, default: f64) -> f64 {
 ///
 /// The shell owns the file system and passes bytes; the engine owns decoding, because the
 /// document needs pixels, not a file.
+/// Open a picture file: PNG, JPEG, WebP, GIF, TIFF, BMP, ICO, TGA, QOI, DDS, EXR, HDR, JPEG XL,
+/// SVG, DPX and camera raw.
+///
+/// The decoders are the app's own, from `filmcraft-media` — the same ones the video editor imports
+/// stills with, which is why the photo editor now opens at least as many formats as the drawing
+/// canvas does rather than fewer. Orientation is applied from the file's EXIF, so a phone photo
+/// lands upright.
 pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Fail> {
-    let lower = name.to_ascii_lowercase();
-    if lower.ends_with(".png") || bytes.starts_with(b"\x89PNG") {
-        let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-        let mut reader = decoder.read_info().map_err(|e| format!("That PNG will not open: {e}"))?;
-        let size = reader.output_buffer_size().ok_or("That PNG is too large to read.")?;
-        let mut buf = vec![0; size];
-        let info = reader.next_frame(&mut buf).map_err(|e| format!("That PNG will not open: {e}"))?;
-        buf.truncate(info.buffer_size());
-        let rgba = match info.color_type {
-            png::ColorType::Rgba => buf,
-            png::ColorType::Rgb => to_rgba(&buf, 3),
-            png::ColorType::GrayscaleAlpha => to_rgba(&buf, 2),
-            png::ColorType::Grayscale => to_rgba(&buf, 1),
-            png::ColorType::Indexed => {
-                return Err("Indexed PNGs are not supported yet; save it as RGB.".into());
-            }
-        };
-        return Ok((info.width, info.height, rgba));
+    if bytes.is_empty() {
+        return Err(format!("`{name}` is empty."));
     }
-    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") || bytes.starts_with(&[0xFF, 0xD8]) {
-        return Err("JPEG pictures are not decoded yet; save it as PNG.".into());
+    // The engine's own budget, not the media crate's: a picture that is too big for the canvas
+    // should say so in the editor's terms.
+    let limit = (crate::photocraft::model::MAX_PIXELS as usize).min(usize::MAX / 8);
+    let raster = filmcraft_media::still::decode_raster_with_limit(name, bytes, limit)
+        .map_err(|e| format!("{}", explain_picture_error(name, &e)))?;
+    Ok((raster.width, raster.height, raster.rgba))
+}
+
+/// The message a picture that will not open gets.
+///
+/// The decoder's own text is kept — it names the format and the reason — but an unsupported file
+/// says what is supported, because "unsupported format" on its own leaves the user guessing.
+fn explain_picture_error(name: &str, e: &filmcraft_media::MediaError) -> Fail {
+    let text = format!("{e}");
+    if text.contains("unsupported") || text.contains("Unknown") || text.contains("guess") {
+        format!(
+            "`{name}` is not a format this editor opens. It reads PNG, JPEG, WebP, GIF, TIFF, BMP, \
+             ICO, TGA, QOI, DDS, EXR, HDR, JPEG XL, SVG, DPX and camera raw."
+        )
+    } else {
+        format!("`{name}` will not open: {text}")
     }
-    Err(format!("`{name}` is not a picture this editor opens."))
 }
 
 fn to_rgba(buf: &[u8], channels: usize) -> Vec<u8> {
@@ -886,25 +895,31 @@ fn to_rgba(buf: &[u8], channels: usize) -> Vec<u8> {
 }
 
 /// Encode the active document as a picture, for the shell to write.
-pub fn encode_picture(doc: &Document, format: &str, _quality: u8) -> Result<Vec<u8>, Fail> {
-    // `quality` is what the studio's export asks for; PNG is lossless and has no use for it. It
-    // stays in the signature because the shell passes it, and JPEG export will need it.
+pub fn encode_picture(doc: &Document, format: &str, quality: u8) -> Result<Vec<u8>, Fail> {
     let composite = compose::render(doc);
-    match format.to_ascii_lowercase().as_str() {
-        "png" => {
-            let mut out = Vec::new();
-            {
-                let mut encoder = png::Encoder::new(&mut out, doc.width(), doc.height());
-                encoder.set_color(png::ColorType::Rgba);
-                encoder.set_depth(png::BitDepth::Eight);
-                let mut writer = encoder.write_header().map_err(|e| format!("The PNG cannot be written: {e}"))?;
-                writer.write_image_data(&composite).map_err(|e| format!("The PNG cannot be written: {e}"))?;
-            }
-            Ok(out)
+    let (w, h) = (doc.width(), doc.height());
+    // The app's own still encoder, so a picture saved from here and one exported from the video
+    // editor are written by the same code with the same colour handling.
+    let f = match format.to_ascii_lowercase().as_str() {
+        "png" => filmcraft_export::Format::PngSequence,
+        "jpg" | "jpeg" => filmcraft_export::Format::JpegSequence,
+        "tif" | "tiff" => filmcraft_export::Format::TiffSequence,
+        "bmp" => filmcraft_export::Format::BmpSequence,
+        "tga" => filmcraft_export::Format::TgaSequence,
+        "exr" => filmcraft_export::Format::ExrSequence,
+        "dpx" => filmcraft_export::Format::DpxSequence,
+        other => {
+            return Err(format!(
+                "`{other}` is not a format this editor writes. It saves PNG, JPEG, TIFF, BMP, TGA, \
+                 OpenEXR and DPX."
+            ));
         }
-        "jpg" | "jpeg" => Err("JPEG export is not written yet; export PNG.".into()),
-        other => Err(format!("`{other}` is not a format this editor writes (png).")),
-    }
+    };
+    // Alpha is kept where the format has it; a JPEG has none, and the encoder drops it.
+    let alpha = !matches!(f, filmcraft_export::Format::JpegSequence | filmcraft_export::Format::DpxSequence);
+    let q = if quality == 0 { 92 } else { quality.clamp(1, 100) };
+    filmcraft_export::encode_still_with_quality(f, composite, w, h, alpha, q)
+        .map_err(|e| format!("The picture cannot be written: {e}"))
 }
 
 /// The composite of the active document at a size, for [`Session::render`].

@@ -57,6 +57,56 @@ import kotlinx.coroutines.withContext
  * bytes of the export: onto the timeline at the playhead, or — for a photo opened from Home — into
  * the photo library, after which the temporary project goes.
  */
+/**
+ * The name to open a picked picture under.
+ *
+ * A content URI's path segment is frequently not a filename at all, so the file's display name is
+ * asked for first and the MIME type is turned into an extension if even that has none. The
+ * importer uses the name to tell a DPX from a QOI, so guessing here is what decides whether the
+ * file opens.
+ */
+private fun pictureName(context: android.content.Context, uri: android.net.Uri): String {
+    val display = runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (i >= 0) c.getString(i) else null
+            } else {
+                null
+            }
+        }
+    }.getOrNull()
+    val fallback = uri.lastPathSegment ?: "picture"
+    val name = display ?: fallback
+    if (name.substringAfterLast('.', "").isNotEmpty()) return name
+    val ext = when (context.contentResolver.getType(uri)) {
+        "image/png" -> "png"
+        "image/jpeg" -> "jpg"
+        "image/webp" -> "webp"
+        "image/gif" -> "gif"
+        "image/tiff" -> "tiff"
+        "image/bmp" -> "bmp"
+        "image/svg+xml" -> "svg"
+        "image/jxl" -> "jxl"
+        else -> "png"
+    }
+    return "$name.$ext"
+}
+
+/**
+ * The MIME types the picture picker accepts, one per format the engine opens.
+ *
+ * `image/*` covers most of them; the rest are the formats that only have a MIME type if some app
+ * on the device claims it, so they are named by extension as well. Together they make the picker
+ * offer the same set the importer can read.
+ */
+private val PictureMimeTypes = arrayOf(
+    "image/png", "image/jpeg", "image/webp", "image/gif", "image/tiff", "image/bmp",
+    "image/x-icon", "image/x-tga", "image/x-qoi", "image/x-exr", "image/vnd.dpx",
+    "image/dpx", "image/x-portable-anymap", "image/svg+xml", "image/jxl", "image/avif",
+    "image/x-canon-cr2", "image/x-nikon-nef", "image/x-sony-arw", "image/x-adobe-dng",
+)
+
 @Composable
 internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
     val context = LocalContext.current
@@ -185,7 +235,9 @@ internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
                 withContext(Dispatchers.IO) {
                     val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: throw IllegalStateException("The picture couldn't be read.")
-                    vm.studioEngine.engine.placeBytes(uri.lastPathSegment ?: "picture.png", bytes)
+                    // The name matters: the importer sniffs several formats by their extension,
+                    // and a picker's lastPathSegment is often just an opaque id with no suffix.
+                    vm.studioEngine.engine.placeBytes(pictureName(context, uri), bytes)
                     vm.studioEngine.refreshAll()
                 }
             } catch (e: CancellationException) {
@@ -214,7 +266,13 @@ internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
                         title = vm.studioEngine.status?.active?.name ?: "Untitled",
                         onClose = dismiss,
                         onExport = { format, bytes, _ -> finish(bytes, format) },
-                        onPickPicture = { pickPicture.launch("image/*") },
+                        // `image/*` is what the picker filters on, but several of the formats the
+                        // engine reads (TGA, QOI, DPX) have no registered MIME type on Android, so
+                        // the extensions are listed too -- otherwise the file is simply not there
+                        // to choose.
+                        onPickPicture = {
+                            pickPicture.launch(arrayOf("image/*", *PictureMimeTypes))
+                        },
                         // The classic editor, for the panels the studio doesn't show.
                         onOpenClassic = { vm.choosePanel(PhotoPanel.Classic) },
                     )

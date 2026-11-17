@@ -422,12 +422,24 @@ private fun PersonaBar(
                         if (on) Color(0xFF151816) else Color(0xFFC7C8C4),
                         16.dp,
                     )
+                    // Centre the drawn word on the icon, not on the font's line box. A line box
+                    // reserves descender space that a capitalised word never uses, so with the
+                    // default line height the label sat visibly below the 16dp glyph beside it --
+                    // the "too low" this kept being. Trimming the line height to the font size and
+                    // centring what is left removes that slack.
                     Text(
-                        id.label,
-                        fontSize = 12.sp,
+                        text = id.label,
                         color = if (on) Color(0xFF151816) else Color(0xFFC7C8C4),
-                        fontWeight = if (on) FontWeight(650) else FontWeight.Normal,
                         maxLines = 1,
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontSize = 12.sp,
+                            fontWeight = if (on) FontWeight(650) else FontWeight.Normal,
+                            lineHeight = 12.sp,
+                            lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+                                alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+                                trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.Both,
+                            ),
+                        ),
                     )
                 }
             }
