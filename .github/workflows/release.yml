@@ -83,11 +83,11 @@ jobs:
           done
           # A compile error has no failing test to name, so the errors themselves come back as
           # annotations: the step log is not readable from where this is watched.
-          grep -E '^error(\[E[0-9]+\])?: ' /tmp/photo-tests.txt | head -20 | while read -r line; do
+          # Each error with the line it points at, as one annotation. Separate lists lose the
+          # pairing: an annotation queue is capped, so the locations arrive without their errors
+          # and the diagnosis is a guess. That is what happened here.
+          awk '/^error(\[E[0-9]+\])?: /{e=$0; getline; if ($0 ~ /^[[:space:]]*--> /) {gsub(/^[[:space:]]+--> /,""); print e " @ " $0} else print e}' /tmp/photo-tests.txt | head -25 | while IFS= read -r line; do
             echo "::error title=Compile::$line"
-          done
-          grep -E '^  --> ' /tmp/photo-tests.txt | head -20 | while read -r line; do
-            echo "::warning title=At::$line"
           done
           # Only what failed, and its message: `ok` lines crowd out the one line that names the
           # failing test, and annotations are capped.

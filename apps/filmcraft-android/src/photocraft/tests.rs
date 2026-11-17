@@ -343,7 +343,7 @@ fn a_new_layer_goes_on_top_without_reordering_the_tree() {
         .active()
         .expect("a document")
         .doc
-        .layers
+        .layers()
         .iter()
         .map(|l| l.id)
         .collect();
