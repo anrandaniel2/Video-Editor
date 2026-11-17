@@ -816,6 +816,7 @@ fn a_picture_can_be_moved_and_fitted_after_it_is_placed() {
                 height: h,
                 fit: PictureFit::Stretch,
             }),
+            style: LayerStyle::default(),
         });
         doc.active_layer = Some(id);
     }
@@ -933,4 +934,47 @@ fn the_node_toolbar_edits_the_path_it_names() {
     let err = super::commands::execute(&mut s, "shape.editNodes", json!({ "action": "sharp" }))
         .expect_err("a rectangle has no path nodes");
     assert!(err.contains("path"), "it says why: {err}");
+}
+
+#[test]
+fn a_layer_effect_is_drawn_and_can_be_turned_off_again() {
+    let mut s = session();
+    // A red square in the middle of the white canvas.
+    run(&mut s, "shape.create", json!({
+        "kind": "rectangle", "x": 8.0, "y": 8.0, "width": 16.0, "height": 16.0,
+        "fill": "#FF0000", "strokeWidth": 0.0,
+    }));
+    assert_eq!(at(&pixels(&s), 32, 2, 2), [255, 255, 255, 255], "clear to start with");
+
+    // An outer glow reaches past the shape, so a pixel outside it is no longer the background.
+    run(&mut s, "layer.style", json!({
+        "effect": "Outer Glow", "on": true, "colour": "#0000FF", "radius": 6.0, "opacity": 1.0,
+    }));
+    let lit = at(&pixels(&s), 32, 6, 16);
+    assert!(lit[2] > lit[0], "the glow tints the pixel beside the shape: {lit:?}");
+
+    // Turning it off puts the picture back exactly, which is what makes it an effect and not a
+    // paint stroke.
+    run(&mut s, "layer.style", json!({ "effect": "Outer Glow", "on": false }));
+    assert_eq!(at(&pixels(&s), 32, 6, 16), [255, 255, 255, 255], "the glow is gone");
+
+    // A name the panel does not have is refused rather than ignored.
+    let err = super::commands::execute(&mut s, "layer.style", json!({ "effect": "Sparkle", "on": true }))
+        .expect_err("not an effect");
+    assert!(err.contains("not a layer effect"), "it says why: {err}");
+}
+
+#[test]
+fn a_colour_overlay_replaces_the_layer_colour_and_leaves_the_background() {
+    let mut s = session();
+    run(&mut s, "shape.create", json!({
+        "kind": "rectangle", "x": 8.0, "y": 8.0, "width": 16.0, "height": 16.0,
+        "fill": "#FF0000", "strokeWidth": 0.0,
+    }));
+    run(&mut s, "layer.style", json!({
+        "effect": "Colour Overlay", "on": true, "colour": "#00FF00", "opacity": 1.0,
+    }));
+    let px = pixels(&s);
+    assert_eq!(at(&px, 32, 16, 16), [0, 255, 0, 255], "the shape wears the overlay");
+    assert_eq!(at(&px, 32, 2, 2), [255, 255, 255, 255], "the background does not");
 }

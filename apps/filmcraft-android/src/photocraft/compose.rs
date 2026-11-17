@@ -44,6 +44,219 @@ pub fn render_rect(doc: &Document, x: u32, y: u32, width: u32, height: u32) -> V
     out
 }
 
+/// Draw a layer's effects around and over its own pixels.
+///
+/// `one` is the layer's own buffer, already cut to `w` × `h`; the effects are drawn from its
+/// alpha, so a shape, a picture and a painted layer all get the same treatment. Shadows and the
+/// glow go *under* the layer, which is why they are returned separately and drawn before it.
+/// The overlay and the blur change the layer itself, so they are applied in place.
+fn apply_style(one: &mut [u8], under: &mut [u8], style: &crate::photocraft::model::LayerStyle, w: usize, h: usize) {
+    if let Some(glow) = style.outer_glow {
+        spread(under, one, w, h, glow.radius, glow.colour, glow.opacity);
+    }
+    if let Some(shadow) = style.outer_shadow {
+        let mut silhouette = one.to_vec();
+        offset_alpha(&mut silhouette, w, h, shadow.radius, shadow.radius);
+        spread(under, &silhouette, w, h, shadow.radius.max(1.0), shadow.colour, shadow.opacity);
+    }
+    if let Some(inner) = style.inner_shadow {
+        shade_inside(one, w, h, inner.radius.max(1.0), inner.colour, inner.opacity);
+    }
+    if let Some(bevel) = style.bevel {
+        // Light from the top left: the upper-left edge catches it and the lower-right edge falls
+        // into shadow. That is what makes a flat shape read as raised. The shadow's mask is the
+        // layer shifted up and left first, so the band it darkens is the opposite edge.
+        shade_inside(one, w, h, bevel.radius.max(1.0), [255, 255, 255, 255], bevel.opacity * 0.8);
+        let mut shifted = one.to_vec();
+        offset_alpha(&mut shifted, w, h, -bevel.radius, -bevel.radius);
+        shade_inside(&mut shifted, w, h, bevel.radius.max(1.0), [0, 0, 0, 255], bevel.opacity * 0.8);
+        // Keep the lit copy where it is, and take the darkened one only where the shift left the
+        // layer's own coverage.
+        for i in 0..w * h * 4 {
+            if i % 4 == 3 {
+                continue;
+            }
+            if shifted[i] < one[i] {
+                one[i] = shifted[i];
+            }
+        }
+    }
+    if let Some(overlay) = style.overlay {
+        tint(one, overlay.colour, overlay.opacity);
+    }
+    if let Some(blur) = style.blur {
+        if blur.radius >= 0.5 {
+            *one = box_blur(one, w, h, blur.radius.round() as usize);
+        }
+    }
+}
+
+/// A blurred copy of `src`'s alpha, in `colour`, blended into `dst` underneath the layer.
+fn spread(dst: &mut [u8], src: &[u8], w: usize, h: usize, radius: f64, colour: [u8; 4], opacity: f64) {
+    let radius = radius.round() as usize;
+    let mut alpha: Vec<u8> = src.chunks_exact(4).map(|p| p[3]).collect();
+    if radius > 0 {
+        alpha = blur_mask(&alpha, w, h, radius);
+    }
+    let strength = opacity.clamp(0.0, 1.0) * f64::from(colour[3]) / 255.0;
+    for i in 0..w * h {
+        let a = (f64::from(alpha[i]) * strength).round() as u8;
+        if a == 0 {
+            continue;
+        }
+        blend_px(dst, w as u32, i % w, i / w, colour[0], colour[1], colour[2], a);
+    }
+}
+
+/// Move an alpha channel by (dx, dy), dropping what falls off the buffer.
+fn offset_alpha(buf: &mut [u8], w: usize, h: usize, dx: f64, dy: f64) {
+    let (dx, dy) = (dx.round() as i64, dy.round() as i64);
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    let src: Vec<u8> = buf.to_vec();
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let (sx, sy) = (x - dx, y - dy);
+            let i = (y as usize * w + x as usize) * 4;
+            if sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
+                buf[i..i + 4].copy_from_slice(&[0, 0, 0, 0]);
+            } else {
+                let j = (sy as usize * w + sx as usize) * 4;
+                buf[i..i + 4].copy_from_slice(&src[j..j + 4]);
+            }
+        }
+    }
+}
+
+/// A dark band just inside the layer's edge: the inner shadow.
+fn shade_inside(buf: &mut [u8], w: usize, h: usize, radius: f64, colour: [u8; 4], opacity: f64) {
+    let alpha: Vec<u8> = buf.chunks_exact(4).map(|p| p[3]).collect();
+    let blurred = blur_mask(&alpha, w, h, radius.round().max(1.0) as usize);
+    let strength = opacity.clamp(0.0, 1.0);
+    for i in 0..w * h {
+        if alpha[i] == 0 {
+            continue;
+        }
+        // Where the blurred alpha is lower than the layer's own, the pixel is near an edge.
+        let inside = 1.0 - f64::from(blurred[i]) / f64::from(alpha[i]).max(1.0);
+        let a = (inside.clamp(0.0, 1.0) * strength * f64::from(colour[3]) / 255.0 * 255.0).round() as u8;
+        if a == 0 {
+            continue;
+        }
+        let i4 = i * 4;
+        let under = [buf[i4], buf[i4 + 1], buf[i4 + 2], buf[i4 + 3]];
+        let (r, g, b, a2) = blend_pair(under, colour, a);
+        buf[i4..i4 + 4].copy_from_slice(&[r, g, b, a2]);
+    }
+}
+
+/// A flat colour over the layer's own alpha: the colour overlay.
+fn tint(buf: &mut [u8], colour: [u8; 4], opacity: f64) {
+    let t = opacity.clamp(0.0, 1.0);
+    for px in buf.chunks_exact_mut(4) {
+        if px[3] == 0 {
+            continue;
+        }
+        let a = t * f64::from(colour[3]) / 255.0;
+        for c in 0..3 {
+            px[c] = (f64::from(px[c]) * (1.0 - a) + f64::from(colour[c]) * a).round() as u8;
+        }
+    }
+}
+
+/// Source-over of `top` onto `under`, both straight RGBA.
+fn blend_pair(under: [u8; 4], top: [u8; 4], alpha: u8) -> (u8, u8, u8, u8) {
+    let ta = f64::from(top[3]) / 255.0 * f64::from(alpha) / 255.0;
+    let ua = f64::from(under[3]) / 255.0;
+    let out_a = ta + ua * (1.0 - ta);
+    if out_a <= 0.0 {
+        return (0, 0, 0, 0);
+    }
+    let mix = |t: u8, u: u8| {
+        ((f64::from(t) * ta + f64::from(u) * ua * (1.0 - ta)) / out_a).round().clamp(0.0, 255.0) as u8
+    };
+    (mix(top[0], under[0]), mix(top[1], under[1]), mix(top[2], under[2]), (out_a * 255.0).round() as u8)
+}
+
+/// A separable box blur over an alpha channel, three passes to approximate a Gaussian.
+fn blur_mask(src: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
+    let mut a: Vec<f64> = src.iter().map(|&v| f64::from(v)).collect();
+    let mut out = vec![0f64; w * h];
+    for _ in 0..3 {
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = 0.0;
+                let mut n = 0.0;
+                for dx in -(radius as i64)..=(radius as i64) {
+                    let sx = x as i64 + dx;
+                    if sx >= 0 && sx < w as i64 {
+                        acc += a[y * w + sx as usize];
+                        n += 1.0;
+                    }
+                }
+                out[y * w + x] = acc / n.max(1.0);
+            }
+        }
+        a.copy_from_slice(&out);
+        for x in 0..w {
+            for y in 0..h {
+                let mut acc = 0.0;
+                let mut n = 0.0;
+                for dy in -(radius as i64)..=(radius as i64) {
+                    let sy = y as i64 + dy;
+                    if sy >= 0 && sy < h as i64 {
+                        acc += a[sy as usize * w + x];
+                        n += 1.0;
+                    }
+                }
+                out[y * w + x] = acc / n.max(1.0);
+            }
+        }
+        a.copy_from_slice(&out);
+    }
+    a.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect()
+}
+
+/// A blur of the layer's pixels, alpha-weighted so the edge does not fade to black.
+fn box_blur(src: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
+    let mut out = src.to_vec();
+    let alpha: Vec<u8> = src.chunks_exact(4).map(|p| p[3]).collect();
+    let blurred_alpha = blur_mask(&alpha, w, h, radius);
+    for c in 0..4 {
+        let channel: Vec<u8> = src.chunks_exact(4).map(|p| p[c]).collect();
+        let pre: Vec<f64> = channel.iter().zip(&alpha).map(|(&v, &a)| f64::from(v) * f64::from(a) / 255.0).collect();
+        let mut sum = vec![0f64; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = 0.0;
+                let mut n = 0.0;
+                for dy in -(radius as i64)..=(radius as i64) {
+                    for dx in -(radius as i64)..=(radius as i64) {
+                        let (sx, sy) = (x as i64 + dx, y as i64 + dy);
+                        if sx >= 0 && sy >= 0 && sx < w as i64 && sy < h as i64 {
+                            acc += pre[sy as usize * w + sx as usize];
+                            n += 1.0;
+                        }
+                    }
+                }
+                sum[y * w + x] = acc / n.max(1.0);
+            }
+        }
+        for i in 0..w * h {
+            let a = f64::from(blurred_alpha[i]) / 255.0;
+            out[i * 4 + c] = if c == 3 {
+                blurred_alpha[i]
+            } else if a > 0.0 {
+                (sum[i] / a).round().clamp(0.0, 255.0) as u8
+            } else {
+                0
+            };
+        }
+    }
+    out
+}
+
 /// Composite one layer (and its children) into `out`, then blend it `over` with `parent_alpha`.
 fn composite_layer(
     l: &Layer,
@@ -83,6 +296,7 @@ fn composite_layer(
         }
         Content::Pixels(Some(px)) => {
             let mut one = vec![0u8; out.len()];
+            let mut under = vec![0u8; out.len()];
             for row in 0..h as usize {
                 let src = ((y0 as usize + row) * doc.width() as usize + x0 as usize) * 4;
                 let dst = row * w as usize * 4;
@@ -91,8 +305,14 @@ fn composite_layer(
                     one[dst..dst + len].copy_from_slice(&px[src..src + len]);
                 }
             }
+            apply_style(&mut one, &mut under, &l.style, w as usize, h as usize);
             if l.clipped {
                 clip_to_alpha(&mut one, out, w as usize, h as usize);
+            }
+            // What the effects put behind the layer goes down first, so a glow or a shadow sits
+            // under the picture rather than over it.
+            if under.iter().any(|&v| v != 0) {
+                over(out, &under, w as usize, h as usize, w as usize);
             }
             blend_into(out, &one, w as usize, h as usize, alpha, l.blend);
         }
@@ -112,25 +332,46 @@ fn composite_layer(
         }
         Content::Text(t) => {
             let mut one = vec![0u8; out.len()];
+            let mut under = vec![0u8; out.len()];
             draw_text(&mut one, w, h, t, x0 as f64, y0 as f64);
+            apply_style(&mut one, &mut under, &l.style, w as usize, h as usize);
             if l.clipped {
                 clip_to_alpha(&mut one, out, w as usize, h as usize);
+            }
+            // What the effects put behind the layer goes down first, so a glow or a shadow sits
+            // under the picture rather than over it.
+            if under.iter().any(|&v| v != 0) {
+                over(out, &under, w as usize, h as usize, w as usize);
             }
             blend_into(out, &one, w as usize, h as usize, alpha, l.blend);
         }
         Content::Shape(shape) => {
             let mut one = vec![0u8; out.len()];
+            let mut under = vec![0u8; out.len()];
             draw_shape(&mut one, w, h, shape, x0 as f64, y0 as f64);
+            apply_style(&mut one, &mut under, &l.style, w as usize, h as usize);
             if l.clipped {
                 clip_to_alpha(&mut one, out, w as usize, h as usize);
+            }
+            // What the effects put behind the layer goes down first, so a glow or a shadow sits
+            // under the picture rather than over it.
+            if under.iter().any(|&v| v != 0) {
+                over(out, &under, w as usize, h as usize, w as usize);
             }
             blend_into(out, &one, w as usize, h as usize, alpha, l.blend);
         }
         Content::Picture(pic) => {
             let mut one = vec![0u8; out.len()];
+            let mut under = vec![0u8; out.len()];
             draw_picture(&mut one, w, h, pic, x0 as f64, y0 as f64);
+            apply_style(&mut one, &mut under, &l.style, w as usize, h as usize);
             if l.clipped {
                 clip_to_alpha(&mut one, out, w as usize, h as usize);
+            }
+            // What the effects put behind the layer goes down first, so a glow or a shadow sits
+            // under the picture rather than over it.
+            if under.iter().any(|&v| v != 0) {
+                over(out, &under, w as usize, h as usize, w as usize);
             }
             blend_into(out, &one, w as usize, h as usize, alpha, l.blend);
         }

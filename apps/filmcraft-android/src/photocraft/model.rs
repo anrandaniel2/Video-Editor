@@ -45,6 +45,87 @@ pub struct Layer {
     pub clipped: bool,
     pub children: Vec<Layer>,
     pub content: Content,
+    /// The layer's effects: what is drawn around its own pixels.
+    pub style: LayerStyle,
+}
+
+/// The layer effects the Effects panel offers.
+///
+/// Each is drawn from the layer's own alpha, so it works on a shape, a picture or a painted layer
+/// alike. They are part of the layer rather than baked into its pixels, so changing one does not
+/// resample the picture underneath.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayerStyle {
+    /// A blurred halo of the layer's own alpha, behind it.
+    pub outer_glow: Option<Effect>,
+    /// A blurred silhouette offset from the layer, behind it.
+    pub outer_shadow: Option<Effect>,
+    /// A blurred copy inside the layer's alpha, darker where the layer is near its edge.
+    pub inner_shadow: Option<Effect>,
+    /// A flat colour over the layer's own alpha.
+    pub overlay: Option<Effect>,
+    /// A blur applied to the layer itself.
+    pub blur: Option<Effect>,
+    /// A light band along the top edge and a dark one along the bottom: the bevel.
+    pub bevel: Option<Effect>,
+}
+
+impl LayerStyle {
+    /// The effects the panel can turn on, by the name it shows.
+    pub fn field_mut(&mut self, name: &str) -> Option<&mut Option<Effect>> {
+        match name {
+            "Gaussian Blur" => Some(&mut self.blur),
+            "Outer Shadow" => Some(&mut self.outer_shadow),
+            "Inner Shadow" => Some(&mut self.inner_shadow),
+            "Outer Glow" => Some(&mut self.outer_glow),
+            "Colour Overlay" => Some(&mut self.overlay),
+            "Bevel / Emboss" => Some(&mut self.bevel),
+            _ => None,
+        }
+    }
+
+    pub fn field(&self, name: &str) -> Option<Effect> {
+        match name {
+            "Gaussian Blur" => self.blur,
+            "Outer Shadow" => self.outer_shadow,
+            "Inner Shadow" => self.inner_shadow,
+            "Outer Glow" => self.outer_glow,
+            "Colour Overlay" => self.overlay,
+            "Bevel / Emboss" => self.bevel,
+            _ => None,
+        }
+    }
+
+    /// The style as the studio's panel reads it: which of the four are on, and how.
+    pub fn to_json(&self) -> Value {
+        let one = |e: Option<Effect>| match e {
+            Some(e) => json!({
+                "on": true,
+                "radius": e.radius,
+                "opacity": e.opacity,
+                "colour": hex(e.colour),
+            }),
+            None => json!({ "on": false }),
+        };
+        json!({
+            "Gaussian Blur": one(self.blur),
+            "Outer Shadow": one(self.outer_shadow),
+            "Inner Shadow": one(self.inner_shadow),
+            "Outer Glow": one(self.outer_glow),
+            "Colour Overlay": one(self.overlay),
+            "Bevel / Emboss": one(self.bevel),
+        })
+    }
+}
+
+/// One effect's strength: the colour it draws in and how far it reaches.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Effect {
+    pub colour: [u8; 4],
+    /// The radius in pixels: the glow's spread, the shadow's offset and softness.
+    pub radius: f64,
+    /// 0..1, how strongly it draws.
+    pub opacity: f64,
 }
 
 /// What a layer is, for the row icon and for what the compositor does with it.
@@ -411,6 +492,7 @@ impl Document {
             clipped: false,
             children: Vec::new(),
             content: Content::Pixels(fill),
+            style: LayerStyle::default(),
         });
         Ok(doc)
     }
@@ -448,6 +530,7 @@ impl Document {
             clipped: false,
             children: Vec::new(),
             content: Content::Pixels(None),
+            style: LayerStyle::default(),
         });
         Ok(at)
     }
@@ -584,6 +667,7 @@ impl Document {
                 "clipped": l.clipped,
                 "selected": selected.contains(&l.id),
                 "active": active == Some(l.id),
+                "style": l.style.to_json(),
             });
             let adjustment = match &l.content {
                 Content::Adjustment(a) => Some(adjustment_json(a)),

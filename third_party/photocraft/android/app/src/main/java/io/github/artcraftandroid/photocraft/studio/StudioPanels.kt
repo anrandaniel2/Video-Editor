@@ -954,11 +954,42 @@ private fun StrokeBody(a: StudioActions) {
 @Composable
 private fun EffectsBody(a: StudioActions) {
     val s = a.state
-    SecondaryContent {
-        listOf("Gaussian Blur", "Outer Shadow", "Inner Shadow", "Outer Glow", "Bevel / Emboss", "Colour Overlay").forEach { effect ->
-            CheckRow(effect, s.isOn(effect)) { s.toggle(effect) }
+    val e = a.engine
+    val scope = rememberCoroutineScope()
+    val active = e.layers.firstOrNull { it.active }
+    val effects = listOf(
+        "Gaussian Blur", "Outer Shadow", "Inner Shadow", "Outer Glow", "Bevel / Emboss", "Colour Overlay",
+    )
+    fun set(effect: String, on: Boolean) {
+        val id = active?.id ?: return
+        s.toggle(effect)
+        scope.launch {
+            runCatching {
+                e.run(
+                    "layer.style",
+                    JSONObject().put("layer", id).put("effect", effect).put("on", on)
+                        .put("colour", s.value("colour"))
+                        .put("radius", (s.value("effectRadius").toDoubleOrNull() ?: 8.0)),
+                )
+            }.onFailure { a.feedback(it.message ?: "The effect could not change.") }
         }
-        Text("Layer effects are applied by the document's layer style.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
+    }
+    SecondaryContent {
+        if (active == null) {
+            Text("Select a layer to give it an effect.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
+        }
+        effects.forEach { effect ->
+            CheckRow(effect, s.isOn(effect)) { on -> set(effect, on) }
+        }
+        Spacer(Modifier.height(8.dp))
+        FieldRow("Radius") {
+            NumberField(s.value("effectRadius"), "Effect radius", suffix = "px") {
+                s.setValue("effectRadius", it)
+                // A change to the radius applies to whatever is already on, so the field is not
+                // a setting that only takes effect the next time a box is ticked.
+                effects.filter { s.isOn(it) }.forEach { on -> set(on, true) }
+            }
+        }
     }
 }
 @Composable

@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 
 use crate::photocraft::compose;
 use crate::photocraft::model::{
-    Adjustment, Blend, Content, Curves, Document, Frame, Kind, Layer, Node, Shape, ShapeKind,
-    TextRun, hex, parse_colour,
+    Adjustment, Blend, Content, Curves, Document, Effect, Frame, Kind, Layer, LayerStyle, Node,
+    Shape, ShapeKind, TextRun, hex, parse_colour,
 };
 use crate::photocraft::paint;
 use crate::photocraft::select;
@@ -63,6 +63,7 @@ pub const IDS: &[&str] = &[
     "select.lasso",
     "select.magicWand",
     "select.rect",
+    "layer.style",
     "shape.create",
     "shape.editNodes",
     "shape.setNodes",
@@ -130,6 +131,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                 clipped: false,
                 children: Vec::new(),
                 content: Content::Pixels(None),
+                style: LayerStyle::default(),
             };
             // Straight to the top of the tree, which is where a new layer goes and where the
             // studio's Layers panel expects to find it. (An earlier version pulled the active
@@ -156,6 +158,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                 clipped: false,
                 children: Vec::new(),
                 content: Content::Group,
+                style: LayerStyle::default(),
             });
             doc.active_layer = Some(id);
             doc.touch();
@@ -331,6 +334,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                     // A Layout text frame wraps to its box; an artistic run has none.
                     frame: frame_from(&params),
                 }),
+                style: LayerStyle::default(),
             });
             doc.active_layer = Some(id);
             doc.touch();
@@ -407,6 +411,52 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             shape.closed = params.get("closed").and_then(Value::as_bool).unwrap_or(shape.closed);
             Ok(json!({ "layer": id, "nodes": shape.nodes.len() }))
         }
+        // The Effects panel's checkboxes: each one turns a real effect on or off on the active
+        // layer, drawn from the layer's own alpha by the compositor. The panel used to toggle a
+        // value nothing read, with a line of small print saying the document would apply it.
+        "layer.style" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = params
+                .get("layer")
+                .and_then(Value::as_u64)
+                .or(doc.active_layer)
+                .ok_or("Select a layer first.")?;
+            let name = params
+                .get("effect")
+                .and_then(Value::as_str)
+                .ok_or("`effect` is required.")?;
+            let on = params.get("on").and_then(Value::as_bool).unwrap_or(true);
+            let effect = name.to_string();
+            doc.push_history("Layer effect");
+            doc.touch();
+            let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+            let Some(field) = layer.style.field_mut(&effect) else {
+                return Err(format!("`{effect}` is not a layer effect."));
+            };
+            if on {
+                let colour = params
+                    .get("colour")
+                    .and_then(Value::as_str)
+                    .map(parse_colour)
+                    .transpose()?
+                    .flatten()
+                    .unwrap_or(match effect.as_str() {
+                        // A shadow is black and a glow is the colour the tools hold; an overlay is
+                        // the foreground, because that is what the panel's well shows.
+                        "Outer Shadow" | "Inner Shadow" => [0, 0, 0, 255],
+                        _ => [255, 255, 255, 128],
+                    });
+                *field = Some(Effect {
+                    colour,
+                    radius: number_or(&params, "radius", 8.0).clamp(0.0, 200.0),
+                    opacity: number_or(&params, "opacity", 0.75).clamp(0.0, 1.0),
+                });
+            } else {
+                *field = None;
+            }
+            Ok(json!({ "layer": id, "effect": effect, "on": on, "style": doc.doc.find(id).map(|l| l.style.to_json()) }))
+        }
+
         // The node toolbar's actions, applied to the selected path's own node list. Sharp,
         // smooth and smart node set the handles; break, join and close set the ends. Each keeps
         // the path geometry, which is what makes the toolbar do something rather than record
@@ -776,6 +826,7 @@ fn new_adjustment(session: &mut Session, adjustment: Adjustment, name: &str) -> 
         clipped: false,
         children: Vec::new(),
         content: Content::Adjustment(adjustment),
+        style: LayerStyle::default(),
     });
     doc.active_layer = Some(id);
     doc.touch();
@@ -941,6 +992,7 @@ fn new_shape(session: &mut Session, shape: Shape) -> Result<Value, Fail> {
         clipped: false,
         children: Vec::new(),
         content: Content::Shape(shape),
+        style: LayerStyle::default(),
     });
     doc.active_layer = Some(id);
     doc.touch();
