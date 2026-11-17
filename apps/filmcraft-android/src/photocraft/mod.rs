@@ -352,7 +352,7 @@ impl PhotoSession {
         let (w, h, rgba) = commands::decode_picture(&hint, &bytes).map_err(PhotoError::Import)?;
         let mut doc = Document::new(picture_name(&name), w, h, "none").map_err(PhotoError::Import)?;
         // The picture is the first layer, named for its file.
-        if let Some(first) = doc.doc.layers_mut().first_mut() {
+        if let Some(first) = doc.layers_mut().first_mut() {
             first.name = picture_name(&name);
             first.kind = Kind::Pixels;
             first.content = model::Content::Pixels(Some(std::sync::Arc::new(rgba)));

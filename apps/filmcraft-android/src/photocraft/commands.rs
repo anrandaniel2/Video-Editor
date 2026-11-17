@@ -401,10 +401,10 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                 return Err("That layer is not a shape.".into());
             };
             if let Some(v) = params.get("fill").and_then(Value::as_str) {
-                shape.fill = parse_colour(v).map_err(bad)?;
+                shape.fill = parse_colour(v)?;
             }
             if let Some(v) = params.get("stroke").and_then(Value::as_str) {
-                shape.stroke = parse_colour(v).map_err(bad)?;
+                shape.stroke = parse_colour(v)?;
             }
             if let Some(v) = params.get("strokeWidth").and_then(Value::as_f64) {
                 shape.stroke_width = v.clamp(0.0, 500.0);

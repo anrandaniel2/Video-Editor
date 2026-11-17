@@ -476,11 +476,13 @@ impl Document {
     }
 
     pub fn pixels(&self) -> u64 {
-        u64::from(self.width) * u64::from(self.height)
+        let (w, h) = (self.page().width, self.page().height);
+        u64::from(w) * u64::from(h)
     }
 
     pub fn blank(&self) -> Pixels {
-        std::sync::Arc::new(vec![0u8; (self.width as usize) * (self.height as usize) * 4])
+        let (w, h) = (self.page().width as usize, self.page().height as usize);
+        std::sync::Arc::new(vec![0u8; w * h * 4])
     }
 
     /// The page every tool acts on.
