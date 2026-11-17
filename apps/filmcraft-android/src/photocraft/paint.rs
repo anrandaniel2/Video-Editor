@@ -67,13 +67,12 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     // is what decides, because that is what the tool rail selected.
     let straight = params.get("pencil").and_then(Value::as_bool).unwrap_or(false);
 
-    let width = {
+    let (width, height) = {
         let doc = session.active_mut().ok_or("Open a picture first.")?;
         // The snapshot is the state to return to, so it is taken before the edit.
-        doc.push_history(if params.get("pencil").and_then(Value::as_bool).unwrap_or(false) { "Pencil" } else { "Brush" });
+        doc.push_history(if straight { "Pencil" } else { "Brush" });
         (doc.doc.width, doc.doc.height)
     };
-    let (width, height) = width;
     let selection = session.active().and_then(|d| d.doc.selection.clone());
     let layer = target(session)?;
     let Content::Pixels(pixels) = &mut layer.content else { unreachable!() };
@@ -85,10 +84,10 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
 
     let radius = (size / 2.0).max(0.25);
     for pair in points.windows(2) {
-        stamp_segment(px, width, height, pair[0], pair[1], radius, hardness, opacity, colour, straight);
+        stamp_segment(px, width, height, pair[0], pair[1], radius, hardness, opacity, colour, straight, selection.as_deref());
     }
     if points.len() == 1 {
-        stamp_segment(px, width, height, points[0], points[0], radius, hardness, opacity, colour, straight);
+        stamp_segment(px, width, height, points[0], points[0], radius, hardness, opacity, colour, straight, selection.as_deref());
     }
     session.active_mut().unwrap().touch();
     Ok(serde_json::json!({ "points": points.len() }))
@@ -107,6 +106,7 @@ fn stamp_segment(
     opacity: f64,
     colour: [u8; 4],
     straight: bool,
+    selection: Option<&[u8]>,
 ) {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
@@ -118,7 +118,7 @@ fn stamp_segment(
         let t = if steps == 0 { 0.0 } else { i as f64 / steps as f64 };
         let cx = a.0 + dx * t;
         let cy = a.1 + dy * t;
-        stamp(pixels, width, height, cx, cy, radius, hardness, opacity, colour, straight);
+        stamp(pixels, width, height, cx, cy, radius, hardness, opacity, colour, straight, selection);
     }
 }
 
@@ -135,6 +135,7 @@ fn stamp(
     opacity: f64,
     colour: [u8; 4],
     straight: bool,
+    selection: Option<&[u8]>,
 ) {
     let x0 = ((cx - radius).floor() as i64).max(0);
     let y0 = ((cy - radius).floor() as i64).max(0);
@@ -145,6 +146,12 @@ fn stamp(
     }
     for y in y0..=y1 {
         for x in x0..=x1 {
+            // A selection confines paint; that is the whole point of making one.
+            if let Some(mask) = selection {
+                if mask[y as usize * width as usize + x as usize] == 0 {
+                    continue;
+                }
+            }
             let d = ((x as f64 + 0.5 - cx).powi(2) + (y as f64 + 0.5 - cy).powi(2)).sqrt();
             // `hardness` is where the falloff begins: 1 is a hard edge, 0 a soft one.
             let edge = if straight {
