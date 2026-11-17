@@ -38,6 +38,14 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     var history: List<String> by mutableStateOf(emptyList())
         private set
 
+    /** The document's pages, in the order the Pages panel lists them. */
+    var pages: List<StudioPage> by mutableStateOf(emptyList())
+        private set
+
+    /** Which page the canvas, the layers and every tool act on. */
+    var activePage: Int by mutableStateOf(0)
+        private set
+
     var brushPresets: List<String> by mutableStateOf(emptyList())
         private set
 
@@ -339,6 +347,23 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
                 }
             }
             walk(doc.optJSONArray("layers"), 0)
+            // The document's real pages, so the Pages panel shows what exists rather than a
+            // reference spread. A document always has at least one.
+            pages = doc.optJSONArray("pages")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    arr.optJSONObject(i)?.let { p ->
+                        StudioPage(
+                            index = p.optInt("index", i),
+                            name = p.optString("name", "Page ${i + 1}"),
+                            width = p.optInt("width", 0),
+                            height = p.optInt("height", 0),
+                            layers = p.optInt("layers", 0),
+                            active = p.optBoolean("active", i == doc.optInt("activePage", 0)),
+                        )
+                    }
+                }
+            } ?: emptyList()
+            activePage = doc.optInt("activePage", 0)
             history = doc.optJSONArray("history")?.let { arr ->
                 (arr.length() - 1 downTo 0).mapNotNull { i -> historyEntry(arr.opt(i), arr.length() - 1 - i) }
             } ?: emptyList()
@@ -363,6 +388,16 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
 
     fun release() = engine.release()
 }
+
+/** One row of the Pages panel: the engine's own page. */
+data class StudioPage(
+    val index: Int,
+    val name: String,
+    val width: Int,
+    val height: Int,
+    val layers: Int,
+    val active: Boolean,
+)
 
 /** One row of the Layers panel: the engine's own layer. */
 data class StudioLayer(

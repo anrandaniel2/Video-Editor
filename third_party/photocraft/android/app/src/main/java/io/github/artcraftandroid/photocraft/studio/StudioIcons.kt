@@ -57,6 +57,8 @@ object StudioIcons {
         "image" to "M3 5h18v14H3zM4 16l5-5 4 4 3-3 5 5M16 9h.01",
         "italic" to "M11 3h8M5 21h8M15 3 9 21",
         "layers" to "m12 3 10 6-10 6L2 9l10-6Zm-9 10 9 5 9-5M3 17l9 5 9-5",
+        // A page with its turned corner, for the Pages panel.
+        "page" to "M6 3h8l4 4v14H6V3Zm8 0v4h4",
         "layout" to "M3 4h5v16H3zM12 4h9v5h-9zM12 12h9v8h-9z",
         "list" to "M8 5h13M8 12h13M8 19h13M3 5h.01M3 12h.01M3 19h.01",
         "lock" to "M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4m-4 4v3",

@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 /**
  * The studio's panels: the reference's seven panel bodies and its secondary ones, in its own
  * layout and order.
@@ -485,58 +486,100 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.histogram(
 @Composable
 private fun PagesBody(a: StudioActions) {
     val s = a.state
-    val spreads = listOf(
-        Triple("studio/reference/pages-2.webp", 2, "Nora Toth"),
-        Triple("studio/reference/pages-4.webp", 4, "Paloma Rincon"),
-        Triple("studio/reference/pages-6.webp", 6, "Marrak"),
-        Triple("studio/reference/layout.webp", 8, "Isabela Humphrey"),
-    )
+    val e = a.engine
+    val scope = rememberCoroutineScope()
+    val pages = e.pages
+    val active = e.activePage
+    fun go(block: suspend () -> Unit) {
+        scope.launch {
+            runCatching { block() }.onFailure { a.feedback(it.message ?: "The page could not change.") }
+        }
+    }
     // `.pages-navigation`: the two chevrons and the page count.
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 7.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        IconButton("chevron", "Previous spread", small = true) { s.page = (s.page - 2).coerceAtLeast(2) }
+        IconButton("chevron", "Previous page", small = true) {
+            if (active > 0) go { e.run("page.select", JSONObject().put("page", active - 1)) }
+        }
         Text("Pages", fontSize = 11.sp, color = Sc.Title)
-        IconButton("chevron", "Next spread", small = true) { s.page = (s.page + 2).coerceAtMost(8) }
+        IconButton("chevron", "Next page", small = true) {
+            if (active < pages.lastIndex) go { e.run("page.select", JSONObject().put("page", active + 1)) }
+        }
     }
     Row(Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(horizontal = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton("plus", "Add page", small = true) { a.feedback("A document's pages come from its artboards.") }
+        IconButton("plus", "Add page", small = true) { go { e.run("page.add") } }
         Spacer(Modifier.width(15.dp))
-        IconButton("duplicate", "Duplicate page", small = true) { a.feedback("Duplicate the artboard in the document instead.") }
+        IconButton("duplicate", "Duplicate page", small = true) { go { e.run("page.duplicate") } }
         Spacer(Modifier.width(15.dp))
-        IconButton("trash", "Delete page", small = true) { a.feedback("Delete the page's artboard in the document.") }
+        // A document keeps at least one page, so the control says why when it cannot act rather
+        // than emptying the document.
+        IconButton("trash", "Delete page", small = true) {
+            if (pages.size <= 1) {
+                a.feedback("A document needs at least one page.")
+            } else {
+                go { e.run("page.delete") }
+            }
+        }
         Spacer(Modifier.weight(1f))
         IconButton("more", "Page options", small = true) { s.toggle("managePages") }
     }
+    if (pages.isEmpty()) {
+        Text(
+            "No document is open.",
+            fontSize = 10.sp,
+            color = Color(0xFF8E9287),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp),
+        )
+        return
+    }
+    // The pages that exist. A row is the page's own name, its size and its layer count, so an
+    // empty page reads as empty rather than as a missing spread.
     Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()).padding(horizontal = 11.dp)) {
-        spreads.forEach { (path, page, title) ->
-            Column(
-                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 12.dp)
-                    .clickable { s.page = page },
+        pages.forEach { page ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(if (page.active) Color(0xFF2B2C29) else Color.Transparent)
+                    .border(
+                        1.dp,
+                        if (page.active) Color(0xFF3597FF) else Color(0xFF2E2F2B),
+                        RoundedCornerShape(5.dp),
+                    )
+                    .clickable { if (!page.active) go { e.run("page.select", JSONObject().put("page", page.index)) } }
+                    .padding(horizontal = 7.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                ReferenceAsset(
-                    path = path,
-                    modifier = Modifier.fillMaxWidth().height(96.dp)
-                        .border(2.dp, if (s.page == page) Color(0xFF3597FF) else Color.Transparent),
-                    description = "$title editorial spread",
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                )
-                Text(
-                    "Pages $page,${page + 1}",
-                    fontSize = 9.sp,
-                    color = Color(0xFFB8BBAE),
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+                StudioIcons.Glyph("page", if (page.active) Color(0xFF3597FF) else Color(0xFF989C8F), 14.dp)
+                Spacer(Modifier.width(7.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        page.name,
+                        fontSize = 10.sp,
+                        color = if (page.active) Sc.Title else Color(0xFFB8BBAE),
+                        maxLines = 1,
+                    )
+                    Text(
+                        "${page.width} × ${page.height} · ${page.layers} ${if (page.layers == 1) "layer" else "layers"}",
+                        fontSize = 8.5.sp,
+                        color = Color(0xFF8E9287),
+                    )
+                }
+            }
         }
-        }
+        Spacer(Modifier.height(4.dp))
     }
     DisclosureRow("Manage Pages", s.isOn("managePages")) { s.toggle("managePages") }
-    if (s.isOn("managePages")) ExpandedSection("8 pages · 4 spreads", "Facing pages · Portrait")
+    if (s.isOn("managePages")) {
+        ExpandedSection(
+            "${pages.size} ${if (pages.size == 1) "page" else "pages"}",
+            pages.getOrNull(active)?.let { "${it.width} × ${it.height}" } ?: "",
+        )
+    }
     DisclosureRow("Sections", s.isOn("sections")) { s.toggle("sections") }
-    if (s.isOn("sections")) ExpandedSection("Section 1 — Showcase", "Pages 2–9")
+    if (s.isOn("sections")) ExpandedSection("Section 1 — Showcase", "Pages 1–${pages.size}")
 }
 // ---------------------------------------------------------------------------- Brushes
 @Composable

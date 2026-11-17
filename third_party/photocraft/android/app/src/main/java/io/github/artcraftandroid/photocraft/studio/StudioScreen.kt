@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -133,7 +134,15 @@ fun StudioScreen(
     }
 
     StudioTheme(accent) {
-        Box(Modifier.fillMaxSize().background(Sc.artcraftBackdrop(workspace))) {
+        // The studio owns the whole window, so it must keep clear of the system bars itself. The
+        // app draws edge to edge, and nothing above this composable pads for the status bar: the
+        // persona bar was starting at y=0 and the status bar was drawing over its top, which is
+        // why the four workspace names kept reading low no matter how their own line box was set.
+        Box(
+            Modifier.fillMaxSize()
+                .background(Sc.artcraftBackdrop(workspace))
+                .statusBarsPadding(),
+        ) {
             StudioCanvas(
                 engine = engine,
                 state = state,
@@ -404,11 +413,14 @@ private fun PersonaBar(
             Workspaces.order.forEach { id ->
                 val on = state.workspace == id
                 Row(
-                    Modifier.height(30.dp).clip(RoundedCornerShape(8.dp))
+                    // A fixed 30 with 6 either side left 18 for a 16dp glyph and a 12sp word,
+                    // which pushed the row's contents up and out of its own box. The tab now
+                    // takes its height from what it holds, with a minimum for the touch target.
+                    Modifier.heightIn(min = 30.dp).clip(RoundedCornerShape(8.dp))
                         // The selected tab wears its workspace's accent, with dark ink.
                         .background(if (on) Sc.accentOf(id) else Color.Transparent)
                         .clickable { onSwitch(id) }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
