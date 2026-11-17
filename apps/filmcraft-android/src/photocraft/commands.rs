@@ -402,13 +402,20 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             };
             // The fill is stored as the colour text the draw resolves, so that a shape keeps the
             // name it was given; it is parsed here to reject a colour that would never draw.
-            if let Some(v) = params.get("fill").and_then(Value::as_str) {
-                let colour = parse_colour(v)?;
-                shape.fill = colour.map(|_| v.to_string()).or(Some("none".into()));
+            // A null is meaningful here: it asks for no fill at all, which `as_str` cannot see.
+            if let Some(value) = params.get("fill") {
+                shape.fill = match value.as_str() {
+                    Some(text) => parse_colour(text)?.map(|_| text.to_string()),
+                    None if value.is_null() => None,
+                    None => return Err("`fill` must be a colour or null.".into()),
+                };
             }
-            if let Some(v) = params.get("stroke").and_then(Value::as_str) {
-                let colour = parse_colour(v)?;
-                shape.stroke = colour.map(|_| v.to_string());
+            if let Some(value) = params.get("stroke") {
+                shape.stroke = match value.as_str() {
+                    Some(text) => parse_colour(text)?.map(|_| text.to_string()),
+                    None if value.is_null() => None,
+                    None => return Err("`stroke` must be a colour or null.".into()),
+                };
             }
             if let Some(v) = params.get("strokeWidth").and_then(Value::as_f64) {
                 shape.stroke_width = v.clamp(0.0, 500.0);
@@ -860,11 +867,10 @@ fn number_or(params: &Value, key: &str, default: f64) -> f64 {
     params.get(key).and_then(Value::as_f64).unwrap_or(default)
 }
 
-/// Decode a picture the shell hands over: PNG or JPEG, to straight RGBA at its own size.
+/// Decode a picture the shell hands over, to straight RGBA at its own size.
 ///
 /// The shell owns the file system and passes bytes; the engine owns decoding, because the
-/// document needs pixels, not a file.
-/// Open a picture file: PNG, JPEG, WebP, GIF, TIFF, BMP, ICO, TGA, QOI, DDS, EXR, HDR, JPEG XL,
+/// document needs pixels, not a file. Opens: PNG, JPEG, WebP, GIF, TIFF, BMP, ICO, TGA, QOI, DDS, EXR, HDR, JPEG XL,
 /// SVG, DPX and camera raw.
 ///
 /// The decoders are the app's own, from `filmcraft-media` — the same ones the video editor imports
@@ -888,11 +894,22 @@ pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), F
 /// The decoder's own text is kept — it names the format and the reason — but an unsupported file
 /// says what is supported, because "unsupported format" on its own leaves the user guessing.
 fn explain_picture_error(name: &str, e: &filmcraft_media::MediaError) -> Fail {
+    // A file the decoders do not recognise is a different problem from a corrupt one, and the
+    // answer differs: the first needs the list of what is read. The variant says which, so this
+    // does not have to guess from the wording.
+    // A decoder reaching a file it does not recognise wraps the underlying reader's message, so
+    // "could not be determined" is what an unknown format looks like here; anything else is a
+    // file that looks like a picture and is not one, and that deserves the decoder's own reason.
     let text = format!("{e}");
-    if text.contains("unsupported") || text.contains("Unknown") || text.contains("guess") {
+    let unknown = matches!(
+        e,
+        filmcraft_media::MediaError::Unsupported(_) | filmcraft_media::MediaError::NoStream(_)
+    ) || text.contains("could not be determined")
+        || text.contains("unsupported");
+    if unknown {
         format!(
-            "`{name}` is not a format this editor opens. It reads PNG, JPEG, WebP, GIF, TIFF, BMP, \
-             ICO, TGA, QOI, DDS, EXR, HDR, JPEG XL, SVG, DPX and camera raw."
+            "`{name}` is not a format this editor opens. It reads PNG, JPEG, WebP, GIF, TIFF, \
+             BMP, ICO, TGA, QOI, DDS, EXR, HDR, JPEG XL, SVG, DPX and camera raw."
         )
     } else {
         format!("`{name}` will not open: {text}")
