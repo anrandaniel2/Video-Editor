@@ -58,6 +58,7 @@ pub const IDS: &[&str] = &[
     "paint.pencil",
     "paint.spotHealing",
     "paint.stroke",
+    "picture.setProps",
     "select.deselect",
     "select.lasso",
     "select.magicWand",
@@ -402,7 +403,13 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
         }
         "shape.setProps" => {
             let doc = session.active_mut().ok_or("Open a picture first.")?;
-            let id = doc.active_layer.ok_or("Select a shape first.")?;
+            // A panel that edits a shape by name passes its layer; a toolbar acting on what is
+            // selected passes nothing, and gets the active layer.
+            let id = params
+                .get("layer")
+                .and_then(Value::as_u64)
+                .or(doc.active_layer)
+                .ok_or("Select a shape first.")?;
             doc.push_history("Shape");
             doc.touch();
             let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
@@ -426,14 +433,51 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                     None => return Err("`stroke` must be a colour or null.".into()),
                 };
             }
+            // The frame is what Transform's X, Y, Width, Height and Rotation set. Moving a shape
+            // this way keeps it geometry: nothing is resampled.
+            let get = |k: &str| params.get(k).and_then(Value::as_f64);
+            if let Some(v) = get("x") { shape.frame.x = v; }
+            if let Some(v) = get("y") { shape.frame.y = v; }
+            if let Some(v) = get("width") { shape.frame.width = v.max(0.0); }
+            if let Some(v) = get("height") { shape.frame.height = v.max(0.0); }
+            if let Some(v) = get("rotation") { shape.frame.rotation = v; }
+            if let Some(v) = get("radius") { shape.frame.radius = v.max(0.0); }
             if let Some(v) = params.get("strokeWidth").and_then(Value::as_f64) {
                 shape.stroke_width = v.clamp(0.0, 500.0);
             }
-            if let Some(f) = frame_from(&params) {
-                shape.frame = f;
-            }
-            if let Some(v) = params.get("rotation").and_then(Value::as_f64) {
-                shape.frame.rotation = v;
+            doc.touch();
+            Ok(json!({ "layer": id }))
+        }
+
+        // A placed picture has a frame of its own, so the same Transform fields move it without
+        // its pixels being resampled -- and Fit, Fill and Stretch decide what happens inside it.
+        "picture.setProps" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = params
+                .get("layer")
+                .and_then(Value::as_u64)
+                .or(doc.active_layer)
+                .ok_or("Select a picture first.")?;
+            doc.push_history("Picture");
+            doc.touch();
+            let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+            let Content::Picture(picture) = &mut layer.content else {
+                return Err("That layer is not a picture.".into());
+            };
+            let get = |k: &str| params.get(k).and_then(Value::as_f64);
+            if let Some(v) = get("x") { picture.frame.x = v; }
+            if let Some(v) = get("y") { picture.frame.y = v; }
+            if let Some(v) = get("width") { picture.frame.width = v.max(0.0); }
+            if let Some(v) = get("height") { picture.frame.height = v.max(0.0); }
+            if let Some(v) = get("rotation") { picture.frame.rotation = v; }
+            if let Some(kind) = params.get("fit").and_then(Value::as_str) {
+                use crate::photocraft::model::PictureFit;
+                picture.fit = match kind {
+                    "fit" => PictureFit::Fit,
+                    "fill" => PictureFit::Fill,
+                    "stretch" => PictureFit::Stretch,
+                    other => return Err(format!("`{other}` is not a picture fit: fit, fill or stretch.")),
+                };
             }
             doc.touch();
             Ok(json!({ "layer": id }))

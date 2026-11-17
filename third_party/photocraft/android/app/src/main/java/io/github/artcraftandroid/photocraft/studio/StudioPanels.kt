@@ -867,27 +867,81 @@ private fun TextControls(a: StudioActions, compact: Boolean) {
 @Composable
 private fun StrokeBody(a: StudioActions) {
     val s = a.state
-    SecondaryContent {
-        FieldRow("Width") {
-            NumberField(s.value("strokeWidth"), "Stroke width", suffix = "pt") { s.setValue("strokeWidth", it) }
+    val e = a.engine
+    val scope = rememberCoroutineScope()
+    val active = e.layers.firstOrNull { it.active }
+    // The stroke of a vector shape is geometry, so the panel edits the selected shape. With a
+    // pixel layer selected there is no stroke to change, and the panel says so rather than
+    // writing a number that nothing reads.
+    val isShape = active?.kind == "shape"
+    fun set(width: Float) {
+        val id = active?.id ?: return
+        s.setValue("shapeStrokeWidth", width.toString())
+        scope.launch {
+            runCatching {
+                e.run(
+                    "shape.setProps",
+                    JSONObject().put("layer", id).put("strokeWidth", width.toDouble()),
+                )
+            }.onFailure { a.feedback(it.message ?: "The stroke could not change.") }
         }
-        SelectField("Stroke style", s.value("strokeStyle").ifEmpty { "Solid" }, listOf("Solid", "Dashed", "Dotted", "None")) {
-            s.setValue("strokeStyle", it)
+    }
+    SecondaryContent {
+        if (!isShape) {
+            Text(
+                if (active == null) "Select a shape to give it a stroke." else "The selected layer is not a shape.",
+                fontSize = 10.sp,
+                lineHeight = 16.sp,
+                color = Sc.Note,
+            )
+        }
+        FieldRow("Width") {
+            NumberField(s.value("shapeStrokeWidth"), "Stroke width", suffix = "pt") {
+                it.toFloatOrNull()?.let(set)
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(0f, 1f, 2f, 4f, 8f).forEach { width ->
+                StandardButton(if (width == 0f) "None" else "${width.toInt()}") {
+                    if (isShape) set(width) else a.feedback("Select a shape first.")
+                }
+            }
         }
         // `.stroke-preview`
-        val style = s.value("strokeStyle").ifEmpty { "Solid" }
-        val width = (s.value("strokeWidth").toFloatOrNull() ?: 0.7f).coerceIn(1f, 12f)
+        val width = (s.value("shapeStrokeWidth").toFloatOrNull() ?: 0f).coerceIn(0f, 12f)
         Box(
             Modifier.fillMaxWidth().padding(vertical = 14.dp).height(width.coerceAtLeast(1f).dp)
-                .background(
-                    if (style == "None") Color.Transparent else Color(0xFFE0E4D7),
-                )
-                .alpha(if (style == "None") 0f else 1f),
+                .background(if (width == 0f) Color.Transparent else Color(0xFFE0E4D7))
+                .alpha(if (width == 0f) 0f else 1f),
         )
-        FieldRow("Pressure") {
-            IconButton("curve", "Pressure profile", active = s.isOn("pressure")) { s.toggle("pressure") }
+        if (isShape) {
+            Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StandardButton("No stroke") {
+                    val id = active?.id ?: return@StandardButton
+                    scope.launch {
+                        runCatching {
+                            e.run(
+                                "shape.setProps",
+                                JSONObject().put("layer", id).put("stroke", JSONObject.NULL),
+                            )
+                        }.onFailure { a.feedback(it.message ?: "The stroke could not change.") }
+                    }
+                }
+                StandardButton("Outline in colour") {
+                    val id = active?.id ?: return@StandardButton
+                    scope.launch {
+                        runCatching {
+                            e.run(
+                                "shape.setProps",
+                                JSONObject().put("layer", id)
+                                    .put("stroke", s.value("colour"))
+                                    .put("strokeWidth", 2.0),
+                            )
+                        }.onFailure { a.feedback(it.message ?: "The stroke could not change.") }
+                    }
+                }
+            }
         }
-        Text("Stroke width goes to the shape's stroke.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
     }
 }
 @Composable
@@ -903,24 +957,83 @@ private fun EffectsBody(a: StudioActions) {
 @Composable
 private fun TransformBody(a: StudioActions) {
     val s = a.state
+    val e = a.engine
+    val scope = rememberCoroutineScope()
+    val active = e.layers.firstOrNull { it.active }
+    val movable = active?.kind == "shape" || active?.kind == "picture"
+    // The numbers come from the engine's own shape, so they show where the shape is rather than
+    // the last thing typed into the field.
+    val box = remember(active?.id, e.status?.revision) {
+        runCatching {
+            val doc = JSONObject(e.engine.execute("document.inspect", "{}"))
+            val arr = doc.optJSONArray("layers")
+            fun find(nodes: org.json.JSONArray?, id: Long): org.json.JSONObject? {
+                if (nodes == null) return null
+                for (i in 0 until nodes.length()) {
+                    val o = nodes.optJSONObject(i) ?: continue
+                    if (o.optLong("id", -1L) == id) return o
+                    find(o.optJSONArray("children"), id)?.let { return it }
+                }
+                return null
+            }
+            find(arr, active?.id ?: -1L)
+        }.getOrNull()
+    }
+    val shape = box?.optJSONObject("shape") ?: box?.optJSONObject("picture")
+    fun apply(key: String, value: Double) {
+        val id = active?.id ?: return
+        scope.launch {
+            runCatching {
+                e.run("shape.setProps", JSONObject().put("layer", id).put(key, value))
+            }.onFailure { a.feedback(it.message ?: "The transform could not be applied.") }
+        }
+    }
     SecondaryContent {
-        listOf("X", "Y", "Width", "Height", "Rotation", "Shear").forEachIndexed { i, label ->
+        if (!movable) {
+            Text(
+                if (active == null) "Select a shape or a picture to transform it."
+                else "Only a shape or a picture can be transformed from here.",
+                fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note,
+            )
+        }
+        listOf("X" to "x", "Y" to "y", "Width" to "width", "Height" to "height", "Rotation" to "rotation").forEach { (label, key) ->
             FieldRow(label) {
                 NumberField(
                     value = s.value("transform$label").ifEmpty {
-                        when (i) {
-                            2 -> s.docWidth.toString()
-                            3 -> s.docHeight.toString()
+                        val fromEngine = shape?.optDouble(key, Double.NaN)?.takeIf { !it.isNaN() }
+                        when {
+                            fromEngine != null -> if (key == "rotation") fromEngine.toInt().toString() else fromEngine.toInt().toString()
+                            label == "Width" -> s.docWidth.toString()
+                            label == "Height" -> s.docHeight.toString()
                             else -> "0"
-                    }
-                },
+                        }
+                    },
                     label = "Transform $label",
                     minWidth = 62.dp,
-                    suffix = if (i > 3) "°" else "px",
-                ) { s.setValue("transform$label", it) }
+                    suffix = if (key == "rotation") "°" else "px",
+                ) {
+                    s.setValue("transform$label", it)
+                    it.toDoubleOrNull()?.let { v -> if (movable) apply(key, v) }
+                }
+            }
         }
+        if (movable) {
+            Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StandardButton("Centre") {
+                    val w = shape?.optDouble("width", 0.0) ?: 0.0
+                    val h = shape?.optDouble("height", 0.0) ?: 0.0
+                    apply("x", (s.docWidth - w) / 2.0)
+                    apply("y", (s.docHeight - h) / 2.0)
+                }
+                StandardButton("Fit page") {
+                    apply("x", 0.0)
+                    apply("y", 0.0)
+                    apply("width", s.docWidth.toDouble())
+                    apply("height", s.docHeight.toDouble())
+                }
+                StandardButton("Reset rotation") { apply("rotation", 0.0) }
+            }
         }
-        Text("Transforms apply to the active layer.", fontSize = 10.sp, lineHeight = 16.sp, color = Sc.Note)
     }
 }
 @Composable

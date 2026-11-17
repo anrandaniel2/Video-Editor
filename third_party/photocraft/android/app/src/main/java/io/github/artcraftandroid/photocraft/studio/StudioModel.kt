@@ -6,6 +6,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import io.github.artcraftandroid.photocraft.editor.Tool
 
+/** Which geometry a drag draws in the Vector and Layout workspaces. */
+enum class VectorTool { Rectangle, Ellipse, FrameRect, FrameEllipse }
+
 /** The four workspaces the persona bar switches between. */
 enum class WorkspaceId(val label: String, val title: String) {
     Sketch("Sketch", "Workout Meals — Logo studies"),
@@ -210,7 +213,7 @@ class StudioState(workspace: WorkspaceId) {
             "brushOpacity" to "100", "colour" to "#f59ac9", "channel" to "Master", "colourSpace" to "RGB",
             "font" to "Instrument Serif", "fontStyle" to "Regular", "strokeWidth" to "0.7",
             "alignment" to "align", "nodeAction" to "Sharp node", "exportFormat" to "PNG",
-            "strokeStyle" to "Solid",
+            "strokeStyle" to "Solid", "outlineColour" to "#000000", "shapeStrokeWidth" to "0",
         ),
     )
     var toggles by mutableStateOf(listOf("snapping"))

@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::model::{Blend, Content, Document, Kind, Layer};
+use super::model::{Blend, Content, Document, Kind, Layer, PictureFit};
 use super::Session;
 
 /// A session with one 32×32 document, active.
@@ -739,4 +739,109 @@ fn an_ellipse_is_round_not_a_rectangle() {
     // The centre of the ellipse is filled; a corner of its bounding box is not.
     assert_eq!(at(&px, 32, 16, 16), [0, 0, 0, 255], "the centre");
     assert_eq!(at(&px, 32, 5, 5), [255, 255, 255, 255], "the box's corner");
+}
+
+#[test]
+fn a_shape_can_be_moved_and_resized_without_being_redrawn() {
+    let mut s = session();
+    let out = run(&mut s, "shape.create", json!({
+        "kind": "rectangle", "x": 2.0, "y": 2.0, "width": 10.0, "height": 10.0,
+        "fill": "#FF0000", "strokeWidth": 0.0,
+    }));
+    let id = out["layer"].as_u64().expect("a shape layer");
+    // Named by the panel that edits it, the way Transform sends it.
+    run(&mut s, "shape.setProps", json!({
+        "layer": id, "x": 16.0, "y": 16.0, "width": 12.0, "height": 12.0,
+    }));
+    let px = pixels(&s);
+    // The old place is clear and the new one is filled: the geometry moved, not the paint.
+    assert_eq!(at(&px, 32, 4, 4), [255, 255, 255, 255], "the old place");
+    assert_eq!(at(&px, 32, 20, 20), [255, 0, 0, 255], "the new place");
+    // And the shape is still a shape, so it can move again.
+    let doc = s.active().expect("a document");
+    assert_eq!(doc.doc.find(id).expect("the shape").kind, Kind::Shape);
+    assert!(s.active_mut().expect("a document").undo(), "moving is undoable");
+}
+
+#[test]
+fn a_shape_with_no_stroke_drawn_is_still_editable() {
+    // The Stroke panel's "None" writes a null, and the draw must not choke on it.
+    let mut s = session();
+    let id = run(&mut s, "shape.create", json!({
+        "kind": "ellipse", "x": 4.0, "y": 4.0, "width": 20.0, "height": 20.0,
+        "fill": "#0000FF", "stroke": "#FF0000", "strokeWidth": 4.0,
+    }))["layer"].as_u64().expect("a shape layer");
+    run(&mut s, "shape.setProps", json!({ "layer": id, "stroke": null, "strokeWidth": 0.0 }));
+    // The fill is untouched: removing the outline must not remove the shape.
+    assert_eq!(at(&pixels(&s), 32, 14, 14), [0, 0, 255, 255]);
+}
+
+#[test]
+fn a_picture_can_be_moved_and_fitted_after_it_is_placed() {
+    // A 4x2 red picture, placed the way the shell places one.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 4, 2);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().expect("a PNG header");
+        let mut data = Vec::new();
+        for _ in 0..8 {
+            data.extend_from_slice(&[255, 0, 0, 255]);
+        }
+        w.write_image_data(&data).expect("PNG data");
+    }
+    let mut s = session();
+    // `place_bytes` lives on the shell's session, which owns the lock; the engine's own session is
+    // what the command table works on, so the placement is done here the way it does it.
+    {
+        let doc = s.active_mut().expect("a document");
+        let (w, h, rgba) = super::commands::decode_picture("red.png", &png).expect("a PNG opens");
+        let id = doc.doc.take_id();
+        doc.push_history("Place picture");
+        doc.doc.layers_mut().push(Layer {
+            id,
+            name: "red.png".into(),
+            kind: Kind::Picture,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            blend: Blend::Normal,
+            clipped: false,
+            children: Vec::new(),
+            content: Content::Picture(super::model::PictureRef {
+                frame: super::model::Frame::new(0.0, 0.0, f64::from(w), f64::from(h)),
+                pixels: std::sync::Arc::new(rgba),
+                width: w,
+                height: h,
+                fit: PictureFit::Stretch,
+            }),
+        });
+        doc.active_layer = Some(id);
+    }
+    let doc = s.active().expect("a document");
+    let placed = doc.doc.layers().last().cloned().expect("a layer");
+    assert_eq!(placed.kind, Kind::Picture, "it is a picture, not pixels");
+    // Placed at the canvas's size, so its frame is the canvas.
+    let out = run(&mut s, "picture.setProps", json!({
+        "layer": placed.id, "x": 8.0, "y": 8.0, "width": 16.0, "height": 16.0,
+    }));
+    assert_eq!(out["layer"], placed.id);
+    let doc = s.active().expect("a document");
+    let Content::Picture(pic) = &doc.doc.find(placed.id).expect("the picture").content else {
+        panic!("still a picture");
+    };
+    assert_eq!((pic.frame.x, pic.frame.y), (8.0, 8.0));
+    assert_eq!((pic.frame.width, pic.frame.height), (16.0, 16.0));
+    // And the fit decides what happens inside the frame.
+    run(&mut s, "picture.setProps", json!({ "layer": placed.id, "fit": "fit" }));
+    let doc = s.active().expect("a document");
+    let Content::Picture(pic) = &doc.doc.find(placed.id).expect("the picture").content else {
+        panic!("still a picture");
+    };
+    assert_eq!(pic.fit, PictureFit::Fit);
+    // The frame moved, so the canvas shows the picture only where the frame is.
+    let px = pixels(&s);
+    assert_eq!(at(&px, 32, 12, 12), [255, 0, 0, 255], "inside the frame");
+    assert_eq!(at(&px, 32, 2, 2), [255, 255, 255, 255], "outside it");
 }

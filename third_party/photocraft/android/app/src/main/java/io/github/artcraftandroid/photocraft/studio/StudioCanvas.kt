@@ -57,6 +57,23 @@ fun StudioCanvas(
         Workspaces.of(state.workspace).engineTool(state.selectedTool)
     }
     val painting = tool in setOf(Tool.Brush, Tool.Pencil, Tool.Eraser)
+    // The workspaces that keep their shapes: Vector draws rectangles and ellipses as geometry, and
+    // Layout draws picture frames. The reference's own tools are named by id, and those ids are
+    // what says which of the four the drag makes.
+    val vectorTool: VectorTool? = when (state.workspace) {
+        WorkspaceId.Vector -> when (state.selectedTool) {
+            "rectangle" -> VectorTool.Rectangle
+            "ellipse" -> VectorTool.Ellipse
+            else -> null
+        }
+        WorkspaceId.Layout -> when (state.selectedTool) {
+            "rectangle", "table" -> VectorTool.Rectangle
+            "frame" -> VectorTool.FrameRect
+            "ellipse" -> VectorTool.FrameEllipse
+            else -> null
+        }
+        else -> null
+    }
 
     // Follow the engine's document: a new composite whenever its revision moves. `preview` and
     // `status` are Compose state on the engine, so the canvas redraws when the stroke lands --
@@ -142,10 +159,47 @@ fun StudioCanvas(
                     },
                 )
             }
+            // A vector shape: the drag makes geometry, not paint, in the workspaces that keep
+            // one. Which shape comes from the tab that is selected, not from the engine tool --
+            // a frame and a rectangle are the same drag with different consequences.
+            .pointerInput(tool, state.workspace, state.selectedTool) {
+                if (vectorTool != null) {
+                    detectDragGestures(
+                        onDragStart = { pos -> strokePoints = listOf(toDocument(pos)) },
+                        onDragEnd = {
+                            val points = strokePoints
+                            strokePoints = emptyList()
+                            if (points.size > 1) {
+                                val first = points.first()
+                                val last = points.last()
+                                val colour = state.value("colour")
+                                val size = state.value("brushSize").toFloatOrNull() ?: 24f
+                                val outline = state.value("outlineColour").ifEmpty { "#000000" }
+                                val stroke = state.value("shapeStrokeWidth").toFloatOrNull() ?: 0f
+                                scope.launch {
+                                    runCatching {
+                                        when (vectorTool) {
+                                            VectorTool.FrameRect -> engine.frameDrag(false, first, last)
+                                            VectorTool.FrameEllipse -> engine.frameDrag(true, first, last)
+                                            VectorTool.Ellipse ->
+                                                engine.shapeDrag("ellipse", first, last, colour, outline, stroke)
+                                            else -> engine.shapeDrag("rectangle", first, last, colour, outline, stroke)
+                                        }
+                                    }.onFailure { onFailure(it.message ?: "The shape failed.") }
+                                }
+                            }
+                        },
+                        onDragCancel = { strokePoints = emptyList() },
+                    ) { change, _ ->
+                        strokePoints = strokePoints + toDocument(change.position)
+                        change.consume()
+                    }
+                }
+            }
             // Selecting: the marquee, the lasso and the Move tool's box all take a drag. They were
             // inert, which is most of why the Pixel and Vector workspaces felt dead.
             .pointerInput(tool) {
-                if (tool == Tool.Rect || tool == Tool.Lasso || tool == Tool.Move) {
+                if ((tool == Tool.Rect || tool == Tool.Lasso || tool == Tool.Move) && vectorTool == null) {
                     detectDragGestures(
                         onDragStart = { pos -> strokePoints = listOf(toDocument(pos)) },
                         onDragEnd = {

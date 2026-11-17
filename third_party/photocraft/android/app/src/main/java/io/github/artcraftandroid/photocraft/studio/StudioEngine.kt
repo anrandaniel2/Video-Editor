@@ -251,6 +251,67 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
             }
         }
 
+    /**
+     * A drag by a vector tool: a rectangle, an ellipse, a pen path or a picture frame, kept as
+     * geometry rather than painted into the pixels.
+     *
+     * This is what separates the Vector and Layout workspaces from the Pixel one. The same drag
+     * that paints a stroke in Pixel makes a shape here, and the shape can be recoloured, restroked
+     * or moved afterwards without its edge being resampled.
+     */
+    suspend fun shapeDrag(
+        kind: String,
+        from: Pair<Float, Float>,
+        to: Pair<Float, Float>,
+        colour: String,
+        outline: String,
+        strokeWidth: Float,
+    ): String = withContext(Dispatchers.IO) {
+        val (x0, y0) = from
+        val (x1, y1) = to
+        val p = JSONObject()
+            .put("kind", if (kind == "ellipse") "ellipse" else "rectangle")
+            .put("x", minOf(x0, x1).toDouble())
+            .put("y", minOf(y0, y1).toDouble())
+            .put("width", kotlin.math.abs(x1 - x0).toDouble())
+            .put("height", kotlin.math.abs(y1 - y0).toDouble())
+            .put("fill", colour)
+            .put("strokeWidth", strokeWidth.toDouble())
+        if (strokeWidth > 0f) p.put("stroke", outline)
+        // A drag too small to be a shape is not one: a tap that slipped should not leave a dot.
+        if (kotlin.math.abs(x1 - x0) < 1f || kotlin.math.abs(y1 - y0) < 1f) {
+            return@withContext ""
+        }
+        val out = engine.execute("shape.create", p)
+        refreshAll()
+        runCatching { JSONObject(out).optLong("layer", -1L) }.getOrDefault(-1L).takeIf { it > 0 }?.toString() ?: ""
+    }
+
+    /** A picture frame: a shape of its own kind, filled with the picture that is placed in it. */
+    suspend fun frameDrag(
+        ellipse: Boolean,
+        from: Pair<Float, Float>,
+        to: Pair<Float, Float>,
+    ): String = withContext(Dispatchers.IO) {
+        val (x0, y0) = from
+        val (x1, y1) = to
+        if (kotlin.math.abs(x1 - x0) < 1f || kotlin.math.abs(y1 - y0) < 1f) return@withContext ""
+        val p = JSONObject()
+            .put("kind", if (ellipse) "ellipse" else "rectangle")
+            .put("x", minOf(x0, x1).toDouble())
+            .put("y", minOf(y0, y1).toDouble())
+            .put("width", kotlin.math.abs(x1 - x0).toDouble())
+            .put("height", kotlin.math.abs(y1 - y0).toDouble())
+            // A frame is a placeholder until a picture is placed in it, so it is drawn as an
+            // outline only: an empty frame that looked filled would be a lie about its contents.
+            .put("fill", org.json.JSONObject.NULL)
+            .put("stroke", "#8A8F86")
+            .put("strokeWidth", 1.0)
+        val out = engine.execute("shape.create", p)
+        refreshAll()
+        runCatching { JSONObject(out).optLong("layer", -1L) }.getOrDefault(-1L).takeIf { it > 0 }?.toString() ?: ""
+    }
+
     /** A marquee or lasso drag: the selection the tools that do not paint make on a drag. */
     suspend fun selectByDrag(tool: Tool, points: List<Pair<Float, Float>>) = withContext(Dispatchers.IO) {
         if (points.isEmpty()) return@withContext
