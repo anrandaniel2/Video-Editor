@@ -90,6 +90,11 @@ jobs:
           grep -E '^test .* (FAILED|ok)$|^failures:|panicked at|^assertion' /tmp/photo-tests.txt | head -40 | while read -r line; do
             echo "::error title=Test::$line"
           done
+          # Whatever happened, the first lines of the output say what: a build error, a missing
+          # target, a refusal. They go to the summary, which renders.
+          if [ $status -ne 0 ]; then
+            { echo "## photo engine step output (status $status)"; echo '```'; head -c 40000 /tmp/photo-tests.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
           # The step summary is the one channel that renders reliably here: the log download and
           # the annotations both come back truncated, so the whole output goes in the summary.
           if [ $status -ne 0 ]; then
