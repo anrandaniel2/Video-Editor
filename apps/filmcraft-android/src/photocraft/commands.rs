@@ -484,7 +484,8 @@ pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), F
     if lower.ends_with(".png") || bytes.starts_with(b"\x89PNG") {
         let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
         let mut reader = decoder.read_info().map_err(|e| format!("That PNG will not open: {e}"))?;
-        let mut buf = vec![0; reader.output_buffer_size().unwrap_or(0)];
+        let size = reader.output_buffer_size().ok_or("That PNG is too large to read.")?;
+        let mut buf = vec![0; size];
         let info = reader.next_frame(&mut buf).map_err(|e| format!("That PNG will not open: {e}"))?;
         buf.truncate(info.buffer_size());
         let rgba = match info.color_type {
@@ -518,7 +519,9 @@ fn to_rgba(buf: &[u8], channels: usize) -> Vec<u8> {
 }
 
 /// Encode the active document as a picture, for the shell to write.
-pub fn encode_picture(doc: &Document, format: &str, quality: u8) -> Result<Vec<u8>, Fail> {
+pub fn encode_picture(doc: &Document, format: &str, _quality: u8) -> Result<Vec<u8>, Fail> {
+    // `quality` is what the studio's export asks for; PNG is lossless and has no use for it. It
+    // stays in the signature because the shell passes it, and JPEG export will need it.
     let composite = compose::render(doc);
     match format.to_ascii_lowercase().as_str() {
         "png" => {

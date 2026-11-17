@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use crate::photocraft::compose;
-use crate::photocraft::model::{Content, Kind, Layer, Pixels, hex, parse_colour};
+use crate::photocraft::model::{Content, Kind, Layer, hex, parse_colour};
 use crate::photocraft::Session;
 
 /// A painting failure, as the UI shows it.

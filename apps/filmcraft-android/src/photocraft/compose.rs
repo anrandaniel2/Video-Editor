@@ -283,39 +283,39 @@ fn draw_text(buf: &mut [u8], w: u32, h: u32, t: &TextRun, ox: f64, oy: f64) {
     let Ok(Some(colour)) = crate::photocraft::model::parse_colour(&t.color) else {
         return;
     };
-    let Ok(glyphs) = crate::photocraft::text::layout(&t.text, t.size) else {
+    let Ok(run) = crate::photocraft::text::layout(&t.text, t.size) else {
         return;
     };
-    for g in glyphs {
-        let gx = (t.x - ox) as i32 + g.x;
-        let gy = (t.y - oy) as i32 + g.y;
-        for (row, span) in g.coverage.chunks(g.width as usize).enumerate() {
-            for (col, &a) in span.iter().enumerate() {
-                if a == 0 {
-                    continue;
-                }
-                let (px, py) = (gx + col as i32, gy + row as i32);
-                if px < 0 || py < 0 || px >= w as i32 || py >= h as i32 {
-                    continue;
-                }
-                let i = ((py as usize) * w as usize + px as usize) * 4;
-                let src_a = (a as f64 / 255.0) * (colour[3] as f64 / 255.0);
-                if src_a <= 0.0 {
-                    continue;
-                }
-                let da = buf[i + 3] as f64 / 255.0;
-                let out_a = src_a + da * (1.0 - src_a);
-                if out_a <= 0.0 {
-                    continue;
-                }
-                for c in 0..3 {
-                    let sc = colour[c] as f64 / 255.0;
-                    let dc = buf[i + c] as f64 / 255.0;
-                    let v = (sc * src_a + dc * da * (1.0 - src_a)) / out_a;
-                    buf[i + c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                }
-                buf[i + 3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
+    // The rasteriser reports where the ink starts relative to the run's origin (above the
+    // baseline), and the run's origin is where the user tapped.
+    let gx = (t.x - ox) as i32 + run.x;
+    let gy = (t.y - oy) as i32 + run.y;
+    for (row, span) in run.coverage.chunks(run.width.max(1) as usize).enumerate() {
+        for (col, &a) in span.iter().enumerate() {
+            if a == 0 {
+                continue;
             }
+            let (px, py) = (gx + col as i32, gy + row as i32);
+            if px < 0 || py < 0 || px >= w as i32 || py >= h as i32 {
+                continue;
+            }
+            let i = ((py as usize) * w as usize + px as usize) * 4;
+            let src_a = (a as f64 / 255.0) * (colour[3] as f64 / 255.0);
+            if src_a <= 0.0 {
+                continue;
+            }
+            let da = buf[i + 3] as f64 / 255.0;
+            let out_a = src_a + da * (1.0 - src_a);
+            if out_a <= 0.0 {
+                continue;
+            }
+            for c in 0..3 {
+                let sc = colour[c] as f64 / 255.0;
+                let dc = buf[i + c] as f64 / 255.0;
+                let v = (sc * src_a + dc * da * (1.0 - src_a)) / out_a;
+                buf[i + c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+            buf[i + 3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
         }
     }
 }

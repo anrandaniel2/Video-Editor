@@ -35,7 +35,7 @@ pub fn layout(text: &str, size: f64) -> Result<Run, String> {
     // The origin is the baseline start: `at` places the layout at that point, and `rasterize`
     // reports the ink's offset from it.
     let xform: Xform = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let (mask, x, y) = filmcraft_text::render::rasterize(&laid, xform);
+    let (mask, x, y) = filmcraft_text::render::rasterize(&laid, &xform);
     if mask.w == 0 || mask.h == 0 {
         return Err("That text produced no ink.".into());
     }
