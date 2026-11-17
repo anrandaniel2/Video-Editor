@@ -359,17 +359,26 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             if kind == ShapeKind::Path && nodes.len() < 2 {
                 return Err("A path needs at least two nodes.".into());
             }
+            // A shape drawn with the Vector tools takes the foreground for its fill and the
+            // background for its outline, which is what the colour well shows at that moment. An
+            // explicit null overrides that: a stroke-only shape, or a fill with no outline.
             let colour = hex(session.tools.foreground);
             let outline = hex(session.tools.background);
+            let pick = |key: &str, fallback: &str| -> Result<Option<String>, Fail> {
+                match params.get(key) {
+                    None => Ok(Some(fallback.to_string())),
+                    Some(Value::Null) => Ok(None),
+                    Some(Value::String(text)) => parse_colour(text)?.map(|_| text.clone()).map(Some).ok_or_else(|| {
+                        format!("`{text}` is not a colour")
+                    }),
+                    Some(_) => Err(format!("`{key}` must be a colour or null.")),
+                }
+            };
             let shape = Shape {
                 frame,
                 kind,
-                fill: Some(params.get("fill").and_then(Value::as_str).unwrap_or(&colour).to_string()),
-                stroke: params
-                    .get("stroke")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or(Some(outline)),
+                fill: pick("fill", &colour)?,
+                stroke: pick("stroke", &outline)?,
                 stroke_width: number_or(&params, "strokeWidth", 0.0).clamp(0.0, 500.0),
                 nodes,
                 closed: params.get("closed").and_then(Value::as_bool).unwrap_or(kind == ShapeKind::Path && true),
