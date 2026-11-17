@@ -142,6 +142,29 @@ fun StudioCanvas(
                     },
                 )
             }
+            // Selecting: the marquee, the lasso and the Move tool's box all take a drag. They were
+            // inert, which is most of why the Pixel and Vector workspaces felt dead.
+            .pointerInput(tool) {
+                if (tool == Tool.Rect || tool == Tool.Lasso || tool == Tool.Move) {
+                    detectDragGestures(
+                        onDragStart = { pos -> strokePoints = listOf(toDocument(pos)) },
+                        onDragEnd = {
+                            val points = strokePoints
+                            strokePoints = emptyList()
+                            if (points.size > 1) {
+                                scope.launch {
+                                    runCatching { engine.selectByDrag(tool, points) }
+                                        .onFailure { onFailure(it.message ?: "The selection failed.") }
+                                }
+                            }
+                        },
+                        onDragCancel = { strokePoints = emptyList() },
+                    ) { change, _ ->
+                        strokePoints = strokePoints + toDocument(change.position)
+                        change.consume()
+                    }
+                }
+            }
             // Painting: one drag, one stroke, one History entry.
             .pointerInput(tool) {
                 if (painting) {
@@ -155,7 +178,7 @@ fun StudioCanvas(
                                 val size = state.value("brushSize").toFloatOrNull() ?: 24f
                                 val opacity = state.value("brushOpacity").toIntOrNull() ?: 100
                                 scope.launch {
-                                    runCatching { engine.stroke(points, colour, size, opacity) }
+                                    runCatching { engine.stroke(points, colour, size, opacity, tool) }
                                         .onFailure { onFailure(it.message ?: "The stroke failed.") }
                                 }
                             }

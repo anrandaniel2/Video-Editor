@@ -175,7 +175,13 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     }
 
     /** A finished drag as one stroke, so the History panel shows one step. */
-    suspend fun stroke(points: List<Pair<Float, Float>>, colour: String, size: Float, opacity: Int = 100) =
+    suspend fun stroke(
+        points: List<Pair<Float, Float>>,
+        colour: String,
+        size: Float,
+        opacity: Int = 100,
+        tool: Tool = Tool.Brush,
+    ) =
         withContext(Dispatchers.IO) {
             if (points.isEmpty()) return@withContext
             val arr = JSONArray()
@@ -185,9 +191,22 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
                 .put("color", colour)
                 .put("size", size.toDouble())
                 .put("opacity", opacity.coerceIn(0, 100))
-            engine.execute("paint.stroke", p)
+                // One drag is one History row even when the canvas sends it in pieces, and the
+                // gesture's name is what the engine coalesces on.
+                .put("coalesce", "photocraft.stroke")
+            // The rail's tool decides the tip: the pencil is hard and aliased, the eraser takes
+            // paint away. Sending every drag as `paint.stroke` is what made the pencil a brush.
+            if (tool == Tool.Eraser) p.put("erase", true)
+            engine.execute(strokeCommand(tool), p)
             refreshAll()
         }
+
+    /** The command id a painting tool sends: the pencil's hard tip and the eraser's `erase`. */
+    private fun strokeCommand(tool: Tool): String = when (tool) {
+        Tool.Pencil -> "paint.pencil"
+        Tool.Eraser -> "paint.stroke"
+        else -> "paint.stroke"
+    }
 
     /** A tap by the selected tool: fill, wand, eyedropper, type, or a single dab. */
     suspend fun tap(tool: Tool, x: Float, y: Float, colour: String, brushSize: Float, brushOpacity: Int): String? =
@@ -218,11 +237,31 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
                     null
                 }
                 else -> {
-                    stroke(listOf(x to y, x to y), colour, brushSize, brushOpacity)
+                    stroke(listOf(x to y, x to y), colour, brushSize, brushOpacity, tool)
                     null
                 }
             }
         }
+
+    /** A marquee or lasso drag: the selection the tools that do not paint make on a drag. */
+    suspend fun selectByDrag(tool: Tool, points: List<Pair<Float, Float>>) = withContext(Dispatchers.IO) {
+        if (points.isEmpty()) return@withContext
+        val p = JSONObject()
+        if (tool == Tool.Rect || tool == Tool.Move) {
+            // A rectangle from the drag's first point to its last, whatever path it took.
+            val xs = points.map { it.first }
+            val ys = points.map { it.second }
+            p.put("x", xs.min().toDouble()).put("y", ys.min().toDouble())
+                .put("width", (xs.max() - xs.min()).toDouble())
+                .put("height", (ys.max() - ys.min()).toDouble())
+            engine.execute("select.rect", p)
+        } else {
+            val arr = JSONArray()
+            points.forEach { (x, y) -> arr.put(JSONArray().put(x.toDouble()).put(y.toDouble())) }
+            engine.execute("select.lasso", p.put("points", arr))
+        }
+        refreshAll()
+    }
 
     /** The Curves panel's graph, applied as the adjustment layer the panel's heading names. */
     suspend fun applyCurves(points: List<CurvePoint>, channel: String, opacity: Int): String = withContext(Dispatchers.IO) {
