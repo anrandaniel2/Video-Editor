@@ -82,7 +82,12 @@ jobs:
           set +e
           cargo test -p filmcraft-android > /tmp/engine-tests.txt 2>&1
           status=$?
-          grep -E '^test .* (FAILED|ok)$|^failures:|^ *[a-z_0-9:]+$|panicked at' /tmp/engine-tests.txt | head -60
+          # One annotation per failing test, so the name survives even where the step log does not.
+          # (This step once failed for a while and its output could not be read back at all.)
+          awk '/^failures:$/{f=1;next} f&&/^ *[a-zA-Z_0-9]+$/{print $1} f&&/^$/{f=0}' /tmp/engine-tests.txt | sort -u | while read -r name; do
+            echo "::error title=Failing test::$name"
+          done
+          grep -E '^failures:$|^test .* FAILED$' /tmp/engine-tests.txt | head -20
           exit $status
 
   apk:
