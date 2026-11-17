@@ -287,6 +287,57 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
         runCatching { JSONObject(out).optLong("layer", -1L) }.getOrDefault(-1L).takeIf { it > 0 }?.toString() ?: ""
     }
 
+    /**
+     * The Pen tool's drag: a path of nodes, kept as geometry.
+     *
+     * The Pen was mapped to the pencil, so a drag in the Vector workspace painted pixels -- in a
+     * workspace whose whole point is that nothing is painted. The nodes are the drag's own points,
+     * reduced to roughly one per pointer event so the path has as many handles as it has corners.
+     */
+    suspend fun penPath(
+        points: List<Pair<Float, Float>>,
+        colour: String,
+        outline: String,
+        strokeWidth: Float,
+    ): String = withContext(Dispatchers.IO) {
+        if (points.size < 2) return@withContext ""
+        val xs = points.map { it.first }
+        val ys = points.map { it.second }
+        val left = xs.min().toDouble()
+        val top = ys.min().toDouble()
+        val right = xs.max().toDouble()
+        val bottom = ys.max().toDouble()
+        if (right - left < 1.0 || bottom - top < 1.0) return@withContext ""
+        val nodes = org.json.JSONArray()
+        // The drag's points, thinned: consecutive samples a pixel apart are the same corner.
+        var lastX = Float.NaN
+        var lastY = Float.NaN
+        points.forEach { (x, y) ->
+            if (kotlin.math.abs(x - lastX) < 1.5f && kotlin.math.abs(y - lastY) < 1.5f) return@forEach
+            lastX = x
+            lastY = y
+            nodes.put(
+                JSONObject()
+                    .put("x", x.toDouble())
+                    .put("y", y.toDouble()),
+            )
+        }
+        val p = JSONObject()
+            .put("kind", "path")
+            .put("x", left)
+            .put("y", top)
+            .put("width", right - left)
+            .put("height", bottom - top)
+            .put("nodes", nodes)
+            .put("closed", false)
+            .put("fill", org.json.JSONObject.NULL)
+            .put("stroke", if (strokeWidth > 0f) outline else colour)
+            .put("strokeWidth", if (strokeWidth > 0f) strokeWidth.toDouble() else 2.0)
+        val out = engine.execute("shape.create", p)
+        refreshAll()
+        runCatching { JSONObject(out).optLong("layer", -1L) }.getOrDefault(-1L).takeIf { it > 0 }?.toString() ?: ""
+    }
+
     /** A picture frame: a shape of its own kind, filled with the picture that is placed in it. */
     suspend fun frameDrag(
         ellipse: Boolean,

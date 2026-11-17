@@ -382,7 +382,12 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                 stroke: pick("stroke", &outline)?,
                 stroke_width: number_or(&params, "strokeWidth", 0.0).clamp(0.0, 500.0),
                 nodes,
-                closed: params.get("closed").and_then(Value::as_bool).unwrap_or(kind == ShapeKind::Path && true),
+                // A path from the Pen is open until its ends are joined; a rectangle or an
+                // ellipse is closed by construction.
+                closed: params
+                    .get("closed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(kind == ShapeKind::Path && false),
             };
             new_shape(session, shape)
         }

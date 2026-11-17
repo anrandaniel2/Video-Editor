@@ -64,6 +64,9 @@ fun StudioCanvas(
         WorkspaceId.Vector -> when (state.selectedTool) {
             "rectangle" -> VectorTool.Rectangle
             "ellipse" -> VectorTool.Ellipse
+            // The Pen was mapped to the pencil, so its drag painted. In this workspace it draws
+            // a path.
+            "pen" -> VectorTool.Pen
             else -> null
         }
         WorkspaceId.Layout -> when (state.selectedTool) {
@@ -179,6 +182,7 @@ fun StudioCanvas(
                                 scope.launch {
                                     runCatching {
                                         when (vectorTool) {
+                                            VectorTool.Pen -> engine.penPath(points, colour, outline, stroke)
                                             VectorTool.FrameRect -> engine.frameDrag(false, first, last)
                                             VectorTool.FrameEllipse -> engine.frameDrag(true, first, last)
                                             VectorTool.Ellipse ->
@@ -219,9 +223,11 @@ fun StudioCanvas(
                     }
                 }
             }
-            // Painting: one drag, one stroke, one History entry.
+            // Painting: one drag, one stroke, one History entry. A vector tool owns the drag in
+            // its workspace, so painting stays out of the way even where the two map to the same
+            // engine tool.
             .pointerInput(tool) {
-                if (painting) {
+                if (painting && vectorTool == null) {
                     detectDragGestures(
                         onDragStart = { pos -> strokePoints = listOf(toDocument(pos)) },
                         onDragEnd = {

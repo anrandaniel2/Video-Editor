@@ -7,7 +7,7 @@ import androidx.compose.runtime.setValue
 import io.github.artcraftandroid.photocraft.editor.Tool
 
 /** Which geometry a drag draws in the Vector and Layout workspaces. */
-enum class VectorTool { Rectangle, Ellipse, FrameRect, FrameEllipse }
+enum class VectorTool { Rectangle, Ellipse, Pen, FrameRect, FrameEllipse }
 
 /** The four workspaces the persona bar switches between. */
 enum class WorkspaceId(val label: String, val title: String) {

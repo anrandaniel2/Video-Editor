@@ -845,3 +845,37 @@ fn a_picture_can_be_moved_and_fitted_after_it_is_placed() {
     assert_eq!(at(&px, 32, 12, 12), [255, 0, 0, 255], "inside the frame");
     assert_eq!(at(&px, 32, 2, 2), [255, 255, 255, 255], "outside it");
 }
+
+#[test]
+fn a_pen_path_is_geometry_with_the_nodes_that_were_drawn() {
+    let mut s = session();
+    let out = run(&mut s, "shape.create", json!({
+        "kind": "path",
+        "x": 4.0, "y": 4.0, "width": 20.0, "height": 20.0,
+        "nodes": [
+            { "x": 4.0, "y": 4.0 }, { "x": 24.0, "y": 4.0 }, { "x": 24.0, "y": 24.0 }
+        ],
+        "closed": false,
+        "fill": null, "stroke": "#000000", "strokeWidth": 2.0,
+    }));
+    let id = out["layer"].as_u64().expect("a path layer");
+    let doc = s.active().expect("a document");
+    let layer = doc.doc.find(id).expect("the path");
+    assert_eq!(layer.kind, Kind::Shape);
+    let Content::Shape(shape) = &layer.content else { panic!("it is a shape") };
+    assert_eq!(shape.nodes.len(), 3, "three corners");
+    assert!(!shape.closed, "an open path");
+    // The path is stroked where it runs and not where it does not: the corner at 4,4 is inked,
+    // the middle of the canvas is not.
+    let px = pixels(&s);
+    assert!(at(&px, 32, 4, 5)[0] < 128, "the first segment is inked");
+    assert_eq!(at(&px, 32, 16, 16), [255, 255, 255, 255], "the open middle is untouched");
+    // And a path needs two nodes to be a path at all.
+    let err = super::commands::execute(
+        &mut s,
+        "shape.create",
+        json!({ "kind": "path", "x": 0.0, "y": 0.0, "width": 4.0, "height": 4.0, "nodes": [{ "x": 1.0, "y": 1.0 }] }),
+    )
+    .expect_err("one node is not a path");
+    assert!(err.contains("two nodes"), "it says why: {err}");
+}
