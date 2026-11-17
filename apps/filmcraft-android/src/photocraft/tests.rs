@@ -42,6 +42,8 @@ fn the_surface_has_every_command_the_restored_ui_sends() {
         "document.inspect",
         "document.sampleColor",
         "file.new",
+        "image.adjustments.curves",
+        "image.adjustments.levels",
         "layer.delete",
         "layer.duplicate",
         "layer.layerMask.revealAll",
@@ -360,4 +362,60 @@ fn creating_a_layer_is_undoable() {
     assert_eq!(s.active().expect("a document").doc.layers.len(), 2);
     assert!(s.active_mut().expect("a document").undo(), "there is a step");
     assert_eq!(s.active().expect("a document").doc.layers.len(), 1, "undo removed the layer");
+}
+
+#[test]
+fn a_levels_drag_over_the_picture_is_one_history_step() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#808080", "tolerance": 0.0 }));
+    let before = s.active().expect("a document").past.len();
+    // The panel re-sends its whole value on every slider tick; that is one gesture.
+    for g in [1.0, 1.2, 1.4, 1.6] {
+        run(
+            &mut s,
+            "image.adjustments.levels",
+            json!({ "inBlack": 0, "gamma": g, "inWhite": 255, "coalesce": "photocraft.levels" }),
+        );
+    }
+    let labels = s.active().expect("a document").history_labels();
+    assert_eq!(&labels[before..], &["Levels"], "one row for the whole drag: {labels:?}");
+    // And one undo takes the picture all the way back.
+    let bent = at(&pixels(&s), 32, 16, 16)[0];
+    assert!(s.active_mut().expect("a document").undo(), "there is a step to undo");
+    let back = at(&pixels(&s), 32, 16, 16)[0];
+    assert_eq!(back, 128, "undo restored the mid-grey: {bent} became {back}");
+}
+
+#[test]
+fn a_whole_image_curve_bends_the_pixels_it_sees() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#808080", "tolerance": 0.0 }));
+    let before = at(&pixels(&s), 32, 16, 16)[0];
+    run(
+        &mut s,
+        "image.adjustments.curves",
+        json!({ "points": [[0, 0], [128, 200], [255, 255]], "coalesce": "photocraft.curves" }),
+    );
+    let after = at(&pixels(&s), 32, 16, 16)[0];
+    assert!(after > before, "the midtone was lifted: {before} became {after}");
+}
+
+#[test]
+fn an_adjustment_respects_the_selection() {
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.bucket", json!({ "x": 0.0, "y": 0.0, "color": "#808080", "tolerance": 0.0 }));
+    run(&mut s, "select.rect", json!({ "x": 0.0, "y": 0.0, "width": 8.0, "height": 32.0 }));
+    run(
+        &mut s,
+        "image.adjustments.levels",
+        json!({ "inBlack": 0, "gamma": 2.0, "inWhite": 255, "coalesce": "photocraft.levels" }),
+    );
+    let px = pixels(&s);
+    let inside = at(&px, 32, 2, 16)[0];
+    let outside = at(&px, 32, 24, 16)[0];
+    assert!(inside > 128, "inside the selection was lifted: {inside}");
+    assert_eq!(outside, 128, "outside it was untouched: {outside}");
 }

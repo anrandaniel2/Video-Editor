@@ -106,6 +106,8 @@ pub struct OpenDocument {
     /// a snapshot is cheaper than tracking every edit's inverse, and far less error-prone.
     pub past: Vec<Snapshot>,
     pub future: Vec<Snapshot>,
+    /// The gesture name of the undo step on top, when it was recorded as coalescing.
+    coalescing: Option<String>,
     pub revision: u64,
     /// The revision the last save (or open) happened at; `dirty` compares against it.
     pub saved_revision: u64,
@@ -134,8 +136,11 @@ impl OpenDocument {
             selected: active.into_iter().collect(),
             past: Vec::new(),
             future: Vec::new(),
+            // Equal, so a freshly opened or created picture is clean. A nonzero start would show
+            // the unsaved-changes dot the moment the editor opened.
             revision: 1,
-            saved_revision: 0,
+            saved_revision: 1,
+            coalescing: None,
         }
     }
 
@@ -146,10 +151,29 @@ impl OpenDocument {
     /// would appear to do nothing. (That is exactly what the first version of this engine did;
     /// [`crate::photo`]'s history tests are what catch it.)
     pub fn push_history(&mut self, label: &str) {
+        self.push_history_coalescing(label, None);
+    }
+
+    /// Record an undo step, merging it into the previous one when `coalesce` names it.
+    ///
+    /// The adjustment panels re-send their whole value on every slider tick, so without this a
+    /// single drag of the levels slider would leave forty history rows. The coalescing key is the
+    /// panel's own name for the gesture (`photocraft.levels`); the same key twice in a row is one
+    /// drag, and any other edit in between starts a new step.
+    pub fn push_history_coalescing(&mut self, label: &str, coalesce: Option<&str>) {
+        if let Some(key) = coalesce {
+            if self.coalescing.as_deref() == Some(key) && !self.past.is_empty() {
+                // Same gesture: the snapshot already on top is the state before the drag began,
+                // which is exactly what undo should return to. Keeping it means one step.
+                self.future.clear();
+                return;
+            }
+        }
         self.past.push(Snapshot { doc: self.doc.clone(), active_layer: self.active_layer, label: label.to_string() });
         if self.past.len() > HISTORY {
             self.past.remove(0);
         }
+        self.coalescing = coalesce.map(str::to_string);
         self.future.clear();
     }
 
@@ -173,6 +197,8 @@ impl OpenDocument {
         self.doc = prev.doc;
         self.active_layer = prev.active_layer;
         self.revision += 1;
+        // Stepping through history ends any drag in progress: the next slider tick is a new edit.
+        self.coalescing = None;
         true
     }
 
@@ -182,6 +208,7 @@ impl OpenDocument {
         self.doc = next.doc;
         self.active_layer = next.active_layer;
         self.revision += 1;
+        self.coalescing = None;
         true
     }
 }

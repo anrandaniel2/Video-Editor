@@ -30,21 +30,14 @@ pub fn render_rect(doc: &Document, x: u32, y: u32, width: u32, height: u32) -> V
         return Vec::new();
     }
     let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
-    // A slice of the composite, so the same code renders the viewport and the whole canvas.
-    let mut layer = vec![0u8; (w as usize) * (h as usize) * 4];
 
+    // Every top-level layer composites straight into the accumulated result. `composite_layer`
+    // already blends source-over with the layer's own mode, so a separate scratch buffer would
+    // only throw that mode away: the layer would be blended against blank pixels and then laid
+    // over the picture as Normal. It also gives an adjustment layer the composite it is meant to
+    // adjust, rather than an empty buffer.
     for l in &doc.layers {
-        // An adjustment changes what is already there, so it has to see the accumulated
-        // composite. Compositing it into a fresh buffer and blending that over would give it
-        // nothing to adjust — the layer under a curves layer would be untouched, which is the
-        // one thing the panel promises will not happen.
-        if matches!(l.content, Content::Adjustment(_)) {
-            composite_layer(l, doc, x0, y0, w, h, &mut out, 1.0);
-            continue;
-        }
-        layer.fill(0);
-        composite_layer(l, doc, x0, y0, w, h, &mut layer, 1.0);
-        over(&mut out, &layer, w as usize, h as usize, w as usize);
+        composite_layer(l, doc, x0, y0, w, h, &mut out, 1.0);
     }
     out
 }
@@ -223,6 +216,10 @@ fn over(dst: &mut [u8], src: &[u8], w: usize, h: usize, _stride: usize) {
 ///
 /// `mask`, when given, is the clipped parent's alpha: the adjustment fades in where the parent has
 /// no paint, which is what "clipped" means for a layer that has no pixels of its own.
+pub fn adjust_pixels(buf: &mut [u8], a: &Adjustment) {
+    apply_adjustment(buf, a, None, 1.0);
+}
+
 fn apply_adjustment(buf: &mut [u8], a: &Adjustment, mask: Option<&[u8]>, strength: f64) {
     match a {
         Adjustment::Curves(c) => {

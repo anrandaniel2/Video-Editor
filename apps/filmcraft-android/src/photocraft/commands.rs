@@ -36,6 +36,8 @@ pub const IDS: &[&str] = &[
     "document.inspect",
     "document.sampleColor",
     "file.new",
+    "image.adjustments.curves",
+    "image.adjustments.levels",
     "layer.delete",
     "layer.duplicate",
     "layer.layerMask.revealAll",
@@ -212,6 +214,26 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             new_adjustment(session, adjustment, "Levels")
         }
 
+        // ------------------------------------------------- whole image adjustments
+        //
+        // These are the classic editor's Curves and Levels panels: they bend the picture that is
+        // already there rather than adding a layer above it. `coalesce` is the panel's name for
+        // the gesture — a slider drag re-sends its whole value on every tick, so consecutive
+        // calls under one name must be a single undo step.
+        "image.adjustments.curves" => {
+            let adjustment = Adjustment::Curves(curves_from(&params)?);
+            apply_to_pixels(session, adjustment, "Curves", &params)
+        }
+        "image.adjustments.levels" => {
+            // The panel sends 0..=255 for the two points and a gamma around 1.
+            let adjustment = Adjustment::Levels {
+                black: number_or(&params, "inBlack", 0.0).clamp(0.0, 255.0) / 255.0,
+                white: number_or(&params, "inWhite", 255.0).clamp(0.0, 255.0) / 255.0,
+                gamma: number_or(&params, "gamma", 1.0).clamp(0.1, 10.0),
+            };
+            apply_to_pixels(session, adjustment, "Levels", &params)
+        }
+
         // ---------------------------------------------------------------- tools
         "tools.setBrush" => {
             let t = &mut session.tools;
@@ -327,6 +349,8 @@ pub fn enabled(session: &Session, id: &str) -> Result<(), Fail> {
             | "paint.gradient"
             | "paint.cloneStamp"
             | "paint.spotHealing"
+            | "image.adjustments.curves"
+            | "image.adjustments.levels"
     );
     if needs_layer {
         let Some(doc) = session.active() else { return Err("Open a picture first.".into()) };
@@ -435,6 +459,62 @@ fn new_adjustment(session: &mut Session, adjustment: Adjustment, name: &str) -> 
 ///
 /// The panel names the channel it edited (`red`, `green`, `blue`, or `points` for the RGB curve),
 /// so the other channels start at their identity and stay there.
+/// Bend the active layer's own pixels — the classic editor's Curves and Levels panels.
+///
+/// These change the picture rather than adding a layer above it, so they edit the pixels of the
+/// layer being worked on, inside the selection when there is one. `params.coalesce` names the
+/// gesture, so one slider drag is one undo step.
+fn apply_to_pixels(
+    session: &mut Session,
+    adjustment: Adjustment,
+    label: &str,
+    params: &Value,
+) -> Result<Value, Fail> {
+    let coalesce = params.get("coalesce").and_then(Value::as_str);
+    let doc = session.active_mut().ok_or("Open a picture first.")?;
+    let id = doc.active_layer.ok_or("Select a layer first.")?;
+    // Checked before the snapshot is taken: a command that is going to refuse must not leave an
+    // undo step behind for an edit that did not happen.
+    {
+        let layer = doc.doc.find(id).ok_or("That layer is gone.")?;
+        if layer.locked {
+            return Err(format!("`{}` is locked.", layer.name));
+        }
+        if !matches!(layer.kind, Kind::Pixels) {
+            return Err("This layer has no pixels of its own to adjust.".into());
+        }
+    }
+    doc.push_history_coalescing(label, coalesce);
+    doc.touch();
+    let (width, height) = (doc.doc.width as usize, doc.doc.height as usize);
+    let selection = doc.doc.selection.clone();
+    let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+    let Content::Pixels(slot) = &mut layer.content else { unreachable!() };
+    let px = std::sync::Arc::make_mut(
+        slot.get_or_insert_with(|| std::sync::Arc::new(vec![0u8; width * height * 4])),
+    );
+    // Only where the selection allows it: an adjustment is still confined by the marching ants.
+    if let Some(sel) = selection {
+        let mut part = Vec::with_capacity(px.len());
+        for i in 0..width * height {
+            if sel[i] > 0 {
+                part.extend_from_slice(&px[i * 4..i * 4 + 4]);
+            } else {
+                part.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+        compose::adjust_pixels(&mut part, &adjustment);
+        for i in 0..width * height {
+            if sel[i] > 0 {
+                px[i * 4..i * 4 + 4].copy_from_slice(&part[i * 4..i * 4 + 4]);
+            }
+        }
+    } else {
+        compose::adjust_pixels(px, &adjustment);
+    }
+    Ok(json!({ "layer": id }))
+}
+
 fn curves_from(params: &Value) -> Result<Curves, Fail> {
     let read = |key: &str| -> Result<Vec<(u8, u8)>, Fail> {
         let Some(arr) = params.get(key).and_then(Value::as_array) else { return Ok(Vec::new()) };
