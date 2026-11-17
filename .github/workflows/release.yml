@@ -89,8 +89,15 @@ jobs:
           grep -E '^  --> ' /tmp/photo-tests.txt | head -20 | while read -r line; do
             echo "::warning title=At::$line"
           done
-          grep -E '^test .* (FAILED|ok)$|^failures:|panicked at|^assertion' /tmp/photo-tests.txt | head -40 | while read -r line; do
+          # Only what failed, and its message: `ok` lines crowd out the one line that names the
+          # failing test, and annotations are capped.
+          grep -E '^test .* FAILED$|^---- .* stdout ----$|^failures:$|panicked at|^assertion|^  left:|^ right:|^thread .* panicked' /tmp/photo-tests.txt | head -30 | while read -r line; do
             echo "::error title=Test::$line"
+          done
+          # And the failing test's own stdout, which states left and right.
+          sed -n '/^---- .* stdout ----$/,/^$/p' /tmp/photo-tests.txt > /tmp/fail.txt
+          head -30 /tmp/fail.txt | while read -r line; do
+            echo "::error title=Detail::$line"
           done
           # And the whole output in the summary, which renders.
           if [ $status -ne 0 ]; then
