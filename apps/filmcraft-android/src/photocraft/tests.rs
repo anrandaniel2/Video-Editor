@@ -899,12 +899,22 @@ fn the_node_toolbar_edits_the_path_it_names() {
     run(&mut s, "shape.editNodes", json!({ "action": "smooth" }));
     let doc = s.active().expect("a document");
     let Content::Shape(shape) = &doc.doc.find(id).expect("the path").content else { panic!("a shape") };
-    assert!(shape.nodes.iter().all(|n| n.smooth && n.out_x != 0.0), "every node has handles");
+    assert!(shape.nodes.iter().all(|n| n.smooth), "every node is smooth");
+    // The handles lie along the line through each node's neighbours, so their length is what
+    // says they were set -- not one component: the first node's tangent here is vertical.
+    assert!(
+        shape.nodes.iter().all(|n| (n.out_x * n.out_x + n.out_y * n.out_y).sqrt() > 1.0),
+        "every node has handles: {:?}",
+        shape.nodes.iter().map(|n| (n.out_x, n.out_y)).collect::<Vec<_>>(),
+    );
 
     run(&mut s, "shape.editNodes", json!({ "action": "sharp" }));
     let doc = s.active().expect("a document");
     let Content::Shape(shape) = &doc.doc.find(id).expect("the path").content else { panic!("a shape") };
-    assert!(shape.nodes.iter().all(|n| !n.smooth && n.out_x == 0.0), "the handles are gone");
+    assert!(
+        shape.nodes.iter().all(|n| !n.smooth && n.in_x == 0.0 && n.out_x == 0.0 && n.out_y == 0.0),
+        "the handles are gone",
+    );
 
     // Join closes the path, break opens it.
     run(&mut s, "shape.editNodes", json!({ "action": "join" }));
