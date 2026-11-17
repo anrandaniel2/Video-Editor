@@ -6,7 +6,7 @@
 //! renderer. This module is only the adapter: layout a run at a size, rasterise it, and hand back
 //! a coverage mask the compositor can blend.
 
-use filmcraft_text::{ParagraphStyle, TextStyle, Xform};
+use filmcraft_text::{Align, ParagraphStyle, TextStyle, Xform};
 
 /// One rasterised run: a coverage mask and where its top-left corner goes.
 pub struct Run {
@@ -25,12 +25,46 @@ pub struct Run {
 /// `size` is the cap height in pixels; the family is the app's UI font so a type layer matches what
 /// the rest of the editor draws.
 pub fn layout(text: &str, size: f64) -> Result<Run, String> {
+    layout_run(text, size, "Inter", "Regular", "left", 0.0, None)
+}
+
+/// Lay out one run with its face, alignment and, for a Layout text frame, its wrap box.
+///
+/// The box is what makes Frame Text a frame: the run wraps to its width and is cut at its height,
+/// which the point-text run in the Sketch workspace never does.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_run(
+    text: &str,
+    size: f64,
+    family: &str,
+    style_name: &str,
+    align: &str,
+    leading: f64,
+    wrap: Option<(f64, f64)>,
+) -> Result<Run, String> {
     if text.is_empty() {
         return Err("An empty run has nothing to draw.".into());
     }
     let px = size.clamp(1.0, 2048.0) as f32;
-    let style = TextStyle { family: "Inter".into(), style: "Regular".into(), size: px, ..Default::default() };
-    let para = ParagraphStyle::default();
+    let style = TextStyle {
+        family: family.to_string(),
+        style: style_name.to_string(),
+        size: px,
+        ..Default::default()
+    };
+    let para = ParagraphStyle {
+        align: match align {
+            "center" => Align::Center,
+            "right" => Align::Right,
+            "justify" => Align::Justify,
+            _ => Align::Left,
+        },
+        // The layout's leading is extra spacing on top of the font's own line height.
+        leading: ((leading.clamp(0.5, 4.0) - 1.0) * f64::from(px)).max(0.0) as f32,
+        width: wrap.map(|(w, _)| w.max(1.0) as f32),
+        height: wrap.map(|(_, h)| h.max(1.0) as f32),
+        ..Default::default()
+    };
     let laid = filmcraft_text::layout(text, &style, &para);
     // The origin is the baseline start: `at` places the layout at that point, and `rasterize`
     // reports the ink's offset from it.

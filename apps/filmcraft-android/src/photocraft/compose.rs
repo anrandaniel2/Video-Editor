@@ -556,13 +556,28 @@ fn draw_text(buf: &mut [u8], w: u32, h: u32, t: &TextRun, ox: f64, oy: f64) {
     let Ok(Some(colour)) = crate::photocraft::model::parse_colour(&t.color) else {
         return;
     };
-    let Ok(run) = crate::photocraft::text::layout(&t.text, t.size) else {
+    // A frame wraps and cuts the run; a run without one flows on, which is point text.
+    let wrap = t.frame.as_ref().map(|f| (f.width, f.height));
+    let Ok(run) = crate::photocraft::text::layout_run(
+        &t.text,
+        t.size,
+        &t.family,
+        &t.style,
+        &t.align,
+        t.leading,
+        wrap,
+    ) else {
         return;
     };
     // The rasteriser reports where the ink starts relative to the run's origin (above the
     // baseline), and the run's origin is where the user tapped.
-    let gx = (t.x - ox) as i32 + run.x;
-    let gy = (t.y - oy) as i32 + run.y;
+    // A framed run starts at the frame's top-left; a point run starts where it was tapped.
+    let (origin_x, origin_y) = match &t.frame {
+        Some(f) => (f.x, f.y),
+        None => (t.x, t.y),
+    };
+    let gx = (origin_x - ox) as i32 + run.x;
+    let gy = (origin_y - oy) as i32 + run.y;
     for (row, span) in run.coverage.chunks(run.width.max(1) as usize).enumerate() {
         for (col, &a) in span.iter().enumerate() {
             if a == 0 {

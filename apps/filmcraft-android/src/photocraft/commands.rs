@@ -66,6 +66,7 @@ pub const IDS: &[&str] = &[
     "layer.style",
     "shape.create",
     "shape.editNodes",
+    "type.setProps",
     "shape.setNodes",
     "shape.setProps",
     "tools.setBrush",
@@ -333,12 +334,74 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                     color: colour,
                     // A Layout text frame wraps to its box; an artistic run has none.
                     frame: frame_from(&params),
+                    family: params
+                        .get("family")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Inter")
+                        .to_string(),
+                    style: text_style(&params),
+                    align: text_align(&params),
+                    leading: number_or(&params, "leading", 1.2).clamp(0.5, 4.0),
                 }),
                 style: LayerStyle::default(),
             });
             doc.active_layer = Some(id);
             doc.touch();
             Ok(json!({ "layer": id }))
+        }
+
+        // The Text and Paragraph panels: the run's own text, face, size, alignment and leading.
+        // Every field the panel shows is a field the run has, so a control here changes the
+        // drawing rather than a copy of a value.
+        "type.setProps" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = params
+                .get("layer")
+                .and_then(Value::as_u64)
+                .or(doc.active_layer)
+                .ok_or("Select a text layer first.")?;
+            doc.push_history("Edit text");
+            doc.touch();
+            let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+            let Content::Text(run) = &mut layer.content else {
+                return Err("That layer is not text.".into());
+            };
+            if let Some(text) = params.get("text").and_then(Value::as_str) {
+                run.text = text.to_string();
+                // The row is named after what the layer says.
+                layer.name = text.chars().take(24).collect();
+            }
+            if let Some(family) = params.get("family").and_then(Value::as_str) {
+                run.family = family.to_string();
+            }
+            if params.get("style").is_some() {
+                run.style = text_style(&params);
+            }
+            if params.get("align").is_some() {
+                run.align = text_align(&params);
+            }
+            if let Some(size) = params.get("size").and_then(Value::as_f64) {
+                run.size = size.clamp(1.0, 2048.0);
+            }
+            if let Some(leading) = params.get("leading").and_then(Value::as_f64) {
+                run.leading = leading.clamp(0.5, 4.0);
+            }
+            if let Some(colour) = params.get("colour").and_then(Value::as_str) {
+                parse_colour(colour)?;
+                run.color = colour.to_string();
+            }
+            if params.get("frame").is_some() {
+                run.frame = frame_from(&params);
+            }
+            Ok(json!({
+                "layer": id,
+                "text": run.text,
+                "family": run.family,
+                "style": run.style,
+                "align": run.align,
+                "size": run.size,
+                "leading": run.leading,
+            }))
         }
 
         // ---------------------------------------------------------------- vector shapes
@@ -920,6 +983,30 @@ fn levels_from(params: &Value) -> Adjustment {
 /// A frame from a command's parameters: `x`,`y`,`width`,`height`, with optional roundness and
 /// rotation. `None` when the command carries no box at all, which is how an artistic text run
 /// says it has no frame.
+/// The face weight, from the panel's own vocabulary.
+fn text_style(params: &Value) -> String {
+    let face = params.get("style").and_then(Value::as_str).unwrap_or("Regular");
+    match face.to_ascii_lowercase().replace([' ', '_'], "-").as_str() {
+        "bold" => "Bold",
+        "italic" => "Italic",
+        "bold-italic" | "italic-bold" => "Bold Italic",
+        _ => "Regular",
+    }
+    .to_string()
+}
+
+/// The paragraph alignment, from the panel's icon names.
+fn text_align(params: &Value) -> String {
+    let a = params.get("align").and_then(Value::as_str).unwrap_or("left");
+    match a.to_ascii_lowercase().as_str() {
+        "center" | "centre" | "center-align" => "center",
+        "right" => "right",
+        "justify" => "justify",
+        _ => "left",
+    }
+    .to_string()
+}
+
 fn frame_from(params: &Value) -> Option<Frame> {
     let get = |k: &str| params.get(k).and_then(Value::as_f64);
     let (x, y) = (get("x").unwrap_or(0.0), get("y").unwrap_or(0.0));

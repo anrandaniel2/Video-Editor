@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::model::{Blend, Content, Document, Kind, Layer, LayerStyle, PictureFit};
+use super::model::{Blend, Content, Document, Kind, Layer, LayerStyle, PictureFit, TextRun};
 use super::Session;
 
 /// A session with one 32×32 document, active.
@@ -977,4 +977,106 @@ fn a_colour_overlay_replaces_the_layer_colour_and_leaves_the_background() {
     let px = pixels(&s);
     assert_eq!(at(&px, 32, 16, 16), [0, 255, 0, 255], "the shape wears the overlay");
     assert_eq!(at(&px, 32, 2, 2), [255, 255, 255, 255], "the background does not");
+}
+
+#[test]
+fn a_text_run_can_be_restyled_after_it_is_placed() {
+    let mut s = session();
+    let id = run(&mut s, "type.create", json!({
+        "text": "Hello", "x": 4.0, "y": 16.0, "size": 10.0,
+    }))["layer"].as_u64().expect("a text layer");
+    let before = pixels(&s);
+    // Something was drawn: the canvas is not all background.
+    let ink = (0..32).flat_map(|y| (0..32).map(move |x| (x, y)))
+        .any(|(x, y)| at(&before, 32, x, y) != [255, 255, 255, 255]);
+    assert!(ink, "the run put ink on the canvas");
+
+    // Bigger, bold, centred, and in another colour: each is a field of the run.
+    let out = run(&mut s, "type.setProps", json!({
+        "layer": id, "size": 18.0, "style": "Bold", "align": "center",
+        "colour": "#FF0000", "leading": 1.5,
+    }));
+    assert_eq!(out["style"], "Bold");
+    assert_eq!(out["align"], "center");
+    assert_eq!(out["size"], 18.0);
+
+    let doc = s.active().expect("a document");
+    let Content::Text(run) = &doc.doc.find(id).expect("the run").content else { panic!("text") };
+    assert_eq!(run.color, "#FF0000");
+    assert_eq!(run.leading, 1.5);
+
+    // The paragraph's own words are editable, and the row is renamed with them.
+    run(&mut s, "type.setProps", json!({ "layer": id, "text": "Goodbye" }));
+    let doc = s.active().expect("a document");
+    assert_eq!(doc.doc.find(id).expect("the run").name, "Goodbye");
+    let Content::Text(run) = &doc.doc.find(id).expect("the run").content else { panic!("text") };
+    assert_eq!(run.text, "Goodbye");
+
+    // A layer that is not text is refused.
+    run(&mut s, "layer.new.layer", json!({}));
+    let err = super::commands::execute(&mut s, "type.setProps", json!({ "text": "x" }))
+        .expect_err("a pixel layer is not text");
+    assert!(err.contains("not text"), "it says why: {err}");
+}
+
+#[test]
+fn a_framed_text_run_wraps_to_its_box_and_a_plain_one_does_not() {
+    // The same words in a wide canvas, once with a narrow frame and once without. A framed run
+    // must stay inside its box's width; a point run has no box and runs on. Measuring the ink's
+    // own extent is what makes this a test of the wrap rather than of the layout's row count.
+    let words = "wrap this run across several lines please";
+    let mut plain = Document::new("Plain", 400, 200, "#FFFFFF").expect("a canvas");
+    let mut framed = Document::new("Framed", 400, 200, "#FFFFFF").expect("a canvas");
+    let run_text = |doc: &mut Document, framed: bool| {
+        let id = doc.take_id();
+        let content = TextRun {
+            text: words.into(),
+            x: 2.0,
+            y: 40.0,
+            size: 16.0,
+            color: "#000000".into(),
+            frame: if framed {
+                Some(super::model::Frame::new(2.0, 2.0, 90.0, 196.0))
+            } else {
+                None
+            },
+            family: "Inter".into(),
+            style: "Regular".into(),
+            align: "left".into(),
+            leading: 1.2,
+        };
+        doc.layers_mut().push(Layer {
+            id,
+            name: "Run".into(),
+            kind: Kind::Text,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            blend: Blend::Normal,
+            clipped: false,
+            children: Vec::new(),
+            content: Content::Text(content),
+            style: LayerStyle::default(),
+        });
+    };
+    run_text(&mut plain, false);
+    run_text(&mut framed, true);
+    let ink_width = |doc: &Document| {
+        let px = super::compose::render(doc);
+        let w = doc.width() as usize;
+        (0..w)
+            .filter(|&x| (0..doc.height() as usize).any(|y| px[(y * w + x) * 4 + 3] != 0 && px[(y * w + x) * 4] < 128))
+            .max()
+            .unwrap_or(0)
+    };
+    let plain_width = ink_width(&plain);
+    let framed_width = ink_width(&framed);
+    assert!(
+        plain_width > 300,
+        "the unwrapped run crosses most of the canvas ({plain_width}px)",
+    );
+    assert!(
+        framed_width <= 100,
+        "the framed run stays inside its 90px box ({framed_width}px)",
+    );
 }

@@ -281,6 +281,14 @@ pub struct TextRun {
     /// The frame the run was drawn in: a Layout text frame wraps its lines to this box, and a
     /// plain artistic run has none and runs on as far as it likes.
     pub frame: Option<Frame>,
+    /// The family, as the app's font database names it.
+    pub family: String,
+    /// `Regular`, `Italic`, `Bold` or `Bold Italic`.
+    pub style: String,
+    /// `left`, `center`, `right` or `justify`.
+    pub align: String,
+    /// Leading as a multiple of the size; 1.2 is the engine's default.
+    pub leading: f64,
 }
 
 /// A box on the page: where a shape, a picture or a text frame lives.
@@ -698,6 +706,10 @@ impl Document {
                 v["color"] = json!(t.color);
                 v["x"] = json!(t.x);
                 v["y"] = json!(t.y);
+                v["family"] = json!(t.family);
+                v["style"] = json!(t.style);
+                v["align"] = json!(t.align);
+                v["leading"] = json!(t.leading);
                 if let Some(f) = &t.frame {
                     v["frame"] = json!({
                         "x": f.x, "y": f.y, "width": f.width, "height": f.height,
