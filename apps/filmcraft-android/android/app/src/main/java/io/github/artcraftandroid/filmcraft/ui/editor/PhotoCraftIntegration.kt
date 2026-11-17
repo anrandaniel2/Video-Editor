@@ -96,7 +96,7 @@ private fun pictureName(context: android.content.Context, uri: android.net.Uri):
 /**
  * The MIME types the picture picker accepts, one per format the engine opens.
  *
- * `image/*` covers most of them; the rest are the formats that only have a MIME type if some app
+ * The wide image type covers most of them; the rest are the formats that only have a MIME type if some app
  * on the device claims it, so they are named by extension as well. Together they make the picker
  * offer the same set the importer can read.
  */
