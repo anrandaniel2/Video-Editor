@@ -1000,10 +1000,12 @@ fn a_text_run_can_be_restyled_after_it_is_placed() {
     assert_eq!(out["align"], "center");
     assert_eq!(out["size"], 18.0);
 
-    let doc = s.active().expect("a document");
-    let Content::Text(run) = &doc.doc.find(id).expect("the run").content else { panic!("text") };
-    assert_eq!(run.color, "#FF0000");
-    assert_eq!(run.leading, 1.5);
+    {
+        let doc = s.active().expect("a document");
+        let Content::Text(run) = &doc.doc.find(id).expect("the run").content else { panic!("text") };
+        assert_eq!(run.color, "#FF0000");
+        assert_eq!(run.leading, 1.5);
+    }
 
     // The paragraph's own words are editable, and the row is renamed with them.
     run(&mut s, "type.setProps", json!({ "layer": id, "text": "Goodbye" }));
