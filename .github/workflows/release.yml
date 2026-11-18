@@ -143,10 +143,16 @@ jobs:
           key: tests
       - name: Render
         run: cargo run -p filmcraft-android --example brush_sheet
-      - uses: actions/upload-artifact@v4
-        with:
-          name: brush-sheet
-          path: brush_sheet.png
+      # The artifact host is not reachable from the workstation that reads this, so the image is
+      # printed into the log in a form that survives the log's own escaping.
+      - name: Print the sheet
+        run: |
+          python3 - <<'PYIMG'
+          import base64, zlib, struct
+          data = open('brush_sheet.png','rb').read()
+          print('PNG-LEN', len(data))
+          print('PNG-B64', base64.b64encode(data).decode())
+          PYIMG
 
   apk:
     name: APK
