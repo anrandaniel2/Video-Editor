@@ -1454,36 +1454,29 @@ fn a_tapered_stroke_keeps_its_width_through_the_middle() {
     // is still stamped whole -- so a long stroke passed its end early and the taper, reading
     // `1.0 - along`, sat on its floor: a thick head and then a hairline to the last point.
     //
-    // Brush Pen carries Procraft's 0.3 taper, and is drawn here corner to corner so both ends of
-    // the path are inside the canvas and can be measured.
+    // The stroke runs left to right across the document, so a column's painted height is the
+    // stroke's width there. Brush Pen carries Procraft's 0.3 taper.
     let mut s = session();
     run(&mut s, "tools.setBrush", json!({ "preset": "Brush Pen", "size": 13.0 }));
     run(
         &mut s,
         "paint.stroke",
         json!({
-            "points": [[4.0, 4.0], [10.0, 12.0], [18.0, 20.0], [24.0, 26.0], [28.0, 29.0]],
+            "points": [[5.0, 16.0], [13.0, 16.0], [21.0, 16.0], [28.0, 16.0]],
             "size": 13.0,
         }),
     );
     let buf = pixels(&s);
-    // The width across the path at three places along it, sampled perpendicular to the diagonal.
-    let across = |cx: usize, cy: usize| {
-        (0..6).filter(|&k| {
-            let (x, y) = (cx + k, cy);
-            x < 32 && y < 32 && painted(&buf, x, y)
-        }).count()
-    };
-    let head = across(6, 6);
-    let middle = across(15, 17);
-    let tail = across(26, 27);
+    let head = painted_row(&buf, 6);
+    let middle = (14..20).map(|x| painted_row(&buf, x)).max().unwrap_or(0);
+    let tail = painted_row(&buf, 27);
     assert!(
         middle > head,
         "the middle is wider than the head: head {head}, middle {middle}"
     );
     assert!(tail > 0, "the far end still paints: {tail}");
     assert!(
-        middle >= tail,
-        "the taper only narrows towards the end: middle {middle}, tail {tail}"
+        middle > tail,
+        "the taper narrows towards the end: middle {middle}, tail {tail}"
     );
 }
