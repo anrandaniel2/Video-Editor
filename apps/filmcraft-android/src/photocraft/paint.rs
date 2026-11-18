@@ -129,6 +129,8 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
             | (colour[2] as u64) << 8
             | points.len() as u64,
         stamps: 0,
+        travelled: 0.0,
+        travelled_at: 0.0,
         // Set below, once the path's length is known: the taper is measured against it.
         total: 0.0,
         step: 1.0,
@@ -218,6 +220,16 @@ struct Stroke<'a> {
     stamps: u64,
     total: f64,
     step: f64,
+    /// How far along the path the stamper has got, in canvas pixels.
+    ///
+    /// This used to be `stamps * step`, which is not the same number: `step` is the spacing the
+    /// whole stroke uses, while a segment shorter than one step still lays its stamps. The
+    /// product ran ahead of the real path, `along` passed 1.0 early, and the taper -- reading
+    /// `1.0 - along` -- clamped to its floor for the rest of the stroke. That is why a tapered
+    /// brush drew a thick head and then a hairline to the end.
+    travelled: f64,
+    /// Where the segment being stamped starts, along the path.
+    travelled_at: f64,
     /// For a "strongest stamp wins" stroke: what the strongest stamp has laid at each pixel so
     /// far, and the colour it laid. Overlapping discs then cannot darken one another, which is
     /// what a Light Glaze stroke is.
@@ -235,8 +247,12 @@ impl Stroke<'_> {
         let angle = dy.atan2(dx);
         for i in 0..=steps {
             let t = if steps == 0 { 0.0 } else { i as f64 / steps as f64 };
+            // Where this stamp is along the whole path, before it is laid: the taper is measured
+            // from that, so it must be the path's distance and not a count of stamps.
+            self.travelled = self.travelled_at + length * t;
             self.stamp_at(a.0 + dx * t, a.1 + dy * t, angle);
         }
+        self.travelled_at += length;
     }
 
     /// One step of the path: `count` stamps, each with the brush's own rotation and jitter, laid at
@@ -296,7 +312,7 @@ impl Stroke<'_> {
         if taper <= 0.0 || self.total <= 0.0 {
             return 1.0;
         }
-        let along = (self.stamps as f64 * self.step) / self.total;
+        let along = (self.travelled / self.total).clamp(0.0, 1.0);
         // Distance from the nearest end, in fractions of the stroke.
         let from_end = along.min(1.0 - along).min(0.5);
         // A linear ramp over `taper` of the stroke, floored so the tip still paints something.

@@ -1446,3 +1446,22 @@ fn streamline_pulls_a_shaky_path_towards_a_straight_one() {
     let steady = band(1.0);
     assert!(steady <= loose, "streamline spread the stroke wider: loose {loose}, steady {steady}");
 }
+
+#[test]
+fn a_tapered_stroke_keeps_its_width_through_the_middle() {
+    // The taper shrinks a stroke at its two ends, not along its whole length. It measured its
+    // progress as `stamps * step`, which outruns the real path -- a segment one step long is
+    // stamped whole, several times over -- so a long stroke passed the end early and drew a thick
+    // head followed by a hairline. A brush with a taper must be widest somewhere in its middle.
+    let buf = stroke_with("Round Pen", 14.0);
+    // Column heights across the stroke: the band of painted pixels in each column.
+    let band = |x: usize| (0..32).filter(|&y| painted(&buf, x, y)).count();
+    let head = band(7);
+    let middle = (14..18).map(band).max().unwrap_or(0);
+    let tail = band(25);
+    assert!(
+        middle > head && middle > tail,
+        "a tapered stroke is widest in its middle: head {head}, middle {middle}, tail {tail}"
+    );
+    assert!(tail > 0, "the tail must still paint something: {tail}");
+}
