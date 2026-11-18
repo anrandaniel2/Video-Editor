@@ -30,9 +30,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -315,6 +319,128 @@ fun StudioSlider(
             drawCircle(Color(0xFFE9EDEA), 6.dp.toPx(), Offset(x, cy))
         }
     }
+}
+
+/**
+ * Procraft's own slider, ported rather than imitated.
+ *
+ * The two things that make it feel the way it does are both here, and both were missing from the
+ * one this replaces:
+ *
+ * - The knob moves **relatively**. A drag adds its travel to the value instead of jumping the knob
+ *   to wherever the finger landed, so a slider set to 37 stays 37 until it is actually dragged, and
+ *   a drag that starts anywhere on the track moves by the same amount. Our old slider snapped the
+ *   value to the touch position on every move, which is why setting an exact number was guesswork
+ *   and why the knob appeared to leap.
+ * - The value is **curved**. Sizes above go up by `value^2.2`, so the low end -- where most brush
+ *   sizes live -- gets two thirds of the track instead of the first percent of it.
+ *
+ * The look is Procraft's too: a 55dp column, the name and a pill 28dp tall, and a 20dp track with
+ * a 16 x 10 white knob that overhangs its ends by 3.
+ */
+@Composable
+fun ProSlider(
+    label: String,
+    fraction: Float,
+    valueText: String,
+    modifier: Modifier = Modifier,
+    onFraction: (Float) -> Unit,
+) {
+    val change by androidx.compose.runtime.rememberUpdatedState(onFraction)
+    val current by androidx.compose.runtime.rememberUpdatedState(fraction)
+    Column(modifier.fillMaxWidth().height(55.dp)) {
+        Row(
+            Modifier.offset(y = 2.dp).fillMaxWidth().height(28.dp).padding(start = 10.dp, end = 3.5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                label,
+                fontSize = 13.sp,
+                color = Sc.Title,
+                maxLines = 1,
+                modifier = Modifier.weight(1f).padding(end = 12.dp),
+            )
+            // As wide as its words need, 13 either side, never narrower than 73.
+            Box(
+                Modifier.height(28.dp).widthIn(min = 73.dp)
+                    .clip(RoundedCornerShape(14.dp)).background(Sc.PillFill)
+                    .padding(horizontal = 13.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(valueText, color = Sc.Title, fontSize = 16.sp, maxLines = 1, softWrap = false)
+            }
+        }
+        Box(
+            Modifier.fillMaxWidth().height(20.dp).padding(start = 10.dp, end = 10.5.dp)
+                .pointerInput(Unit) {
+                    androidx.compose.foundation.gestures.awaitEachGesture {
+                        val down = androidx.compose.foundation.gestures.awaitFirstDown()
+                        down.consume()
+                        var last = down.position.x
+                        var v = current
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val c = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!c.pressed) break
+                                // Relative: the knob follows the drag, as far as it travels.
+                                val inset = KnobInset.toPx()
+                                val travel = (size.width - 2 * inset).coerceAtLeast(1f)
+                                v = (v + (c.position.x - last) / travel).coerceIn(0f, 1f)
+                                last = c.position.x
+                                change(v)
+                                c.consume()
+                            }
+                        } finally {
+                            // Nothing to commit: the value was set as it moved.
+                        }
+                    }
+                }
+                .drawBehind {
+                    val y = size.height / 2f
+                    val t = fraction.coerceIn(0f, 1f)
+                    // The knob's middle travels from 5 in at either end, so it overhangs by 3.
+                    val inset = KnobInset.toPx()
+                    val x = inset + (size.width - 2 * inset) * t
+                    val line = 3.dp.toPx()
+                    drawLine(Sc.SliderTrack, Offset(0f, y), Offset(size.width, y), line)
+                    drawLine(Sc.Blue, Offset(0f, y), Offset(x, y), line)
+                    val knob = Size(16.dp.toPx(), 10.dp.toPx())
+                    drawRoundRect(
+                        Color.White,
+                        Offset(x - knob.width / 2f, y - knob.height / 2f),
+                        knob,
+                        androidx.compose.ui.geometry.CornerRadius(knob.height / 2f),
+                    )
+                },
+        )
+    }
+}
+
+/** How far the knob's middle sits inside the track's ends: Procraft's 5dp. */
+private val KnobInset = 5.dp
+
+/**
+ * A size on [ProSlider]'s scale, and the number the slider's curve turns back into pixels.
+ *
+ * Procraft stores a size as a 0..1 position on a `v^2.2` curve: the low end, where brush sizes
+ * actually live, gets most of the track. A 1..500px brush therefore has its 24px default at 0.18 of
+ * the way along, not 0.05 -- which is the difference between a size slider that is usable and one
+ * that jumps from 1 to 40 in its first millimetre.
+ */
+fun sizeToFraction(px: Float, most: Float): Float {
+    val v = (px / most.coerceAtLeast(1e-3f)).coerceIn(0f, 1f)
+    return v.toDouble().pow(1.0 / 2.2).toFloat()
+}
+
+fun fractionToSize(fraction: Float, most: Float): Float =
+    most * fraction.coerceIn(0f, 1f).toDouble().pow(2.2).toFloat()
+
+/** A size slider's text: "Max" only at the very end, the pixels themselves everywhere else. */
+fun sizeText(fraction: Float, most: Float): String = when {
+    fraction >= 1f -> "Max"
+    fraction <= 0f -> "None"
+    else -> "${fractionToSize(fraction, most).roundToInt()}px"
 }
 
 /**

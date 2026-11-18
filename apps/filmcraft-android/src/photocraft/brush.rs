@@ -62,6 +62,47 @@ impl Tip {
     }
 }
 
+/// How a stroke's stamps build up within the stroke.
+///
+/// This is the studio's "rendering mode", and it is the difference between a stroke that reads as
+/// one ribbon of paint and one that reads as a chain of discs. Procraft has six named modes; these
+/// are the four behaviours they are built from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Rendering {
+    /// Each stamp adds to what is there, up to the stroke's opacity. The default, and what a soft
+    /// airbrush wants.
+    #[default]
+    BuildUp,
+    /// Overlapping stamps do not build up: the stroke keeps the strongest stamp at each pixel.
+    /// This is "Light Glaze", and it is what stops a hard tip leaving dark blotches where its
+    /// discs overlap -- which is most of why a stroke looked stamped rather than drawn.
+    Strongest,
+    /// Each stamp adds less the more is already there, by what is left squared: a build-up that
+    /// approaches the stroke's opacity smoothly instead of in steps.
+    Gradual,
+}
+
+impl Rendering {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Rendering::BuildUp => "buildup",
+            Rendering::Strongest => "glaze",
+            Rendering::Gradual => "gradual",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Rendering> {
+        Some(match name {
+            "buildup" | "blending" | "intense blending" => Rendering::BuildUp,
+            "glaze" | "light glaze" | "uniformed glaze" | "intense glaze" | "heavy glaze" => {
+                Rendering::Strongest
+            }
+            "gradual" | "uniform blending" => Rendering::Gradual,
+            _ => return None,
+        })
+    }
+}
+
 /// How a brush's grain is laid down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrainMode {
@@ -120,6 +161,11 @@ pub struct Brush {
     pub taper: f64,
     /// Whether the brush is a smudge: it mixes what is under it rather than covering it.
     pub wet: bool,
+    /// How the stamps of one stroke build up, which is the studio's rendering mode.
+    pub rendering: Rendering,
+    /// How far the stroke's path is smoothed towards a spline, 0..1. Procraft calls this
+    /// StreamLine; it is what turns a jittery drag into a confident line.
+    pub streamline: f64,
 }
 
 impl Default for Brush {
@@ -142,6 +188,8 @@ impl Default for Brush {
             count: 1,
             taper: 0.0,
             wet: false,
+            rendering: Rendering::BuildUp,
+            streamline: 0.0,
         }
     }
 }
@@ -172,6 +220,8 @@ impl Brush {
             "count": self.count,
             "taper": self.taper,
             "wet": self.wet,
+            "rendering": self.rendering.as_str(),
+            "streamline": self.streamline,
         })
     }
 
@@ -201,6 +251,10 @@ impl Brush {
         if let Some(v) = num("count") { self.count = (v.round() as u32).clamp(1, 8); }
         if let Some(v) = num("taper") { self.taper = v.clamp(0.0, 0.5); }
         if let Some(v) = params.get("wet").and_then(Value::as_bool) { self.wet = v; }
+        if let Some(v) = params.get("rendering").and_then(Value::as_str) {
+            self.rendering = Rendering::parse(v).ok_or_else(|| format!("`{v}` is not a rendering mode."))?;
+        }
+        if let Some(v) = num("streamline") { self.streamline = v.clamp(0.0, 1.0); }
         Ok(())
     }
 }
@@ -211,189 +265,250 @@ impl Brush {
 /// with a paper tooth, the charcoals are ragged and coarse, the chalk is soft and heavily grained,
 /// the bristle brush scatters, and the ink is a flat, hard, ungrainned line that follows the hand.
 /// The point is that a stroke from one does not look like a stroke from another.
-pub const LIBRARY: &[(&str, Brush)] = &[
-    (
-        "Natural Pencil 6B",
-        Brush {
-            tip: Tip::Ragged,
-            hardness: 0.95,
-            grain: 0.55,
-            grain_scale: 0.4,
-            grain_mode: GrainMode::Canvas,
-            spacing: 0.06,
-            flow: 0.9,
-            roundness: 0.85,
-            rotation: 0.5,
-            follow: 1.0,
-            scatter: 0.15,
-            jitter: 0.1,
-            count: 1,
-            taper: 0.02,
-            wet: false,
-        },
-    ),
-    (
-        "Natural Pencil 2B",
-        Brush {
-            tip: Tip::Ragged,
-            hardness: 0.9,
-            grain: 0.32,
-            grain_scale: 0.55,
-            grain_mode: GrainMode::Canvas,
-            spacing: 0.07,
-            flow: 0.8,
-            roundness: 0.9,
-            rotation: 0.5,
-            follow: 1.0,
-            scatter: 0.12,
-            jitter: 0.08,
-            count: 1,
-            taper: 0.02,
-            wet: false,
-        },
-    ),
-    (
-        "Natural Pencil 4B",
-        Brush {
-            tip: Tip::Ragged,
-            hardness: 0.93,
-            grain: 0.44,
-            grain_scale: 0.45,
-            grain_mode: GrainMode::Canvas,
-            spacing: 0.06,
-            flow: 0.85,
-            roundness: 0.88,
-            rotation: 0.5,
-            follow: 1.0,
-            scatter: 0.14,
-            jitter: 0.09,
-            count: 1,
-            taper: 0.02,
-            wet: false,
-        },
-    ),
-    (
-        "Compressed Charcoal",
-        Brush {
-            tip: Tip::Chisel,
-            hardness: 0.35,
-            grain: 0.85,
-            grain_scale: 0.75,
-            grain_mode: GrainMode::Canvas,
-            spacing: 0.08,
-            flow: 0.85,
-            roundness: 0.55,
-            rotation: 0.9,
-            follow: 0.25,
-            scatter: 0.4,
-            jitter: 0.3,
-            count: 2,
-            taper: 0.05,
-            wet: false,
-        },
-    ),
-    (
-        "Dense Graphite",
-        Brush {
-            tip: Tip::Round,
-            hardness: 0.75,
-            grain: 0.6,
-            grain_scale: 0.22,
-            grain_mode: GrainMode::Canvas,
-            spacing: 0.05,
-            flow: 0.7,
-            roundness: 1.0,
-            rotation: 0.0,
-            follow: 0.0,
-            scatter: 0.0,
-            jitter: 0.15,
-            count: 1,
-            taper: 0.03,
-            wet: false,
-        },
-    ),
-    (
-        "Round Dry Bristle",
-        Brush {
-            tip: Tip::Chisel,
-            hardness: 0.55,
-            grain: 0.7,
-            grain_scale: 0.65,
-            grain_mode: GrainMode::Stamp,
-            spacing: 0.12,
-            flow: 0.65,
-            roundness: 0.4,
-            rotation: 0.4,
-            follow: 1.0,
-            scatter: 0.5,
-            jitter: 0.35,
-            count: 3,
-            taper: 0.08,
-            wet: false,
-        },
-    ),
-    (
-        "Soft Chalk",
-        Brush {
-            tip: Tip::Cloud,
-            hardness: 0.2,
-            grain: 0.9,
-            grain_scale: 0.85,
-            grain_mode: GrainMode::Stamp,
-            spacing: 0.1,
-            flow: 0.45,
-            roundness: 0.8,
-            rotation: 0.0,
-            follow: 0.0,
-            scatter: 0.6,
-            jitter: 0.4,
-            count: 2,
-            taper: 0.12,
-            wet: false,
-        },
-    ),
-    (
-        "Fine Ink",
-        Brush {
-            tip: Tip::Round,
-            hardness: 1.0,
-            grain: 0.0,
-            grain_scale: 0.0,
-            grain_mode: GrainMode::Canvas,
-            spacing: 0.04,
-            flow: 1.0,
-            roundness: 1.0,
-            rotation: 0.0,
-            follow: 0.0,
-            scatter: 0.0,
-            jitter: 0.0,
-            count: 1,
-            taper: 0.0,
-            wet: false,
-        },
-    ),
-    (
-        // The one brush that mixes rather than covers. It travels with the stamp and lays down very
-        // little at a time, which is what makes a smudge build instead of paint.
-        "Wet Smudge",
-        Brush {
-            tip: Tip::Cloud,
-            hardness: 0.1,
-            grain: 0.15,
-            grain_scale: 0.3,
-            grain_mode: GrainMode::Stamp,
-            spacing: 0.05,
-            flow: 0.3,
-            roundness: 1.0,
-            rotation: 0.0,
-            follow: 0.0,
-            scatter: 0.2,
-            jitter: 0.1,
-            count: 1,
-            taper: 0.0,
-            wet: true,
-        },
-    ),
+/// The studio's brushes, ported from Procraft's own library.
+///
+/// These are not looks made up to be distinguishable: each is the parameter set Procraft's
+/// `crates/engine/src/library.rs` gives that brush, mapped onto the controls this engine draws.
+/// Where Procraft works from a texture image the tip is a procedural stamp with the same
+/// silhouette (its `GRAINY_DISC` is this `Ragged`, its `FLAT` this `Flat`), and where Procraft's
+/// parameter has no equivalent here -- tilt, pressure, a material channel -- the value closest to
+/// what that parameter does to the mark is used.
+///
+/// The names, the set they belong to, and their order are Procraft's: Sketching, then Inking.
+pub const LIBRARY: &[Brush] = &[
+    // --- Sketching ---------------------------------------------------------
+    /// Procraft's `graphite()`: a grainy disc on paper, its 0.7 hardness, spaced 0.06.
+    Brush {
+        name: "Graphite",
+        tip: Tip::Ragged,
+        hardness: 0.7,
+        grain: 0.6,
+        grain_scale: 0.45,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.06,
+        flow: 0.85,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.35,
+        jitter: 0.25,
+        count: 1,
+        taper: 0.08,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.0,
+    },
+    /// Procraft's `soft_pencil()`: the same brush wider and softer, on coarse paper.
+    Brush {
+        name: "Soft Pencil",
+        tip: Tip::Round,
+        hardness: 0.55,
+        grain: 0.7,
+        grain_scale: 0.6,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.06,
+        flow: 0.7,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.2,
+        jitter: 0.2,
+        count: 1,
+        taper: 0.08,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.0,
+    },
+    /// Procraft's `technical_pencil()`: hard, tight, nearly opaque, a drafting lead.
+    Brush {
+        name: "Technical Pencil",
+        tip: Tip::Round,
+        hardness: 0.95,
+        grain: 0.35,
+        grain_scale: 0.35,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.05,
+        flow: 1.0,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.0,
+        jitter: 0.0,
+        count: 1,
+        taper: 0.0,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.0,
+    },
+    /// Procraft's `hb_pencil()`: the everyday pencil, a little less grain than 6B.
+    Brush {
+        name: "HB Pencil",
+        tip: Tip::Ragged,
+        hardness: 0.8,
+        grain: 0.5,
+        grain_scale: 0.4,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.06,
+        flow: 0.75,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.3,
+        jitter: 0.2,
+        count: 1,
+        taper: 0.08,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.0,
+    },
+    /// Procraft's `six_b_pencil()`: dense and dark, the softest lead in the set.
+    Brush {
+        name: "6B Pencil",
+        tip: Tip::Ragged,
+        hardness: 0.7,
+        grain: 0.75,
+        grain_scale: 0.65,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.06,
+        flow: 0.95,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.4,
+        jitter: 0.3,
+        count: 1,
+        taper: 0.08,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.0,
+    },
+    /// Procraft's `charcoal_pencil()`: coarse, dark and broken up.
+    Brush {
+        name: "Charcoal Pencil",
+        tip: Tip::Ragged,
+        hardness: 0.75,
+        grain: 0.85,
+        grain_scale: 0.7,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.06,
+        flow: 0.9,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.5,
+        jitter: 0.35,
+        count: 1,
+        taper: 0.08,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.0,
+    },
+    // --- Inking ------------------------------------------------------------
+    /// Procraft's `fine_liner()`: a hard even line, its 0.062 streamline keeping it straight.
+    Brush {
+        name: "Fine Liner",
+        tip: Tip::Round,
+        hardness: 0.97,
+        grain: 0.0,
+        grain_scale: 0.0,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.08,
+        flow: 1.0,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.0,
+        jitter: 0.0,
+        count: 1,
+        taper: 0.0,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.062,
+    },
+    /// Procraft's `brush_pen()`: heavily streamlined, tapering hard at both ends.
+    Brush {
+        name: "Brush Pen",
+        tip: Tip::Round,
+        hardness: 0.92,
+        grain: 0.0,
+        grain_scale: 0.0,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.08,
+        flow: 1.0,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.0,
+        jitter: 0.0,
+        count: 1,
+        taper: 0.3,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.67,
+    },
+    /// Procraft's `Brush::round_pen()`: the parent of the inking set, barely tapered.
+    Brush {
+        name: "Round Pen",
+        tip: Tip::Round,
+        hardness: 0.92,
+        grain: 0.0,
+        grain_scale: 0.0,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.08,
+        flow: 1.0,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.0,
+        jitter: 0.0,
+        count: 1,
+        taper: 0.15,
+        wet: false,
+        rendering: Rendering::BuildUp,
+        streamline: 0.015,
+    },
+    /// Procraft's `flat_brush()`: a chisel that follows the stroke, on a woven grain.
+    Brush {
+        name: "Flat Brush",
+        tip: Tip::Flat,
+        hardness: 0.92,
+        grain: 0.35,
+        grain_scale: 0.5,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.03,
+        flow: 0.9,
+        roundness: 0.4,
+        rotation: std::f64::consts::FRAC_PI_2,
+        follow: 1.0,
+        scatter: 0.0,
+        jitter: 0.0,
+        count: 1,
+        taper: 0.0,
+        wet: false,
+        rendering: Rendering::Strongest,
+        streamline: 0.0,
+    },
+    /// Procraft's `soft_airbrush()`: wide, soft, spaced so its stamps blend into a wash.
+    Brush {
+        name: "Soft Airbrush",
+        tip: Tip::Cloud,
+        hardness: 0.0,
+        grain: 0.0,
+        grain_scale: 0.0,
+        grain_mode: GrainMode::Stamp,
+        spacing: 0.04,
+        flow: 0.25,
+        roundness: 1.0,
+        rotation: 0.0,
+        follow: 0.0,
+        scatter: 0.0,
+        jitter: 0.1,
+        count: 1,
+        taper: 0.0,
+        wet: false,
+        rendering: Rendering::BuildUp,
+        streamline: 0.0,
+    },
 ];
 
 /// The brush called `name`, or the default if the library has no such brush.
@@ -434,8 +549,8 @@ mod tests {
     fn a_stroke_from_two_brushes_is_not_the_same_stroke() {
         // Differing parameters are not the same as differing paint. These two are as far apart as
         // the library gets: a hard fine line and a soft grainy one.
-        let ink = by_name("Fine Ink").expect("ink");
-        let chalk = by_name("Soft Chalk").expect("chalk");
+        let ink = by_name("Fine Liner").expect("ink");
+        let chalk = by_name("6B Pencil").expect("chalk");
         assert!(ink.hardness > chalk.hardness + 0.5);
         assert!(chalk.grain > ink.grain + 0.5);
         assert!(chalk.spacing > ink.spacing);

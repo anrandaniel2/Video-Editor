@@ -2,6 +2,8 @@ package io.github.artcraftandroid.photocraft.studio
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -49,7 +51,14 @@ fun StudioCanvas(
 ) {
     val scope = rememberCoroutineScope()
     var viewport by remember { mutableStateOf(IntSize.Zero) }
-    var cursor by remember { mutableStateOf<Offset?>(null) }
+    // The pointer's position, in its own holder.
+    //
+    // It used to be a `mutableStateOf` on this composable, written on every pointer event -- so
+    // every movement of a finger recomposed the whole canvas, recomputed the document rect and
+    // redrew the entire bitmap just to move a two-pixel ring. The hook is written by the gesture
+    // loop and read only by the ring overlay below, so a moving finger invalidates a 40dp circle
+    // instead of the picture.
+    val cursor = remember { CursorRing() }
     var strokePoints by remember { mutableStateOf<List<Pair<Float, Float>>>(emptyList()) }
     // The live stroke and the pointer are read outside the draw scope, as Compose requires.
     val liveStroke = strokePoints
@@ -134,10 +143,35 @@ fun StudioCanvas(
             // behaviour), and a pinch zooms.
             .pointerInput(tool) {
                 if (tool == Tool.Hand) {
-                    detectDragGestures { change, drag ->
-                        state.panX = (state.panX + drag.x).coerceIn(-400f, 400f)
-                        state.panY = (state.panY + drag.y).coerceIn(-300f, 300f)
-                        change.consume()
+                    // The pan is bounded by the document, not by a fixed 400/300 pixels: a fixed
+                    // bound is a wall that arrives without warning and reads as the camera
+                    // sticking. Half the artwork's own size either way lets the edges be brought
+                    // to the middle of the view and no further.
+                    // The artwork's size in the view, from the same cover-fit `documentRect` uses,
+                    // with no pan in it -- the pan must not bound itself.
+                    val fit = maxOf(
+                        viewport.width / state.docWidth.toFloat().coerceAtLeast(1f),
+                        viewport.height / state.docHeight.toFloat().coerceAtLeast(1f),
+                    ) * state.zoom
+                    val maxX = state.docWidth * fit / 2f
+                    val maxY = state.docHeight * fit / 2f
+                    // Handled gesture by gesture with no touch slop, because a camera that waits
+                    // for the finger to travel before it starts moving is the other half of what
+                    // made the pan feel late. `detectDragGestures` always applies the system slop
+                    // and there is no parameter to turn it off.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        var last = down.position
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            state.panX = (state.panX + (change.position.x - last.x)).coerceIn(-maxX, maxX)
+                            state.panY = (state.panY + (change.position.y - last.y)).coerceIn(-maxY, maxY)
+                            last = change.position
+                            change.consume()
+                        }
                     }
                 }
             }
@@ -296,14 +330,24 @@ fun StudioCanvas(
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
-                        cursor = awaitPointerEvent().changes.lastOrNull()?.position
+                        cursor.at = awaitPointerEvent().changes.lastOrNull()?.position
                     }
                 }
             },
     ) {
         val bitmap = engine.preview
-        val cursorPoint = cursor
-        val ring = ((state.value("brushSize").toFloatOrNull() ?: 24f) / state.docWidth.toFloat())
+        // Everything the draw needs is read once, outside the Canvas scope.
+        //
+        // This is what made the camera feel heavy: `state.value` reads `values`, and `values` is a
+        // single immutable map in `mutableStateOf`. Reading it *inside* the draw scope subscribed
+        // this Canvas to the whole map, so changing any panel value anywhere -- the size slider,
+        // the colour, a layer's opacity -- invalidated the canvas and redrew the whole bitmap.
+        // Reading it here subscribes once, to the same value, and the numbers are computed once
+        // rather than three times per frame.
+        val brushPx = (state.value("brushSize").toFloatOrNull() ?: 24f).coerceAtLeast(1f)
+        val docW = state.docWidth.toFloat().coerceAtLeast(1f)
+        val ring = brushPx / docW
+        val liveColour = parseColour(state.value("colour"))
         Canvas(Modifier.fillMaxSize()) {
             val r = documentRect()
             if (r.width <= 0f || r.height <= 0f || !engine.hasDocument) return@Canvas
@@ -344,21 +388,45 @@ fun StudioCanvas(
                 }
                 drawPath(
                     path,
-                    parseColour(state.value("colour")).copy(alpha = 0.7f),
+                    liveColour.copy(alpha = 0.7f),
                     style = Stroke(
-                        width = ((state.value("brushSize").toFloatOrNull() ?: 24f) / state.docWidth * r.width)
-                            .coerceAtLeast(1.2f),
+                        width = (brushPx / docW * r.width).coerceAtLeast(1.2f),
                         cap = StrokeCap.Round,
                         join = StrokeJoin.Round,
                     ),
                 )
             }
-            // The tool's ring, at the pointer.
-            if (cursorPoint != null && painting) {
-                val d = (ring * r.width).coerceIn(4f, 260f)
-                drawCircle(Color.White.copy(alpha = 0.9f), d / 2f, cursorPoint, style = Stroke(1f))
-                drawCircle(Color.Black.copy(alpha = 0.4f), d / 2f + 1f, cursorPoint, style = Stroke(1f))
-            }
         }
+        // The tool's ring, at the pointer: its own layer, so it can move without redrawing the
+        // picture above it. Its own Canvas reads the holder, which makes it the only thing that
+        // recomposes when the finger moves.
+        if (painting) {
+            val ringRadius = (ring * documentRect().width).coerceIn(4f, 260f)
+            // A small composable of its own, so the pointer's position -- which changes on every
+            // event -- invalidates this ring and nothing else. Before it was read by the canvas
+            // above, moving a finger redrew the whole picture.
+            BrushRing(cursor, ringRadius)
+        }
+    }
+}
+
+/** Where the pointer is, written by the gesture loop and read by the ring. */
+private class CursorRing {
+    var at by mutableStateOf<Offset?>(null)
+}
+
+/**
+ * The brush ring.
+ *
+ * It is a composable of its own on purpose: [cursor] changes on every pointer event, and a state
+ * read is what makes a composable redraw. Kept here, that redraw is one circle; kept in the canvas
+ * that draws the document, it was the whole bitmap on every finger movement.
+ */
+@Composable
+private fun BrushRing(cursor: CursorRing, diameter: Float) {
+    val at = cursor.at ?: return
+    Canvas(Modifier.fillMaxSize()) {
+        drawCircle(Color.White.copy(alpha = 0.9f), diameter / 2f, at, style = Stroke(1f))
+        drawCircle(Color.Black.copy(alpha = 0.4f), diameter / 2f + 1f, at, style = Stroke(1f))
     }
 }

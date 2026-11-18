@@ -102,10 +102,10 @@ impl Default for Tools {
             brush_opacity: 1.0,
             // A clean, hard, ungrainned tip until a preset is chosen: grain is the texture a
             // brush adds, not something a plain stroke should have to opt out of.
-            brush_preset: "Fine Ink".into(),
+            brush_preset: "Round Pen".into(),
             brush_grain: 0.0,
             brush_wet: 0.0,
-            brush: crate::photocraft::brush::by_name("Fine Ink").unwrap_or_default(),
+            brush: crate::photocraft::brush::by_name("Round Pen").unwrap_or_default(),
             foreground: [0, 0, 0, 255],
             background: [255, 255, 255, 255],
         }

@@ -202,7 +202,7 @@ class StudioState(workspace: WorkspaceId) {
     val hidden = mutableStateListOf("sketch")
     val locked = mutableStateListOf("master")
     var page by mutableStateOf(8)
-    var brush by mutableStateOf("Natural Pencil 4B")
+    var brush by mutableStateOf("HB Pencil")
     var search by mutableStateOf("")
     var category by mutableStateOf("Pencils")
 
@@ -266,7 +266,7 @@ class StudioState(workspace: WorkspaceId) {
         hidden.clear(); hidden.add("sketch")
         locked.clear(); locked.add("master")
         page = 8
-        brush = "Natural Pencil 4B"
+        brush = "HB Pencil"
         search = ""
         category = "Pencils"
         values = values + mapOf(
@@ -291,10 +291,32 @@ class StudioState(workspace: WorkspaceId) {
     }
 }
 
-/** The brush names the Brushes panel lists, as the reference declares them. */
+/**
+ * The brushes the panel lists: Procraft's own, in its own sets and order.
+ *
+ * These are not names this file invented. Each one is a brush from Procraft's
+ * `crates/engine/src/library.rs`, and the engine's `LIBRARY` carries its parameters under the same
+ * name -- so what the panel offers is what the engine draws. The list used to hold eight names of
+ * its own, none of which matched the nine the engine had: picking most brushes sent the engine a
+ * name it did not know, which is how every brush came to draw the same line.
+ */
 val StudioBrushes = listOf(
-    "Natural Pencil 6B", "Natural Pencil 2B", "Natural Pencil 4B", "Compressed Charcoal",
-    "Dense Graphite", "Round Dry Bristle", "Soft Chalk", "Fine Ink",
+    // Sketching
+    "Graphite", "Soft Pencil", "Technical Pencil", "HB Pencil", "6B Pencil", "Charcoal Pencil",
+    // Inking
+    "Fine Liner", "Brush Pen", "Round Pen", "Flat Brush",
+    // Painting
+    "Soft Airbrush",
+)
+
+/** The set each brush belongs to, as the panel groups them. */
+val StudioBrushSets: Map<String, String> = mapOf(
+    "Graphite" to "Sketching", "Soft Pencil" to "Sketching",
+    "Technical Pencil" to "Sketching", "HB Pencil" to "Sketching",
+    "6B Pencil" to "Sketching", "Charcoal Pencil" to "Sketching",
+    "Fine Liner" to "Inking", "Brush Pen" to "Inking",
+    "Round Pen" to "Inking", "Flat Brush" to "Painting",
+    "Soft Airbrush" to "Painting",
 )
 
 /**
@@ -321,10 +343,14 @@ data class BrushInfo(
     val count: Int = 1,
     val taper: Float = 0f,
     val wet: Boolean = false,
+    /** How its stamps build up within a stroke: "buildup", "glaze" or "gradual". */
+    val rendering: String = "buildup",
+    /** How far its path is pulled towards a smooth curve, 0..1. */
+    val streamline: Float = 0f,
 ) {
     companion object {
         /** What the panel draws when the engine has not answered yet: a plain round pen. */
-        val fallback = BrushInfo(name = "Fine Ink", hardness = 1f, spacing = 0.05f)
+        val fallback = BrushInfo(name = "Round Pen", hardness = 0.92f, spacing = 0.08f)
 
         /** Read one brush from the engine's JSON. Absent settings keep the fallback's values. */
         fun from(o: org.json.JSONObject): BrushInfo {
@@ -337,6 +363,8 @@ data class BrushInfo(
                 grain = f32("grain", f.grain),
                 grainScale = f32("grainScale", f.grainScale),
                 grainMode = o.optString("grainMode").ifEmpty { f.grainMode },
+                rendering = o.optString("rendering").ifEmpty { f.rendering },
+                streamline = f32("streamline", f.streamline),
                 spacing = f32("spacing", f.spacing),
                 flow = f32("flow", f.flow),
                 roundness = f32("roundness", f.roundness),

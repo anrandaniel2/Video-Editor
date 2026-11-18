@@ -54,6 +54,8 @@ object Sc {
     val ThumbInk = Color(0xFF7F827A)
     val Faded = Color(0xFF858D7A)
     val Field = Color(0xFF20211F)
+    /// A slider's value pill: Procraft's StudioPill in its dark theme.
+    val PillFill = Color(0xFF292929)
     val FieldInk = Color(0xFFAAACA5)
     val FieldIcon = Color(0xFFA0A29B)
     val Grip = Color(0xFFA0A19B)

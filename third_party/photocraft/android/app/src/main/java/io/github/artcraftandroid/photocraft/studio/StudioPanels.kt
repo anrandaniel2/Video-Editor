@@ -44,6 +44,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -704,41 +705,28 @@ private fun BrushesBody(a: StudioActions) {
             .border(width = 0.dp, color = Color.Transparent)
             .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 11.dp),
     ) {
-        // Name at the left, value in a pill at the right, track below -- Procraft's own brush
-        // control. The pill takes a typed number, so an exact width does not depend on hitting a
-        // track position with a thumb.
-        StudioValueSlider(
-            label = "Width",
-            fraction = ((s.value("brushSize").toFloatOrNull() ?: 24f) - 1f) / 499f,
-            valueText = "${s.value("brushSize").toIntOrNull() ?: 24}px",
+        // Procraft's own size and opacity sliders. The size is on its 2.2 curve, so the small end
+        // -- where brush sizes actually live -- gets most of the track; the knob drags relatively,
+        // so an exact width is reachable instead of being a product of where the thumb landed.
+        val sizeMost = 500f
+        val sizeFraction = sizeToFraction((s.value("brushSize").toFloatOrNull() ?: 24f), sizeMost)
+        ProSlider(
+            label = "Size",
+            fraction = sizeFraction,
+            valueText = sizeText(sizeFraction, sizeMost),
             modifier = Modifier.fillMaxWidth(),
-            onValue = { v ->
-                v.filter(Char::isDigit).toIntOrNull()?.let { px ->
-                    val clamped = px.coerceIn(1, 500)
-                    s.setValue("brushSize", clamped.toString())
-                    scope.engine { e.setBrush(size = clamped.toFloat()) }
-                }
-            },
         ) { f ->
-            val px = (1f + f * 499f).toInt()
+            val px = fractionToSize(f, sizeMost).roundToInt().coerceIn(1, 500)
             s.setValue("brushSize", px.toString())
             scope.engine { e.setBrush(size = px.toFloat()) }
         }
-        Spacer(Modifier.height(8.dp))
-        StudioValueSlider(
+        ProSlider(
             label = "Opacity",
             fraction = (s.value("brushOpacity").toFloatOrNull() ?: 100f) / 100f,
             valueText = "${s.value("brushOpacity").toIntOrNull() ?: 100}%",
             modifier = Modifier.fillMaxWidth(),
-            onValue = { v ->
-                v.filter(Char::isDigit).toIntOrNull()?.let { pct ->
-                    val clamped = pct.coerceIn(0, 100)
-                    s.setValue("brushOpacity", clamped.toString())
-                    scope.engine { e.setBrush(opacity = clamped / 100f) }
-                }
-            },
         ) { f ->
-            val pct = (f * 100f).toInt()
+            val pct = (f * 100f).roundToInt().coerceIn(0, 100)
             s.setValue("brushOpacity", pct.toString())
             scope.engine { e.setBrush(opacity = pct / 100f) }
         }

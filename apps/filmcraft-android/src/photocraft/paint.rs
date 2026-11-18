@@ -132,6 +132,13 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         // Set below, once the path's length is known: the taper is measured against it.
         total: 0.0,
         step: 1.0,
+        // A stroke that keeps its strongest stamp needs somewhere to keep it. A building stroke
+        // does not, and allocating a page for it would cost every brush the memory of one.
+        strongest: if brush.rendering == super::brush::Rendering::Strongest {
+            Some(vec![0u8; (width as usize) * (height as usize)])
+        } else {
+            None
+        },
     };
     // A taper needs to know where the stroke ends before it starts, so the length comes first.
     let length: f64 = points
@@ -140,11 +147,15 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         .sum();
     stroke.total = length;
     stroke.step = (radius * 2.0 * stroke.brush.spacing).max(0.4);
-    for pair in points.windows(2) {
+    // Procraft's StreamLine: the hand's path is pulled towards a smooth curve before it is
+    // stamped. Without it a stroke carries every tremor of the finger, which is most of what
+    // makes a drawn line look amateur next to the reference's.
+    let path = streamline(&points, stroke.brush.streamline);
+    for pair in path.windows(2) {
         stroke.segment(pair[0], pair[1]);
     }
-    if points.len() == 1 {
-        stroke.segment(points[0], points[0]);
+    if path.len() == 1 {
+        stroke.segment(path[0], path[0]);
     }
     let stamps = stroke.stamps;
     session.active_mut().unwrap().touch();
@@ -153,6 +164,39 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         "brush": session.tools.brush_preset,
         "stamps": stamps,
     }))
+}
+
+/// Pull a hand's path towards a smooth curve.
+///
+/// Procraft calls this StreamLine. Each point is pulled a proportion of the way towards the
+/// midpoint of its neighbours, which removes the tremor from a drag while leaving its overall
+/// shape -- a corner drawn deliberately survives, a shaky straight line becomes straight. At 0 the
+/// path is returned untouched, so a brush that does not ask for it costs nothing.
+fn streamline(points: &[(f64, f64)], amount: f64) -> Vec<(f64, f64)> {
+    if amount <= 0.0 || points.len() < 3 {
+        return points.to_vec();
+    }
+    // Three passes rather than one: one pass softens a corner, three make a wobble into a curve.
+    // The pull is capped well below 1 so the path cannot collapse to a straight line.
+    let pull = amount.clamp(0.0, 1.0) * 0.45;
+    let mut path = points.to_vec();
+    for _ in 0..3 {
+        let mut next = path.clone();
+        for i in 1..path.len() - 1 {
+            let mx = (path[i - 1].0 + path[i + 1].0) / 2.0;
+            let my = (path[i - 1].1 + path[i + 1].1) / 2.0;
+            next[i] = (
+                path[i].0 + (mx - path[i].0) * pull,
+                path[i].1 + (my - path[i].1) * pull,
+            );
+        }
+        path = next;
+    }
+    // The ends stay where the artist put them, which is what a taper and a joined stroke rely on.
+    path[0] = points[0];
+    let last = path.len() - 1;
+    path[last] = points[points.len() - 1];
+    path
 }
 
 /// One stroke being painted: everything a stamp needs, and the running position along the path
@@ -174,6 +218,10 @@ struct Stroke<'a> {
     stamps: u64,
     total: f64,
     step: f64,
+    /// For a "strongest stamp wins" stroke: what the strongest stamp has laid at each pixel so
+    /// far, and the colour it laid. Overlapping discs then cannot darken one another, which is
+    /// what a Light Glaze stroke is.
+    strongest: Option<Vec<u8>>,
 }
 
 impl Stroke<'_> {
@@ -364,11 +412,35 @@ impl Stroke<'_> {
                     }
                     continue;
                 }
-                let sa = edge * opacity * (colour[3] as f64 / 255.0);
+                let mut sa = edge * opacity * (colour[3] as f64 / 255.0);
                 if sa <= 0.0 {
                     continue;
                 }
+                // A stroke that keeps its strongest stamp: the pixel is set to this stamp's
+                // strength rather than composited over what is there. That is what a glaze is --
+                // overlapping discs of one stroke do not darken one another -- and it is why a
+                // hard brush's line is an even ribbon instead of a chain of darker blobs.
+                if let Some(seen) = self.strongest.as_mut() {
+                    let here = (sa * 255.0).round().clamp(0.0, 255.0) as u8;
+                    if here > seen[i / 4] {
+                        seen[i / 4] = here;
+                        self.pixels[i] = colour[0];
+                        self.pixels[i + 1] = colour[1];
+                        self.pixels[i + 2] = colour[2];
+                        self.pixels[i + 3] = here;
+                    }
+                    continue;
+                }
                 let da = self.pixels[i + 3] as f64 / 255.0;
+                // A gradual build-up: what one stamp adds shrinks the closer the pixel already is
+                // to the stroke's opacity, so the stroke arrives smoothly instead of in steps.
+                if self.brush.rendering == super::brush::Rendering::Gradual {
+                    let left = (1.0 - da).max(0.0);
+                    sa *= left * left;
+                    if sa <= 0.0 {
+                        continue;
+                    }
+                }
                 let out_a = sa + da * (1.0 - sa);
                 if out_a <= 0.0 {
                     continue;

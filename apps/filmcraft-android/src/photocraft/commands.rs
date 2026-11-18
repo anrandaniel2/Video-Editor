@@ -914,7 +914,7 @@ fn crop_layer(
 /// a real tip, not a label: the hardness is where the falloff begins, the grain is how much the
 /// edge is broken up, and the wetness makes a stroke build up rather than lay down flat colour.
 /// The panel sends its brush name back with `tools.setBrush` and every stroke afterwards carries
-/// it, so picking "Compressed Charcoal" has to change what the brush does.
+/// it, so picking "Charcoal Pencil" has to change what the brush does.
 /// A preset's brush, or `None` for a name the panel does not list.
 ///
 /// The tip is not a pair of numbers any more: it has a silhouette, a spacing, a taper and its own

@@ -526,21 +526,25 @@ fn the_brush_list_is_the_one_the_panel_shows() {
         .iter()
         .map(|p| p["name"].as_str().unwrap_or_default().to_string())
         .collect();
-    // The panel's own eight, in its own order. Anything the engine adds after them is a brush the
-    // panel did not have before, and it shows because the list is the engine's.
+    // Procraft's own brushes, in its own sets and order: Sketching, then Inking, then Painting.
+    // The panel's list and this one must agree brush for brush -- it was their disagreeing that
+    // made every brush draw one line.
     assert_eq!(
-        names.iter().take(8).cloned().collect::<Vec<_>>(),
+        names,
         vec![
-            "Natural Pencil 6B",
-            "Natural Pencil 2B",
-            "Natural Pencil 4B",
-            "Compressed Charcoal",
-            "Dense Graphite",
-            "Round Dry Bristle",
-            "Soft Chalk",
-            "Fine Ink",
+            "Graphite",
+            "Soft Pencil",
+            "Technical Pencil",
+            "HB Pencil",
+            "6B Pencil",
+            "Charcoal Pencil",
+            "Fine Liner",
+            "Brush Pen",
+            "Round Pen",
+            "Flat Brush",
+            "Soft Airbrush",
         ],
-        "the panel's own eight, in its own order"
+        "Procraft's brushes, in Procraft's order"
     );
 }
 
@@ -550,14 +554,14 @@ fn picking_a_brush_changes_what_the_brush_does() {
     // the panel would be eight labels for one brush -- which is what they were.
     let ink = {
         let mut s = session();
-        run(&mut s, "tools.setBrush", json!({ "preset": "Fine Ink" }));
+        run(&mut s, "tools.setBrush", json!({ "preset": "Fine Liner" }));
         run(&mut s, "layer.new.layer", json!({}));
         run(&mut s, "paint.stroke", json!({ "points": [[16.0, 16.0]], "size": 24.0, "color": "#000000" }));
         pixels(&s)
     };
     let chalk = {
         let mut s = session();
-        run(&mut s, "tools.setBrush", json!({ "preset": "Soft Chalk" }));
+        run(&mut s, "tools.setBrush", json!({ "preset": "6B Pencil" }));
         run(&mut s, "layer.new.layer", json!({}));
         run(&mut s, "paint.stroke", json!({ "points": [[16.0, 16.0]], "size": 24.0, "color": "#000000" }));
         pixels(&s)
@@ -1190,10 +1194,10 @@ fn stroke_with(name: &str, size: f64) -> Vec<u8> {
 fn different_brushes_draw_different_lines() {
     // The complaint this exists for: eight names, one line. Each brush is drawn with the same
     // gesture and the same size, so the only thing that can differ is the brush.
-    let ink = stroke_with("Fine Ink", 9.0);
-    let charcoal = stroke_with("Compressed Charcoal", 9.0);
-    let chalk = stroke_with("Soft Chalk", 9.0);
-    let bristle = stroke_with("Round Dry Bristle", 9.0);
+    let ink = stroke_with("Fine Liner", 9.0);
+    let charcoal = stroke_with("Charcoal Pencil", 9.0);
+    let chalk = stroke_with("6B Pencil", 9.0);
+    let bristle = stroke_with("Soft Airbrush", 9.0);
     assert_ne!(ink, charcoal, "ink and charcoal drew the same stroke");
     assert_ne!(charcoal, chalk, "charcoal and chalk drew the same stroke");
     assert_ne!(chalk, bristle, "chalk and bristle drew the same stroke");
@@ -1213,8 +1217,8 @@ fn different_brushes_draw_different_lines() {
 #[test]
 fn a_wider_brush_draws_a_wider_line() {
     // The size slider's other half: if the width never changed the brush would be a constant.
-    let thin = painted_row(&stroke_with("Fine Ink", 3.0), 16);
-    let thick = painted_row(&stroke_with("Fine Ink", 15.0), 16);
+    let thin = painted_row(&stroke_with("Fine Liner", 3.0), 16);
+    let thick = painted_row(&stroke_with("Fine Liner", 15.0), 16);
     assert!(thick > thin, "a 15-pixel brush drew {thick} rows and a 3-pixel one drew {thin}");
 }
 
@@ -1223,7 +1227,7 @@ fn a_tapered_brush_starts_thinner_than_it_ends() {
     // A taper is visible only if the ends of a stroke are narrower than its middle; without it the
     // setting would be a number nothing reads.
     let mut s = session();
-    run(&mut s, "tools.setBrush", json!({ "preset": "Fine Ink", "size": 11.0 }));
+    run(&mut s, "tools.setBrush", json!({ "preset": "Fine Liner", "size": 11.0 }));
     // A long taper on the brush in hand, the way the panel's slider would set it.
     run(&mut s, "brush.set", json!({ "taper": 0.4 }));
     run(
@@ -1245,8 +1249,8 @@ fn the_brush_the_panel_picks_is_the_brush_the_stroke_uses() {
     // `tools.setBrush` has to store the whole tip, not just its name: the engine reads
     // `tools.brush`, and a name that never reached it is a panel that lies about the brush.
     let mut s = session();
-    run(&mut s, "tools.setBrush", json!({ "preset": "Compressed Charcoal" }));
-    assert_eq!(s.tools.brush_preset, "Compressed Charcoal");
+    run(&mut s, "tools.setBrush", json!({ "preset": "Charcoal Pencil" }));
+    assert_eq!(s.tools.brush_preset, "Charcoal Pencil");
     assert_eq!(s.tools.brush.hardness, 0.35, "the preset's hardness was not stored");
     assert!(s.tools.brush.grain > 0.5, "the preset's grain was not stored");
 
@@ -1370,15 +1374,73 @@ fn a_brush_command_names_the_brush_it_left_in_hand() {
     // that now is. A reply with settings and no name leaves the sliders editing the previous
     // brush -- the charcoal's hardness shown on the ink's card.
     let mut s = session();
-    let picked = run(&mut s, "tools.setBrush", json!({ "preset": "Compressed Charcoal" }));
-    assert_eq!(picked["name"], json!("Compressed Charcoal"), "setBrush did not name the brush");
+    let picked = run(&mut s, "tools.setBrush", json!({ "preset": "Charcoal Pencil" }));
+    assert_eq!(picked["name"], json!("Charcoal Pencil"), "setBrush did not name the brush");
     assert_eq!(picked["tip"], json!("chisel"));
 
     let edited = run(&mut s, "brush.set", json!({ "spacing": 0.3 }));
-    assert_eq!(edited["name"], json!("Compressed Charcoal"), "brush.set did not name the brush");
+    assert_eq!(edited["name"], json!("Charcoal Pencil"), "brush.set did not name the brush");
     assert_eq!(edited["spacing"], json!(0.3));
     // The name is the brush's, and the brush is still the one picked: editing a setting must not
     // silently reset the rest of it.
     assert_eq!(s.tools.brush.tip, super::brush::Tip::Chisel, "the tip survived the edit");
     assert!(s.tools.brush.grain > 0.5, "the grain survived the edit");
+}
+
+#[test]
+fn a_glaze_does_not_darken_where_its_own_stamps_overlap() {
+    // Procraft's Light Glaze: within one stroke, overlapping stamps keep the strongest instead of
+    // adding up. It is the difference between a ribbon of ink and a chain of darker and darker
+    // discs, and it is why a hard brush's stroke looked blotchy along its middle.
+    //
+    // Two strokes over the same path: one with the glaze a brush's own, one forced to build up.
+    let glaze = stroke_with("Round Pen", 9.0);
+    let build = {
+        let mut s = session();
+        run(&mut s, "tools.setBrush", json!({ "preset": "Round Pen" }));
+        run(&mut s, "brush.set", json!({ "rendering": "buildup" }));
+        run(&mut s, "layer.new.layer", json!({}));
+        run(
+            &mut s,
+            "paint.stroke",
+            json!({ "points": [[6.0, 16.0], [12.0, 16.0], [20.0, 16.0], [26.0, 16.0]], "size": 9.0 }),
+        );
+        pixels(&s)
+    };
+    // Darkest alpha along the stroke's middle: a glaze holds one value, a build-up climbs.
+    let darkest = |buf: &[u8]| (0..32).map(|x| buf[(16 * 32 + x) * 4 + 3]).max().unwrap_or(0);
+    assert!(
+        darkest(&build) >= darkest(&glaze),
+        "a build-up is never lighter than a glaze: build {}, glaze {}",
+        darkest(&build),
+        darkest(&glaze)
+    );
+}
+
+#[test]
+fn streamline_pulls_a_shaky_path_towards_a_straight_one() {
+    // StreamLine is what makes a drag look drawn rather than trembled. A zig-zag path stamped
+    // with a heavily streamlined brush must cover a narrower band than the same path unstabilised.
+    let band = |streamline: f64| {
+        let mut s = session();
+        run(&mut s, "tools.setBrush", json!({ "preset": "Round Pen" }));
+        run(&mut s, "brush.set", json!({ "streamline": streamline }));
+        run(&mut s, "layer.new.layer", json!({}));
+        let points: Vec<serde_json::Value> = (0..8)
+            .map(|i| {
+                let x = 4.0 + i as f64 * 3.0;
+                let y = if i % 2 == 0 { 13.0 } else { 19.0 };
+                json!([x, y])
+            })
+            .collect();
+        run(&mut s, "paint.stroke", json!({ "points": points, "size": 5.0 }));
+        let buf = pixels(&s);
+        let rows: Vec<usize> = (0..32)
+            .filter(|&y| (0..32).any(|x| painted(&buf, x, y)))
+            .collect();
+        rows.last().copied().unwrap_or(0).saturating_sub(rows.first().copied().unwrap_or(0))
+    };
+    let loose = band(0.0);
+    let steady = band(1.0);
+    assert!(steady <= loose, "streamline spread the stroke wider: loose {loose}, steady {steady}");
 }
