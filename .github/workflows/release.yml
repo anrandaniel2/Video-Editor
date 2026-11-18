@@ -161,8 +161,15 @@ jobs:
           # The annotation queue carries eight messages and no more, so the sheet is sent as
           # halves, two rows each, and only the two halves that show the most are sent.
           echo "::notice title=Full size::$(stat -c%s brush_sheet.png 2>/dev/null || echo 0) bytes"
-          # The half-scale sheet is the one that fits: one message, every brush.
-          echo "::notice title=SHEET::$(base64 -w0 brush_small.png | head -c 60000)"
+          # Strips, because an annotation message holds about 3 kB of base64 and a queue holds
+          # eight of them: the first two strips are the sketch and the ink sets.
+          n=0
+          for f in strip_*.png; do
+            [ -f "$f" ] || continue
+            echo "::notice title=${f%.png}::$(base64 -w0 "$f")"
+            n=$((n+1))
+            [ $n -ge 2 ] && break
+          done
 
   apk:
     name: APK

@@ -96,13 +96,28 @@ fn main() -> Result<(), String> {
     }
     write_gray_png("brush_small.png", &small, w / 2, (h / 2) * rows)?;
     write_png("brush_sheet.png", &sheet, w, h * rows)?;
-    // Two halves at full resolution: every brush, large enough to judge an edge by, in as many
-    // images as an annotation queue will carry.
-    let half = (rows + 1) / 2;
-    for (i, set) in names.chunks(half.max(1) as usize).enumerate() {
-        let a = i * half as usize * h as usize * w as usize * 4;
-        let b = ((i * half as usize) + set.len()) * h as usize * w as usize * 4;
-        write_png(&format!("half_{}.png", (b'A' + i as u8) as char), &sheet[a..b.min(sheet.len())], w, h * set.len() as u32)?;
+    // Three-row strips at half scale: each one is a few kilobytes, so a single annotation message
+    // carries it whole, and half scale still shows a tip's edge and a grain's tooth.
+    for (strip, set) in names.chunks(3).enumerate() {
+        let start = strip * 3;
+        let mut strip_px: Vec<u8> = Vec::new();
+        for row in start..start + set.len() {
+            for y in (0..h).step_by(2) {
+                for x in (0..w).step_by(2) {
+                    let i = ((row as u32 * h + y) * w + x) as usize * 4;
+                    strip_px.push(((u32::from(sheet[i]) * 299
+                        + u32::from(sheet[i + 1]) * 587
+                        + u32::from(sheet[i + 2]) * 114)
+                        / 1000) as u8);
+                }
+            }
+        }
+        write_gray_png(
+            &format!("strip_{strip}.png"),
+            &strip_px,
+            w / 2,
+            (h / 2) * set.len() as u32,
+        )?;
     }
     println!("wrote brush_sheet.png: {w}x{h}, {} brushes", names.len());
     for (i, n) in names.iter().enumerate() {
