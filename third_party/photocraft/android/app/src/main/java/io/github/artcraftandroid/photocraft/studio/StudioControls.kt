@@ -280,7 +280,17 @@ fun StandardButton(label: String, modifier: Modifier = Modifier, primary: Boolea
     }
 }
 
-/** A slider in the reference's accent blue, with its own thumb. */
+/**
+ * The track every slider in the studio shares, drawn Procraft's way.
+ *
+ * The knob is a 16 x 10 white pill inset 5dp from the track's ends, so it overhangs the line by 3
+ * rather than sitting on it as a dot. The drag is **relative**: it adds its own travel to the value
+ * instead of jumping the knob to the finger, which is what makes an exact setting reachable with a
+ * thumb and what stops the knob leaping the moment a drag starts.
+ *
+ * Every slider in the studio -- brush size and opacity, hardness, grain, spacing, flow -- is this
+ * one widget, so fixing its feel here fixes all of them.
+ */
 @Composable
 fun StudioSlider(
     fraction: Float,
@@ -288,19 +298,31 @@ fun StudioSlider(
     accent: Color = Sc.Blue,
     onFraction: (Float) -> Unit,
 ) {
+    val change by androidx.compose.runtime.rememberUpdatedState(onFraction)
+    val current by androidx.compose.runtime.rememberUpdatedState(fraction)
     Box(
-        modifier.height(16.dp).pointerInput(Unit) {
-            detectDragGestures(
-                onDragStart = { onFraction((it.x / size.width).coerceIn(0f, 1f)) },
-            ) { change, _ ->
-                onFraction((change.position.x / size.width).coerceIn(0f, 1f))
-                change.consume()
+        modifier.height(20.dp).pointerInput(Unit) {
+            androidx.compose.foundation.gestures.awaitEachGesture {
+                val down = androidx.compose.foundation.gestures.awaitFirstDown()
+                down.consume()
+                var last = down.position.x
+                var v = current
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val c = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!c.pressed) break
+                    val travel = (size.width - 2 * KnobInset.toPx()).coerceAtLeast(1f)
+                    v = (v + (c.position.x - last) / travel).coerceIn(0f, 1f)
+                    last = c.position.x
+                    change(v)
+                    c.consume()
+                }
             }
         }.pointerInput(Unit) {
             detectTapGestures { onFraction((it.x / size.width).coerceIn(0f, 1f)) }
         },
     ) {
-        Canvas(Modifier.fillMaxWidth().height(16.dp)) {
+        Canvas(Modifier.fillMaxWidth().height(20.dp)) {
             val cy = size.height / 2f
             val track = 3.dp.toPx()
             drawRoundRect(
@@ -309,34 +331,32 @@ fun StudioSlider(
                 Size(size.width, track),
                 androidx.compose.ui.geometry.CornerRadius(track / 2f),
             )
-            val x = fraction.coerceIn(0f, 1f) * size.width
+            val inset = KnobInset.toPx()
+            val x = inset + (size.width - 2 * inset) * fraction.coerceIn(0f, 1f)
             drawRoundRect(
                 accent,
                 Offset(0f, cy - track / 2f),
                 Size(x, track),
                 androidx.compose.ui.geometry.CornerRadius(track / 2f),
             )
-            drawCircle(Color(0xFFE9EDEA), 6.dp.toPx(), Offset(x, cy))
+            val knob = Size(16.dp.toPx(), 10.dp.toPx())
+            drawRoundRect(
+                Color.White,
+                Offset(x - knob.width / 2f, cy - knob.height / 2f),
+                knob,
+                androidx.compose.ui.geometry.CornerRadius(knob.height / 2f),
+            )
         }
     }
 }
 
 /**
- * Procraft's own slider, ported rather than imitated.
+ * Procraft's slider as its brush controls use it: a 55dp column with the name at the left, the
+ * value in a pill at the right, and [StudioSlider]'s own track underneath.
  *
- * The two things that make it feel the way it does are both here, and both were missing from the
- * one this replaces:
- *
- * - The knob moves **relatively**. A drag adds its travel to the value instead of jumping the knob
- *   to wherever the finger landed, so a slider set to 37 stays 37 until it is actually dragged, and
- *   a drag that starts anywhere on the track moves by the same amount. Our old slider snapped the
- *   value to the touch position on every move, which is why setting an exact number was guesswork
- *   and why the knob appeared to leap.
- * - The value is **curved**. Sizes above go up by `value^2.2`, so the low end -- where most brush
- *   sizes live -- gets two thirds of the track instead of the first percent of it.
- *
- * The look is Procraft's too: a 55dp column, the name and a pill 28dp tall, and a 20dp track with
- * a 16 x 10 white knob that overhangs its ends by 3.
+ * The track is the same widget every other slider in the studio uses, so the relative drag and
+ * the pill knob are not reimplemented per panel -- what a size slider feels like is what a
+ * hardness slider feels like.
  */
 @Composable
 fun ProSlider(
@@ -346,8 +366,6 @@ fun ProSlider(
     modifier: Modifier = Modifier,
     onFraction: (Float) -> Unit,
 ) {
-    val change by androidx.compose.runtime.rememberUpdatedState(onFraction)
-    val current by androidx.compose.runtime.rememberUpdatedState(fraction)
     Column(modifier.fillMaxWidth().height(55.dp)) {
         Row(
             Modifier.offset(y = 2.dp).fillMaxWidth().height(28.dp).padding(start = 10.dp, end = 3.5.dp),
@@ -370,50 +388,10 @@ fun ProSlider(
                 Text(valueText, color = Sc.Title, fontSize = 16.sp, maxLines = 1, softWrap = false)
             }
         }
-        Box(
-            Modifier.fillMaxWidth().height(20.dp).padding(start = 10.dp, end = 10.5.dp)
-                .pointerInput(Unit) {
-                    androidx.compose.foundation.gestures.awaitEachGesture {
-                        val down = androidx.compose.foundation.gestures.awaitFirstDown()
-                        down.consume()
-                        var last = down.position.x
-                        var v = current
-                        try {
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                val c = event.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!c.pressed) break
-                                // Relative: the knob follows the drag, as far as it travels.
-                                val inset = KnobInset.toPx()
-                                val travel = (size.width - 2 * inset).coerceAtLeast(1f)
-                                v = (v + (c.position.x - last) / travel).coerceIn(0f, 1f)
-                                last = c.position.x
-                                change(v)
-                                c.consume()
-                            }
-                        } finally {
-                            // Nothing to commit: the value was set as it moved.
-                        }
-                    }
-                }
-                .drawBehind {
-                    val y = size.height / 2f
-                    val t = fraction.coerceIn(0f, 1f)
-                    // The knob's middle travels from 5 in at either end, so it overhangs by 3.
-                    val inset = KnobInset.toPx()
-                    val x = inset + (size.width - 2 * inset) * t
-                    val line = 3.dp.toPx()
-                    drawLine(Sc.SliderTrack, Offset(0f, y), Offset(size.width, y), line)
-                    drawLine(Sc.Blue, Offset(0f, y), Offset(x, y), line)
-                    val knob = Size(16.dp.toPx(), 10.dp.toPx())
-                    drawRoundRect(
-                        Color.White,
-                        Offset(x - knob.width / 2f, y - knob.height / 2f),
-                        knob,
-                        androidx.compose.ui.geometry.CornerRadius(knob.height / 2f),
-                    )
-                },
-        )
+        StudioSlider(
+            fraction = fraction,
+            modifier = Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.5.dp),
+        ) { onFraction(it) }
     }
 }
 
