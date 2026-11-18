@@ -27,6 +27,7 @@ enum class Tool(val label: String) {
     Brush("Brush"),
     Pencil("Pencil"),
     Eraser("Eraser"),
+    Crop("Crop"),
     Fill("Fill"),
     Gradient("Gradient"),
     Clone("Clone"),
@@ -416,6 +417,27 @@ class PhotoEditorViewModel : ViewModel() {
         val last = points.last()
         when {
             paintsByDrag -> paintStroke(points)
+            // A gradient and a crop both run between the drag's ends: the line the artist drew is
+            // the direction and the box. Falling through to the tap was spending a whole gesture
+            // on one point.
+            tool == Tool.Gradient -> command("paint.gradient", gradientDragParams(first, last))
+            tool == Tool.Crop -> command(
+                "image.crop",
+                JSONObject()
+                    .put("x", minOf(first.first, last.first).toDouble())
+                    .put("y", minOf(first.second, last.second).toDouble())
+                    .put("width", kotlin.math.abs(last.first - first.first).toDouble())
+                    .put("height", kotlin.math.abs(last.second - first.second).toDouble()),
+            )
+            // The Move tool drags the active layer, which is what its name says and what the
+            // studio's canvas does with the same drag.
+            tool == Tool.Move -> command(
+                "layer.move",
+                JSONObject()
+                    .put("dx", (last.first - first.first).toDouble())
+                    .put("dy", (last.second - first.second).toDouble())
+                    .put("coalesce", "classic.move"),
+            )
             tool == Tool.Rect -> dragSelection(first, last)
             // The Lasso follows the finger: its path is the selection's outline, thinned to the
             // corners of the shape it drew, so a long gesture doesn't send hundreds of points.
@@ -436,9 +458,9 @@ class PhotoEditorViewModel : ViewModel() {
             Tool.Wand -> command("select.magicWand", JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("tolerance", 32))
             Tool.Eyedropper -> pickColour(x, y)
             Tool.Zoom -> zoomTo((zoom * 1.5f).coerceAtMost(16f))
-            // Move has nothing to move yet (no layer transform in this build); the marquee tools
-            // need a drag, and a tap gives them a 1x1 box, which selects nothing on purpose.
-            Tool.Move, Tool.Lasso, Tool.Rect -> Unit
+            // A tap is not a drag: Move needs a distance, Crop a box, and the marquee tools a
+            // shape. A tap with one of them is deliberately a no-op rather than a 1x1 selection.
+            Tool.Move, Tool.Lasso, Tool.Rect, Tool.Crop -> Unit
             Tool.Type -> command(
                 "type.create",
                 JSONObject().put("x", x.toDouble()).put("y", y.toDouble()).put("text", "Text").put("size", 24),
@@ -447,22 +469,38 @@ class PhotoEditorViewModel : ViewModel() {
             // The studio's Place Image tool opens the picker there; the classic panel has no
             // picker of its own, and a tap must not leave a paint dab behind.
             Tool.Place -> Unit
-            // The Clone Stamp takes its source from the first tap (as ⌥-click does on a desktop);
-            // the Healing Brush needs none, it reads the pixels around the stroke.
-            Tool.Clone -> cloneSource = x to y // the next drag paints from here
+            // The Clone Stamp takes its source from the first tap (as ⌥-click does on a desktop)
+            // and the next drag paints from there; the Healing Brush needs no source, it reads
+            // the pixels around the stroke.
+            Tool.Clone -> cloneSource = x to y
             Tool.Heal -> paintStroke(listOf(x to y))
             else -> if (paintsByDrag) paintStroke(listOf(x to y)) else Unit
         }
     }
 
+    /** The Gradient tool's drag: front colour to back colour between the drag's two ends. */
+    private fun gradientDragParams(from: Pair<Float, Float>, to: Pair<Float, Float>): JSONObject =
+        JSONObject()
+            .put("x", from.first.toDouble())
+            .put("y", from.second.toDouble())
+            .put("x2", to.first.toDouble())
+            .put("y2", to.second.toDouble())
+            .put("color", hex(foreground))
+            .put("color2", hex(background))
+
     /** The Gradient tool's tap: a foreground to background sweep that ends at the canvas centre. */
     private fun gradientParams(x: Float, y: Float): JSONObject {
         val w = status?.active?.width?.toInt() ?: 1000
         val h = status?.active?.height?.toInt() ?: 1000
+        // The engine reads the drag as two corners and two colours. Sending `from`/`to`/`colors`
+        // here made the Gradient a button that did nothing: the params arrived and were ignored.
         return JSONObject()
-            .put("from", org.json.JSONArray().put(x.toDouble()).put(y.toDouble()))
-            .put("to", org.json.JSONArray().put((w / 2).toDouble()).put((h / 2).toDouble()))
-            .put("colors", org.json.JSONArray().put(hex(foreground)).put(hex(background)))
+            .put("x", x.toDouble())
+            .put("y", y.toDouble())
+            .put("x2", (w / 2).toDouble())
+            .put("y2", (h / 2).toDouble())
+            .put("color", hex(foreground))
+            .put("color2", hex(background))
     }
 
     /** The Eyedropper: the composite pixel under the finger becomes the foreground. */

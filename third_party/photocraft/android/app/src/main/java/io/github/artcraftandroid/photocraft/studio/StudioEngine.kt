@@ -60,6 +60,19 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     var brushPresets: List<String> by mutableStateOf(emptyList())
         private set
 
+    /**
+     * The brushes with the settings that draw them.
+     *
+     * The names alone were enough for a list that only had to list; the panel now draws each
+     * brush's own stroke and shows its tip, so the settings have to travel with the name.
+     */
+    var brushLibrary: List<BrushInfo> by mutableStateOf(emptyList())
+        private set
+
+    /** The brush in hand: what the panel's hardness, spacing, flow and taper controls edit. */
+    var brush: BrushInfo by mutableStateOf(BrushInfo.fallback)
+        private set
+
     val hasDocument: Boolean get() = status?.active != null
 
     /** UniFFI lifts Rust's `u64` as `ULong`; the engine's ids are signed here. */
@@ -542,12 +555,130 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     }
 
     suspend fun refreshBrushes() = withContext(Dispatchers.IO) {
-        brushPresets = runCatching {
+        val library = runCatching {
             val o = JSONObject(engine.execute("brush.presets.list", "{}"))
             val arr = o.optJSONArray("presets") ?: JSONArray()
-            (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name")?.takeIf(String::isNotEmpty) }
+            (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.let(BrushInfo::from) }
         }.getOrDefault(emptyList())
+        brushLibrary = library
+        brushPresets = library.map { it.name }
+        // A brush already in hand keeps it; a fresh studio takes the first one the engine lists.
+        if (brush.name.isEmpty() || library.none { it.name == brush.name }) {
+            brush = library.firstOrNull() ?: BrushInfo.fallback
+        }
     }
+
+    /**
+     * The brush's own settings: tip, spacing, flow, taper and the rest.
+     *
+     * `setBrush` picks a brush whole; this edits the one in hand, which is what makes the panel's
+     * controls change the next stroke instead of resetting when the hand moves.
+     */
+    suspend fun setBrushParams(params: JSONObject) = withContext(Dispatchers.IO) {
+        val reply = runCatching { JSONObject(engine.execute("brush.set", params)) }.getOrNull()
+        if (reply != null) brush = BrushInfo.from(reply)
+    }
+
+    /**
+     * Nudge the active layer: the Move tool, which had no way to move anything.
+     *
+     * The offset is a property of the layer, so a moved picture keeps its own pixels and a second
+     * nudge adds to the first rather than compounding a resample.
+     */
+    suspend fun moveLayer(dx: Float, dy: Float, coalesce: String = "photocraft.move") =
+        withContext(Dispatchers.IO) {
+            if (dx == 0f && dy == 0f) return@withContext
+            engine.execute(
+                "layer.move",
+                JSONObject()
+                    .put("dx", dx.toDouble())
+                    .put("dy", dy.toDouble())
+                    .put("coalesce", coalesce),
+            )
+            refreshAll()
+        }
+
+    /**
+     * A drag with the Crop tool: the page cut down to the rectangle that was dragged.
+     *
+     * The rail's crop was mapped to the Rect tool, so the tool made a rectangle layer instead of
+     * cutting the picture down -- a tool whose name and whose consequence disagreed.
+     */
+    suspend fun cropDrag(from: Pair<Float, Float>, to: Pair<Float, Float>) =
+        withContext(Dispatchers.IO) {
+            val (x0, y0) = from
+            val (x1, y1) = to
+            // A drag too small to be a crop would leave a one-pixel page; it is refused rather
+            // than guessed at.
+            if (kotlin.math.abs(x1 - x0) < 2f || kotlin.math.abs(y1 - y0) < 2f) return@withContext
+            engine.execute(
+                "image.crop",
+                JSONObject()
+                    .put("x", minOf(x0, x1).toDouble())
+                    .put("y", minOf(y0, y1).toDouble())
+                    .put("width", kotlin.math.abs(x1 - x0).toDouble())
+                    .put("height", kotlin.math.abs(y1 - y0).toDouble()),
+            )
+            refreshAll()
+        }
+
+    /**
+     * A drag with the Clone tool: the pixels under the source point, laid along the path.
+     *
+     * The rail has offered Clone since the restore and the engine has had `paint.cloneStamp` all
+     * along; nothing called it, so the tool was a cursor. The source is where the drag started,
+     * which is the one point a rail without a separate source-picker can offer honestly.
+     */
+    suspend fun cloneDrag(points: List<Pair<Float, Float>>, size: Float, opacity: Int) =
+        withContext(Dispatchers.IO) {
+            if (points.size < 2) return@withContext
+            val (sx, sy) = points.first()
+            val arr = JSONArray()
+            points.forEach { (x, y) -> arr.put(JSONArray().put(x.toDouble()).put(y.toDouble())) }
+            engine.execute(
+                "paint.cloneStamp",
+                JSONObject()
+                    .put("points", arr)
+                    .put("source", JSONArray().put(sx.toDouble()).put(sy.toDouble()))
+                    .put("size", size.toDouble())
+                    .put("opacity", opacity.coerceIn(0, 100))
+                    .put("coalesce", "photocraft.clone"),
+            )
+            refreshAll()
+        }
+
+    /** A drag with the Heal tool: the blurred composite, mixed in under the path. */
+    suspend fun healDrag(points: List<Pair<Float, Float>>, size: Float) =
+        withContext(Dispatchers.IO) {
+            if (points.size < 2) return@withContext
+            val arr = JSONArray()
+            points.forEach { (x, y) -> arr.put(JSONArray().put(x.toDouble()).put(y.toDouble())) }
+            engine.execute(
+                "paint.spotHealing",
+                JSONObject()
+                    .put("points", arr)
+                    .put("size", size.toDouble())
+                    .put("coalesce", "photocraft.heal"),
+            )
+            refreshAll()
+        }
+
+    /** A drag with the Gradient tool: front colour to back colour, along the drag. */
+    suspend fun gradientDrag(from: Pair<Float, Float>, to: Pair<Float, Float>) =
+        withContext(Dispatchers.IO) {
+            val (x0, y0) = from
+            val (x1, y1) = to
+            // A drag too short to give a direction falls back to left-to-right across the whole
+            // canvas, rather than failing on a tap that slipped.
+            val flat = kotlin.math.abs(x1 - x0) < 1f && kotlin.math.abs(y1 - y0) < 1f
+            val p = JSONObject()
+                .put("x", x0.toDouble())
+                .put("y", y0.toDouble())
+                .put("x2", (if (flat) width.toFloat() else x1).toDouble())
+                .put("y2", (if (flat) y0 else y1).toDouble())
+            engine.execute("paint.gradient", p)
+            refreshAll()
+        }
 
     fun release() = engine.release()
 }

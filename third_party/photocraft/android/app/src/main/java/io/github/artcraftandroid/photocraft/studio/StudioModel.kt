@@ -112,7 +112,7 @@ object Workspaces {
             engineTool = {
                 when (it) {
                     "move" -> Tool.Move
-                    "crop" -> Tool.Rect
+                    "crop" -> Tool.Crop
                     "select" -> Tool.Lasso
                     "marquee" -> Tool.Lasso
                     "wand" -> Tool.Wand
@@ -296,6 +296,61 @@ val StudioBrushes = listOf(
     "Natural Pencil 6B", "Natural Pencil 2B", "Natural Pencil 4B", "Compressed Charcoal",
     "Dense Graphite", "Round Dry Bristle", "Soft Chalk", "Fine Ink",
 )
+
+/**
+ * One brush, as the engine describes it.
+ *
+ * The panel draws each brush's own stroke from these numbers, so the list cannot show eight
+ * identical squiggles for eight different brushes: the silhouette, the grain and the taper that
+ * the canvas will use are the same numbers the sample is drawn from.
+ */
+data class BrushInfo(
+    val name: String = "",
+    val tip: String = "round",
+    val hardness: Float = 0.85f,
+    val grain: Float = 0f,
+    val grainScale: Float = 0.35f,
+    val grainMode: String = "canvas",
+    val spacing: Float = 0.08f,
+    val flow: Float = 1f,
+    val roundness: Float = 1f,
+    val rotation: Float = 0f,
+    val follow: Float = 0f,
+    val scatter: Float = 0f,
+    val jitter: Float = 0f,
+    val count: Int = 1,
+    val taper: Float = 0f,
+    val wet: Boolean = false,
+) {
+    companion object {
+        /** What the panel draws when the engine has not answered yet: a plain round pen. */
+        val fallback = BrushInfo(name = "Fine Ink", hardness = 1f, spacing = 0.05f)
+
+        /** Read one brush from the engine's JSON. Absent settings keep the fallback's values. */
+        fun from(o: org.json.JSONObject): BrushInfo {
+            val f = fallback
+            fun f32(key: String, d: Float) = o.optDouble(key, d.toDouble()).toFloat()
+            return BrushInfo(
+                name = o.optString("name").ifEmpty { o.optString("preset") }.ifEmpty { f.name },
+                tip = o.optString("tip").ifEmpty { f.tip },
+                hardness = f32("hardness", f.hardness),
+                grain = f32("grain", f.grain),
+                grainScale = f32("grainScale", f.grainScale),
+                grainMode = o.optString("grainMode").ifEmpty { f.grainMode },
+                spacing = f32("spacing", f.spacing),
+                flow = f32("flow", f.flow),
+                roundness = f32("roundness", f.roundness),
+                rotation = f32("rotation", f.rotation),
+                follow = f32("follow", f.follow),
+                scatter = f32("scatter", f.scatter),
+                jitter = f32("jitter", f.jitter),
+                count = o.optInt("count", f.count).coerceAtLeast(1),
+                taper = f32("taper", f.taper),
+                wet = o.optBoolean("wet", f.wet),
+            )
+        }
+    }
+}
 
 /**
  * The brush sets the Brushes panel steps through with its arrows.

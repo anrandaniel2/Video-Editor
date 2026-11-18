@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -600,8 +601,11 @@ private fun BrushesBody(a: StudioActions) {
     val e = a.engine
     val scope = rememberCoroutineScope()
     // The search text narrows the list; the set does too, by which brushes belong to it.
-    val brushes = (if (e.brushPresets.isEmpty()) StudioBrushes else e.brushPresets)
-        .filter { it.lowercase().contains(s.search.lowercase()) && StudioBrushSets.filters(s.category, it) }
+    // The brushes with the settings that draw them, so a row's sample is the stroke the canvas
+    // would make rather than the same squiggle eight times.
+    val all = if (e.brushLibrary.isEmpty()) StudioBrushes.map { BrushInfo(name = it) } else e.brushLibrary
+    val brushes = all
+        .filter { it.name.lowercase().contains(s.search.lowercase()) && StudioBrushSets.filters(s.category, it.name) }
     // `.brush-search`
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 8.dp).height(27.dp)
@@ -658,7 +662,8 @@ private fun BrushesBody(a: StudioActions) {
         }
     }
     Column(Modifier.fillMaxWidth().heightIn(max = 355.dp).verticalScroll(rememberScrollState())) {
-        brushes.forEachIndexed { i, name ->
+        brushes.forEachIndexed { _, info ->
+            val name = info.name
             val on = s.brush == name
             Column(
                 Modifier.fillMaxWidth().height(49.dp)
@@ -666,12 +671,17 @@ private fun BrushesBody(a: StudioActions) {
                     .border(1.dp, if (on) Color(0xFF358ED9) else Color.Transparent)
                     .clickable {
                         s.brush = name
-                        scope.engine { e.setBrush(preset = name) }
+                        scope.engine {
+                            e.setBrush(preset = name)
+                            // The engine replies with the brush it stored; the panel's own
+                            // controls then edit that, not a stale copy.
+                            e.refreshBrushes()
+                        }
                 }
                     .padding(horizontal = 10.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
-                BrushStrokeSample(i, Modifier.fillMaxWidth().height(31.dp))
+                BrushStrokeSample(info, Modifier.fillMaxWidth().height(31.dp))
                 Text(name, fontSize = 9.sp, color = Color(0xFFB9BEAF), maxLines = 1)
         }
         }
@@ -735,32 +745,178 @@ private fun BrushesBody(a: StudioActions) {
             s.setValue("brushOpacity", pct.toString())
             scope.engine { e.setBrush(opacity = pct / 100f) }
         }
+        // The brush's shape: the settings that make one brush unlike another. These edit the
+        // brush in hand (`brush.set`) rather than picking a preset, so the next stroke follows
+        // the slider that was just moved.
+        val brush = e.brush
+        val edit: (org.json.JSONObject) -> Unit = { o -> scope.engine { e.setBrushParams(o) } }
+        Spacer(Modifier.height(8.dp))
+        StudioValueSlider(
+            label = "Hardness",
+            fraction = brush.hardness,
+            valueText = "${(brush.hardness * 100).toInt()}%",
+            modifier = Modifier.fillMaxWidth(),
+        ) { f ->
+            // The hardness is part of the brush *and* of the tool state the panels read, so both
+            // are told: otherwise the slider and the preset list drift apart.
+            scope.engine { e.setBrush(hardness = f) }
+            edit(org.json.JSONObject().put("hardness", f.toDouble()))
+        }
+        Spacer(Modifier.height(8.dp))
+        StudioValueSlider(
+            label = "Grain",
+            fraction = brush.grain,
+            valueText = "${(brush.grain * 100).toInt()}%",
+            modifier = Modifier.fillMaxWidth(),
+        ) { f -> edit(org.json.JSONObject().put("grain", f.toDouble())) }
+        Spacer(Modifier.height(8.dp))
+        StudioValueSlider(
+            label = "Spacing",
+            fraction = ((brush.spacing - 0.02f) / 0.58f).coerceIn(0f, 1f),
+            valueText = "${(brush.spacing * 100).toInt()}%",
+            modifier = Modifier.fillMaxWidth(),
+        ) { f -> edit(org.json.JSONObject().put("spacing", (0.02f + f * 0.58f).toDouble())) }
+        Spacer(Modifier.height(8.dp))
+        StudioValueSlider(
+            label = "Flow",
+            fraction = brush.flow,
+            valueText = "${(brush.flow * 100).toInt()}%",
+            modifier = Modifier.fillMaxWidth(),
+        ) { f -> edit(org.json.JSONObject().put("flow", f.toDouble())) }
+        Spacer(Modifier.height(8.dp))
+        StudioValueSlider(
+            label = "Taper",
+            fraction = (brush.taper / 0.5f).coerceIn(0f, 1f),
+            valueText = "${(brush.taper * 100).toInt()}%",
+            modifier = Modifier.fillMaxWidth(),
+        ) { f -> edit(org.json.JSONObject().put("taper", (f * 0.5f).toDouble())) }
+        // The tip and the grain's mode are choices, not positions on a track: two rows of pills.
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for (tip in listOf("round", "chisel", "flat", "ragged", "cloud")) {
+                BrushChoicePill(
+                    text = tip.replaceFirstChar(Char::uppercase),
+                    on = brush.tip == tip,
+                    modifier = Modifier.weight(1f),
+                ) { edit(org.json.JSONObject().put("tip", tip)) }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for ((mode, label) in listOf("canvas" to "Canvas grain", "stamp" to "Travelling grain")) {
+                BrushChoicePill(
+                    text = label,
+                    on = brush.grainMode == mode,
+                    modifier = Modifier.weight(2f),
+                ) { edit(org.json.JSONObject().put("grainMode", mode)) }
+            }
+        }
     }
 }
-/** `.brush-preset svg`: the stroke sample, its width varying down the list. */
+
+/** One of the brush's either-or settings: the tip, or where its grain sits. */
 @Composable
-private fun BrushStrokeSample(index: Int, modifier: Modifier = Modifier) {
+private fun BrushChoicePill(
+    text: String,
+    on: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier
+            .height(24.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(if (on) Color(0xFF358ED9) else Color(0xFF1F201E))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, fontSize = 8.sp, maxLines = 1, color = if (on) Color.White else Color(0xFFB9BEAF))
+    }
+}
+/**
+ * `.brush-preset`: the brush's own stroke, drawn from the settings the canvas will use.
+ *
+ * The list used to show eight copies of one squiggle, which was honest about the engine and
+ * useless as a chooser. Here the width comes from the hardness, the edge is broken by the grain,
+ * the line thins where the brush tapers, and a bristle brush is drawn as several hairs. Two rows
+ * that look alike are two brushes that paint alike.
+ */
+@Composable
+private fun BrushStrokeSample(info: BrushInfo, modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val w = size.width
         val h = size.height
-        val width = 2f + (index % 5) * 2f
         val path = Path().apply {
             moveTo(w * 0.015f, h * 0.72f)
             quadraticBezierTo(w * 0.26f, h * 0.15f, w * 0.5f, h * 0.47f)
             quadraticBezierTo(w * 0.75f, h * 0.79f, w * 0.985f, h * 0.28f)
         }
-        drawPath(
-            path,
-            Color(0xFFEEEEEE).copy(alpha = 0.85f),
-            style = Stroke(width = width, cap = StrokeCap.Round),
-        )
-        if (index < 5) {
-            val ghost = Path().apply {
-                moveTo(w * 0.03f, h * 0.81f)
-                quadraticBezierTo(w * 0.26f, h * 0.22f, w * 0.52f, h * 0.59f)
-                quadraticBezierTo(w * 0.76f, h * 0.96f, w * 0.985f, h * 0.37f)
+        // A bristle brush draws several hairs at once; the rest draw one body. This is the one
+        // thing that separates a rake from a round brush at thumbnail size.
+        val hairs = when (info.tip) {
+            "flat" -> 3
+            "chisel" -> 2
+            else -> if (info.scatter > 0.35f) info.count.coerceAtLeast(2) else 1
         }
-            drawPath(ghost, Color(0xFFAAAAAA), style = Stroke(width = 0.6f))
+        val body = (1.5f + info.hardness * 3.5f + (1f - info.roundness) * 3f).coerceIn(1f, 9f)
+        val colour = Color(0xFFEEEEEE)
+        for (hair in 0 until hairs) {
+            // The hairs sit side by side across the stroke, so its edge looks broken rather than
+            // soft -- which is what a bristle and a flat brush are.
+            val shift = if (hairs == 1) 0f else (hair / (hairs - 1f) - 0.5f) * body * 0.9f
+            val alpha = (1f - info.grain * 0.4f * (hair % 2)) * 0.9f
+            translate(top = shift) {
+                drawPath(
+                    path,
+                    colour.copy(alpha = alpha.coerceIn(0.15f, 1f)),
+                    style = Stroke(
+                        width = if (hairs == 1) body else body / hairs,
+                        cap = if (info.tip == "ragged" || info.tip == "cloud") {
+                            StrokeCap.Butt
+                        } else {
+                            StrokeCap.Round
+                        },
+                    ),
+                )
+            }
+        }
+        // A tapered brush starts and finishes thin; drawing the ends at full width would say the
+        // taper setting does nothing.
+        if (info.taper > 0.01f) {
+            val thin = (1f - info.taper.coerceIn(0f, 0.5f) * 1.6f).coerceAtLeast(0.25f)
+            val ends = listOf(
+                Path().apply {
+                    moveTo(w * 0.015f, h * 0.72f)
+                    quadraticBezierTo(w * 0.09f, h * 0.55f, w * 0.19f, h * 0.42f)
+                },
+                Path().apply {
+                    moveTo(w * 0.80f, h * 0.36f)
+                    quadraticBezierTo(w * 0.91f, h * 0.31f, w * 0.985f, h * 0.28f)
+                },
+            )
+            for (fade in ends) {
+                drawPath(
+                    fade,
+                    Color(0xFF1B1C1A).copy(alpha = (1f - thin).coerceIn(0f, 1f)),
+                    style = Stroke(width = body * 0.95f, cap = StrokeCap.Round),
+                )
+            }
+        }
+        // The grain: tooth along the stroke, as many speckles as its depth says. This is what
+        // makes charcoal and chalk look like themselves in the list.
+        if (info.grain > 0.02f) {
+            val n = (info.grain * 26).toInt().coerceAtLeast(1)
+            for (k in 0 until n) {
+                val t = (k + 0.5f) / n
+                val x = w * (0.03f + 0.94f * t)
+                // The same curve the path follows, so the speckles sit on the stroke.
+                val y = h * (0.72f - 0.44f * kotlin.math.sin(t * 3.14159f))
+                drawCircle(
+                    Color(0xFF1B1C1A).copy(alpha = 0.5f + 0.3f * (k % 3) / 2f),
+                    radius = 0.4f + info.grain * 1.5f,
+                    center = Offset(x, y),
+                )
+            }
         }
     }
 }

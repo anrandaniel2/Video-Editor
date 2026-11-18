@@ -57,7 +57,10 @@ fun StudioCanvas(
     val tool = remember(state.selectedTool, state.workspace) {
         Workspaces.of(state.workspace).engineTool(state.selectedTool)
     }
-    val painting = tool in setOf(Tool.Brush, Tool.Pencil, Tool.Eraser)
+    // The tools that answer a drag. Clone and Heal paint through their own commands and the
+    // Gradient draws along the drag, so listing only the three brush modes left three rail tools
+    // with no drag at all -- tools that moved a cursor and nothing else.
+    val painting = tool in setOf(Tool.Brush, Tool.Pencil, Tool.Eraser, Tool.Clone, Tool.Heal, Tool.Gradient, Tool.Crop)
     // The workspaces that keep their shapes: Vector draws rectangles and ellipses as geometry, and
     // Layout draws picture frames. The reference's own tools are named by id, and those ids are
     // what says which of the four the drag makes.
@@ -212,22 +215,42 @@ fun StudioCanvas(
             // inert, which is most of why the Pixel and Vector workspaces felt dead.
             .pointerInput(tool) {
                 if ((tool == Tool.Rect || tool == Tool.Lasso || tool == Tool.Move) && vectorTool == null) {
-                    detectDragGestures(
-                        onDragStart = { pos -> strokePoints = listOf(toDocument(pos)) },
-                        onDragEnd = {
-                            val points = strokePoints
-                            strokePoints = emptyList()
-                            if (points.size > 1) {
+                    // Move is the one of the three that changes the picture rather than making a
+                    // selection, so its drag is sent as a translation of the active layer.
+                    if (tool == Tool.Move) {
+                        detectDragGestures { change, drag ->
+                            // The drag is in view pixels; the layer's offset is in document pixels.
+                            val r = documentRect()
+                            if (r.width > 0f && r.height > 0f) {
                                 scope.launch {
-                                    runCatching { engine.selectByDrag(tool, points) }
-                                        .onFailure { onFailure(it.message ?: "The selection failed.") }
+                                    runCatching {
+                                        engine.moveLayer(
+                                            drag.x / r.width * state.docWidth,
+                                            drag.y / r.height * state.docHeight,
+                                        )
+                                    }.onFailure { onFailure(it.message ?: "That could not be moved.") }
                                 }
                             }
-                        },
-                        onDragCancel = { strokePoints = emptyList() },
-                    ) { change, _ ->
-                        strokePoints = strokePoints + toDocument(change.position)
-                        change.consume()
+                            change.consume()
+                        }
+                    } else {
+                        detectDragGestures(
+                            onDragStart = { pos -> strokePoints = listOf(toDocument(pos)) },
+                            onDragEnd = {
+                                val points = strokePoints
+                                strokePoints = emptyList()
+                                if (points.size > 1) {
+                                    scope.launch {
+                                        runCatching { engine.selectByDrag(tool, points) }
+                                            .onFailure { onFailure(it.message ?: "The selection failed.") }
+                                    }
+                                }
+                            },
+                            onDragCancel = { strokePoints = emptyList() },
+                        ) { change, _ ->
+                            strokePoints = strokePoints + toDocument(change.position)
+                            change.consume()
+                        }
                     }
                 }
             }
@@ -246,8 +269,19 @@ fun StudioCanvas(
                                 val size = state.value("brushSize").toFloatOrNull() ?: 24f
                                 val opacity = state.value("brushOpacity").toIntOrNull() ?: 100
                                 scope.launch {
-                                    runCatching { engine.stroke(points, colour, size, opacity, tool) }
-                                        .onFailure { onFailure(it.message ?: "The stroke failed.") }
+                                    runCatching {
+                                        when (tool) {
+                                            // A crop runs between the drag's ends, like the
+                                            // gradient: it is the box, not the path.
+                                            Tool.Crop -> engine.cropDrag(points.first(), points.last())
+                                            Tool.Clone -> engine.cloneDrag(points, size, opacity)
+                                            Tool.Heal -> engine.healDrag(points, size)
+                                            // The gradient runs between the drag's ends, not along
+                                            // its path: that is what the tool's line means.
+                                            Tool.Gradient -> engine.gradientDrag(points.first(), points.last())
+                                            else -> engine.stroke(points, colour, size, opacity, tool)
+                                        }
+                                    }.onFailure { onFailure(it.message ?: "The stroke failed.") }
                                 }
                             }
                         },

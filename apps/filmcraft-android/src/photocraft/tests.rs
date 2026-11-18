@@ -1303,3 +1303,35 @@ fn every_tool_in_the_rail_has_a_command() {
         assert!(super::commands::known(id), "the rail needs `{id}` and the engine does not have it");
     }
 }
+
+#[test]
+fn the_crop_tool_cuts_the_page_down() {
+    // Crop was mapped to the Rectangle tool, so it made a shape where it should have cut the
+    // picture down. A crop is a smaller page with everything on it shifted by the same amount.
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.stroke", json!({ "points": [[20.0, 20.0]], "color": "#000000", "size": 6.0 }));
+    assert_eq!(at(&pixels(&s), 32, 20, 20), [0, 0, 0, 255], "the dot is at 20,20");
+
+    let reply = run(&mut s, "image.crop", json!({ "x": 10.0, "y": 10.0, "width": 12.0, "height": 12.0 }));
+    assert_eq!(reply["width"], json!(12));
+    assert_eq!(reply["height"], json!(12));
+    assert_eq!(s.active().unwrap().doc.width(), 12, "the page is now twelve pixels wide");
+    // The dot was at the crop's corner plus ten, so it is now at 10,10 inside the smaller page.
+    assert_eq!(at(&pixels(&s), 12, 10, 10), [0, 0, 0, 255], "the dot kept its place in the frame");
+
+    assert!(s.active_mut().unwrap().undo(), "a crop is one undoable step");
+    assert_eq!(s.active().unwrap().doc.width(), 32, "undo restored the whole page");
+    assert_eq!(at(&pixels(&s), 32, 20, 20), [0, 0, 0, 255], "and the dot's original place");
+}
+
+#[test]
+fn a_crop_refuses_to_leave_an_unusable_page() {
+    let mut s = session();
+    assert!(
+        super::commands::execute(&mut s, "image.crop", json!({ "x": 0.0, "y": 0.0, "width": 0.0, "height": 5.0 }))
+            .is_err(),
+        "a crop with no width was accepted"
+    );
+    assert_eq!(s.active().unwrap().doc.width(), 32, "the refused crop left the page alone");
+}

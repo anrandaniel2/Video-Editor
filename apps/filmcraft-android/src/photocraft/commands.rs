@@ -40,6 +40,7 @@ pub const IDS: &[&str] = &[
     "file.new",
     "image.adjustments.curves",
     "image.adjustments.levels",
+    "image.crop",
     "layer.delete",
     "layer.duplicate",
     "layer.layerMask.revealAll",
@@ -195,6 +196,44 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             doc.active_layer = doc.doc.layers().last().map(|l| l.id);
             doc.touch();
             Ok(json!({ "deleted": id }))
+        }
+        // `image.crop`: the Crop tool's drag. The rail's crop was mapped to Rect, so the tool drew
+        // a rectangle layer where it should have cut the picture down -- a tool whose name and
+        // whose consequence disagreed. A crop is a smaller page with everything on it shifted by
+        // the same amount, so the picture stays where the artist put it inside the new frame.
+        "image.crop" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let x = number(&params, "x")?;
+            let y = number(&params, "y")?;
+            let w = number(&params, "width")?;
+            let h = number(&params, "height")?;
+            let (pw, ph) = (f64::from(doc.doc.width()), f64::from(doc.doc.height()));
+            // A crop with no area, or one that reaches nowhere, would leave an unusable page.
+            if w < 1.0 || h < 1.0 {
+                return Err("A crop needs a width and a height.".into());
+            }
+            let x0 = x.floor().clamp(0.0, pw - 1.0);
+            let y0 = y.floor().clamp(0.0, ph - 1.0);
+            let x1 = (x + w).ceil().clamp(x0 + 1.0, pw);
+            let y1 = (y + h).ceil().clamp(y0 + 1.0, ph);
+            let (cw, ch) = ((x1 - x0) as u32, (y1 - y0) as u32);
+            doc.push_history("Crop");
+            doc.doc.page_mut().width = cw;
+            doc.doc.page_mut().height = ch;
+            doc.doc.page_mut().selection = None;
+            // Everything moves up and left by the crop's corner, so nothing jumps in the frame.
+            // A painted layer's buffer is the page's own size, so it is cut down with the page --
+            // an offset alone would leave it reading with the wrong row stride. A shape, a text run
+            // and a picture are drawn in document coordinates, so for those the offset is what
+            // moves them.
+            // A painted layer's buffer is the page's own size, so the old stride is the page's
+            // width as it was before the crop.
+            let (ox, oy, old_w) = (x0 as u32, y0 as u32, pw as u32);
+            for layer in doc.doc.layers_mut() {
+                crop_layer(layer, ox, oy, cw, ch, old_w);
+            }
+            doc.touch();
+            Ok(json!({ "width": cw, "height": ch }))
         }
         // `layer.move`: the Move tool's drag, as a nudge of the layer rather than a selection.
         //
@@ -832,11 +871,43 @@ pub fn enabled(session: &Session, id: &str) -> Result<(), Fail> {
     Ok(())
 }
 
-/// The brush presets the panel lists.
-///
-/// The studio shows these as names; each is a size/hardness pair the engine turns into a tip. They
-/// are the same set the drawing canvas offers, so a brush picked in one place means the same thing
-/// in the other.
+/// Cut a layer down to the crop's rectangle, which is what a crop does to what it keeps.
+fn crop_layer(
+    layer: &mut crate::photocraft::model::Layer,
+    x0: u32,
+    y0: u32,
+    w: u32,
+    h: u32,
+    stride: u32,
+) {
+    use crate::photocraft::model::Content;
+    match &mut layer.content {
+        Content::Pixels(Some(pixels)) => {
+            // The buffer is the page as it was. Read the part that survived, at the old stride.
+            let mut cut = vec![0u8; (w as usize) * (h as usize) * 4];
+            for row in 0..h as usize {
+                let from = ((y0 as usize + row) * stride as usize + x0 as usize) * 4;
+                let to = row * w as usize * 4;
+                let len = w as usize * 4;
+                if from + len <= pixels.len() {
+                    cut[to..to + len].copy_from_slice(&pixels[from..from + len]);
+                }
+            }
+            *pixels = std::sync::Arc::new(cut);
+        }
+        // A shape, a text run and a picture are drawn where they say they are, in document
+        // coordinates: the offset is what moves them into the new frame.
+        Content::Shape(_) | Content::Text(_) | Content::Picture(_) => {
+            layer.offset.0 -= f64::from(x0);
+            layer.offset.1 -= f64::from(y0);
+        }
+        _ => {}
+    }
+    for child in &mut layer.children {
+        crop_layer(child, x0, y0, w, h, stride);
+    }
+}
+
 /// The brushes the studio's panel lists, in its own order and with its own names.
 ///
 /// These are the eight the interface declares — the same eight Procraft offers — and each one is
