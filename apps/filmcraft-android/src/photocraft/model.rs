@@ -444,6 +444,15 @@ impl Blend {
 #[derive(Clone, Debug)]
 pub struct Document {
     pub name: String,
+    /// A serial number, unique for the life of the process and never copied.
+    ///
+    /// The revision counter says whether the document *changed*; it cannot say whether this is the
+    /// same document at all, because a new one starts at the same revision. The interface has to
+    /// tell those apart: opening a picture while the studio is starting used to leave the studio
+    /// showing a different, blank document, because nothing told it that the document it had was
+    /// not the one it now had. `page.duplicate` clones a page, and a page carries no serial, so a
+    /// copy cannot inherit one either.
+    pub serial: u64,
     /// The pages, in the order the Pages panel lists them. Never empty.
     pub pages: Vec<Page>,
     /// Which page the canvas, the layers panel and every tool act on.
@@ -466,6 +475,15 @@ pub struct Page {
     pub selection: Option<Vec<u8>>,
 }
 
+/// The next document serial. Atomic so two documents can never share one, whichever thread
+/// creates them; the engine's mutex makes that unlikely, but a shared number would break the
+/// interface's whole reason for reading it.
+fn next_serial() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 impl Document {
     /// A new document with one opaque background layer.
     pub fn new(name: impl Into<String>, width: u32, height: u32, background: &str) -> Result<Self, String> {
@@ -484,6 +502,7 @@ impl Document {
         let fill = parse_colour(background)?.map(|c| filled(width, height, c));
         let mut doc = Self {
             name: name.into(),
+            serial: next_serial(),
             pages: vec![Page { name: "Page 1".into(), width, height, layers: Vec::new(), selection: None }],
             active_page: 0,
             next_layer: 1,
@@ -735,6 +754,9 @@ impl Document {
             "history": history,
             // The Pages panel needs the whole list, not just the one on screen.
             "activePage": self.active_page,
+            // Which document this is, so the interface can tell a new document from an edited
+            // one. `revision` cannot: every document starts at the same revision.
+            "serial": self.serial,
             "pages": self.pages.iter().enumerate().map(|(i, p)| json!({
                 "index": i,
                 "name": p.name,

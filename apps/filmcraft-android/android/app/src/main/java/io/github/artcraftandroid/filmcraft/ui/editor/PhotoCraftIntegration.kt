@@ -164,6 +164,12 @@ internal fun PhotoEditorPanel(ed: EditorController, close: () -> Unit) {
             // Creating and opening are coroutines in the model: wait for the document, or the
             // reason there is none.
             vm.awaitDocument()
+            // Then wait until the document is the one that was just asked for. Joining the job
+            // only says the engine call returned: `status` is a separate read, and the studio
+            // mounts the moment the document exists. Waiting on the identity is what stops the
+            // studio appearing on a document that is about to be replaced -- which is how an
+            // imported picture ended up behind a blank canvas.
+            vm.awaitStudioDocument()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

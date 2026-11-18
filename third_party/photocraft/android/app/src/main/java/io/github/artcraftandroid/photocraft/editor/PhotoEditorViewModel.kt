@@ -229,6 +229,23 @@ class PhotoEditorViewModel : ViewModel() {
      */
     suspend fun awaitDocument() = openJob?.join()
 
+    /**
+     * Wait until the studio's own view of the document is the one the engine has.
+     *
+     * Joining [openJob] says the engine call returned; `status` is a separate read, so the studio
+     * can still be opened onto the document that is about to be replaced. This waits for the
+     * serial the engine reports, which is what tells one document from another.
+     */
+    suspend fun awaitStudioDocument(timeoutMillis: Long = 4_000) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            val studio = studioEngine
+            runCatching { studio.refreshDocument() }
+            if (studio.serial > 0L && studio.hasDocument) return
+            kotlinx.coroutines.delay(16)
+        }
+    }
+
     /** Run one engine command, then re-render. */
     fun command(id: String, params: JSONObject = JSONObject()) {
         val job = viewModelScope.launch {

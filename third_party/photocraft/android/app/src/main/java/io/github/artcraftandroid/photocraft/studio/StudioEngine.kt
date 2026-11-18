@@ -46,6 +46,17 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
     var activePage: Int by mutableStateOf(0)
         private set
 
+    /**
+     * Which document this is.
+     *
+     * The revision only moves when the document changes; two different documents both start at
+     * revision 1. So a canvas watching the revision cannot tell that the picture it was showing
+     * has been replaced by another document -- which is how a studio that opened while a picture
+     * was still decoding kept showing its own blank canvas.
+     */
+    var serial: Long by mutableStateOf(0L)
+        private set
+
     var brushPresets: List<String> by mutableStateOf(emptyList())
         private set
 
@@ -441,7 +452,25 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
 
     // ---------------------------------------------------------------- reads
 
+    /**
+     * Re-read the document's identity and status, without re-rendering or re-walking the layers.
+     *
+     * This is what a caller waiting for a particular document needs: the studio can be opened on
+     * a document that is about to be replaced, so "is there a document?" is not enough, and asking
+     * for a full refresh on every poll would render the whole picture each time.
+     */
+    suspend fun refreshDocument() = withContext(Dispatchers.IO) {
+        status = runCatching { engine.status() }.getOrNull()
+        runCatching {
+            val doc = JSONObject(engine.execute("document.inspect", "{}"))
+            activePage = doc.optInt("activePage", 0)
+            serial = doc.optLong("serial", 0L)
+        }
+    }
+
     suspend fun refreshAll() = withContext(Dispatchers.IO) {
+        // The status is what `hasDocument` reads, so it has to be re-read here: a document can be
+        // opened or closed without the layer walk noticing.
         status = runCatching { engine.status() }.getOrNull()
         refreshPreview()
         refreshLayers()
@@ -497,6 +526,7 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
                 }
             } ?: emptyList()
             activePage = doc.optInt("activePage", 0)
+            serial = doc.optLong("serial", 0L)
             history = doc.optJSONArray("history")?.let { arr ->
                 (arr.length() - 1 downTo 0).mapNotNull { i -> historyEntry(arr.opt(i), arr.length() - 1 - i) }
             } ?: emptyList()

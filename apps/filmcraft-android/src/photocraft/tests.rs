@@ -1082,3 +1082,69 @@ fn a_framed_text_run_wraps_to_its_box_and_a_plain_one_does_not() {
         "the framed run stays inside its 90px box ({framed_width}px)",
     );
 }
+
+#[test]
+fn opening_a_picture_twice_lands_on_the_picture_both_times() {
+    // What importing actually does: decode, push a document, select it. The interface shows
+    // whatever is selected, so the picture has to be the active document's content -- and it has
+    // to stay so when a second picture is opened, because the studio is already mounted by then.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 6, 4);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut w = enc.write_header().expect("a PNG header");
+        let mut data = Vec::new();
+        for _ in 0..24 {
+            data.extend_from_slice(&[10, 200, 30, 255]);
+        }
+        w.write_image_data(&data).expect("PNG data");
+    }
+    let mut s = Session::new();
+    for name in ["first.png", "second.png"] {
+        let (w, h, rgba) = super::commands::decode_picture(name, &png).expect("a PNG opens");
+        let mut doc = Document::new(name, w, h, "none").expect("a document");
+        let id = doc.take_id();
+        doc.page_mut().layers.push(Layer {
+            id,
+            name: name.into(),
+            kind: Kind::Pixels,
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            blend: Blend::Normal,
+            clipped: false,
+            children: Vec::new(),
+            content: Content::Pixels(Some(std::sync::Arc::new(rgba))),
+            style: LayerStyle::default(),
+        });
+        let index = s.push(doc);
+        s.select_index(index);
+
+        // Whatever the interface draws is `active()`, so that is what has to be the picture.
+        let shown = s.active().expect("a document is selected");
+        assert_eq!((shown.doc.width(), shown.doc.height()), (6, 4), "{name} keeps its size");
+        let px = super::compose::render(&shown.doc);
+        assert_eq!(at(&px, 6, 3, 2), [10, 200, 30, 255], "{name} is what the canvas draws");
+    }
+    // Both are still open, and the second is the one on screen.
+    assert_eq!(s.active().expect("a document").doc.name, "second.png");
+}
+
+#[test]
+fn a_new_document_has_its_own_serial() {
+    // The serial is what lets the interface tell a replaced document from an edited one; two
+    // documents that shared a number would reopen the very bug it exists to prevent.
+    let a = Document::new("A", 4, 4, "white").expect("a document");
+    let b = Document::new("B", 4, 4, "white").expect("a document");
+    assert_ne!(a.serial, b.serial, "two documents have two serials");
+    assert!(a.serial > 0 && b.serial > 0);
+
+    // Adding a page clones a Page, and a Page has no serial to clone: only Document does, so a
+    // second page cannot turn a document into a different one.
+    let mut c = Document::new("C", 24, 24, "white").expect("a document");
+    let before = c.serial;
+    c.add_page(None, 24, 24).expect("a second page");
+    assert_eq!(c.serial, before, "the document's identity is unchanged by a page");
+    assert_eq!(c.pages.len(), 2);
+}

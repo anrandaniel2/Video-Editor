@@ -83,20 +83,24 @@ fun StudioCanvas(
     // `status` are Compose state on the engine, so the canvas redraws when the stroke lands --
     // without that it only redrew when the drag itself changed something, which is why a stroke
     // appeared to vanish until the next one was drawn.
+    // The preview follows the document and its revision. The serial is what makes a *different*
+    // document refresh the picture: without it, opening a picture while the studio was starting
+    // left the canvas showing the blank document it had made for itself.
     val revision = engine.status?.revision
-    LaunchedEffect(revision, viewport) {
+    val serial = engine.serial
+    LaunchedEffect(revision, serial, viewport) {
         engine.refreshPreview()
         state.docWidth = engine.width
         state.docHeight = engine.height
     }
 
-    // Open a document the first time the studio is shown: the panels and the canvas all act on
-    // one, and without it every tool answers "Open a picture first".
-    LaunchedEffect(Unit) {
-        if (!engine.hasDocument && viewport.width > 0) {
-            runCatching { engine.newDocument(state.docWidth, state.docHeight) }
-        }
-    }
+    // The canvas does not create documents. It used to, when the studio opened without one --
+    // and that is exactly how an imported picture became a blank 1x1 canvas: the host was still
+    // decoding the picture when the studio appeared, so the canvas saw no document, made a white
+    // one, and the picture was pushed behind it as a second document nobody could see.
+    //
+    // Whether there is a document to paint on is the host's decision (it is opening a picture, or
+    // it is starting a blank canvas). The canvas only draws what the engine has.
 
     /** The document's rect in the view: the reference's cover-fit, then pan and zoom. */
     fun documentRect(): androidx.compose.ui.geometry.Rect {
@@ -268,7 +272,7 @@ fun StudioCanvas(
         val ring = ((state.value("brushSize").toFloatOrNull() ?: 24f) / state.docWidth.toFloat())
         Canvas(Modifier.fillMaxSize()) {
             val r = documentRect()
-            if (r.width <= 0f || r.height <= 0f) return@Canvas
+            if (r.width <= 0f || r.height <= 0f || !engine.hasDocument) return@Canvas
             if (bitmap != null) {
                 drawImage(
                     image = bitmap.asImageBitmap(),
