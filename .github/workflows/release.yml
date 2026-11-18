@@ -168,7 +168,7 @@ jobs:
             [ -f "$f" ] || continue
             echo "::notice title=${f%.png}::$(base64 -w0 "$f")"
             n=$((n+1))
-            [ $n -ge 2 ] && break
+            [ $n -ge 4 ] && break
           done
 
   apk:

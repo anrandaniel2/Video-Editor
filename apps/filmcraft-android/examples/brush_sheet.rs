@@ -98,8 +98,8 @@ fn main() -> Result<(), String> {
     write_png("brush_sheet.png", &sheet, w, h * rows)?;
     // Three-row strips at half scale: each one is a few kilobytes, so a single annotation message
     // carries it whole, and half scale still shows a tip's edge and a grain's tooth.
-    for (strip, set) in names.chunks(3).enumerate() {
-        let start = strip * 3;
+    for (strip, set) in names.chunks(2).enumerate() {
+        let start = strip * 2;
         let mut strip_px: Vec<u8> = Vec::new();
         for row in start..start + set.len() {
             for y in (0..h).step_by(2) {
