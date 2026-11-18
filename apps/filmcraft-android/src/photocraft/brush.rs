@@ -569,14 +569,19 @@ mod tests {
 
     #[test]
     fn a_stroke_from_two_brushes_is_not_the_same_stroke() {
-        // Differing parameters are not the same as differing paint. These two are as far apart as
-        // the library gets: a hard fine line and a soft grainy one.
+        // Differing parameters are not the same as differing paint. Fine Liner and 6B Pencil are
+        // the two ends of the ported library: a clean ink line and a soft broken lead.
         let ink = by_name("Fine Liner").expect("ink");
-        let chalk = by_name("6B Pencil").expect("chalk");
-        assert!(ink.hardness > chalk.hardness + 0.5);
-        assert!(chalk.grain > ink.grain + 0.5);
-        assert!(chalk.spacing > ink.spacing);
-        assert_ne!(ink.tip, chalk.tip);
-        assert_ne!(chalk.count, ink.count);
+        let lead = by_name("6B Pencil").expect("6B");
+        // The ink line is hard, and carries no grain at all.
+        assert!(ink.hardness > lead.hardness);
+        assert_eq!(ink.grain, 0.0, "an ink line has no paper in it");
+        // The lead is softer, and its grain is what the stroke is made of.
+        assert!(lead.hardness < 0.8);
+        assert!(lead.grain > 0.5, "6B is defined by its grain");
+        // And the silhouettes differ, so the two cannot draw the same edge even at one setting.
+        assert_ne!(ink.tip, lead.tip);
+        // Procraft's inking set streams its strokes and its pencils do not.
+        assert!(ink.streamline > lead.streamline);
     }
 }

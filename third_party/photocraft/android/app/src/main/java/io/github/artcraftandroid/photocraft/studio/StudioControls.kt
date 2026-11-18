@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
