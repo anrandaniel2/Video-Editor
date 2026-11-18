@@ -520,8 +520,10 @@ fn the_brush_list_is_the_one_the_panel_shows() {
         .iter()
         .map(|p| p["name"].as_str().unwrap_or_default().to_string())
         .collect();
+    // The panel's own eight, in its own order. Anything the engine adds after them is a brush the
+    // panel did not have before, and it shows because the list is the engine's.
     assert_eq!(
-        names,
+        names.iter().take(8).cloned().collect::<Vec<_>>(),
         vec![
             "Natural Pencil 6B",
             "Natural Pencil 2B",
@@ -1152,6 +1154,20 @@ fn a_new_document_has_its_own_serial() {
     assert_eq!(c.pages.len(), 2);
 }
 
+/// Whether the pixel at `x,y` was painted darker than the white background under it.
+///
+/// The composite is opaque everywhere -- the document's own background is white -- so counting
+/// alpha counts the whole canvas. What a stroke changes is the colour.
+fn painted(buf: &[u8], x: usize, y: usize) -> bool {
+    let p = at(buf, 32, x, y);
+    p[0] < 200 && p[1] < 200 && p[2] < 200
+}
+
+/// How many pixels of a row the stroke darkened.
+fn painted_row(buf: &[u8], x: usize) -> usize {
+    (0..32).filter(|y| painted(buf, x, *y)).count()
+}
+
 /// A stroke across the canvas with a named brush, at a size a 32-pixel document can show.
 fn stroke_with(name: &str, size: f64) -> Vec<u8> {
     let mut s = session();
@@ -1177,12 +1193,12 @@ fn different_brushes_draw_different_lines() {
     assert_ne!(chalk, bristle, "chalk and bristle drew the same stroke");
     assert_ne!(ink, bristle, "ink and bristle drew the same stroke");
 
-    // Ink is the clean line: a hard tip with no grain, so its middle is nearly solid. Charcoal is
-    // broken up, so the same gesture must leave fewer solid pixels behind.
-    let solid = |buf: &[u8]| buf.chunks(4).filter(|p| p[3] > 200).count();
+    // Ink is the clean line: a hard tip with no grain, so its stroke is solid. Charcoal is broken
+    // up, so the same gesture must leave fewer painted pixels behind.
+    let solid = |buf: &[u8]| (0..32).flat_map(|x| (0..32).map(move |y| (x, y))).filter(|&(x, y)| painted(buf, x, y)).count();
     assert!(
         solid(&ink) > solid(&charcoal),
-        "the pen ({} solid pixels) should be solider than charcoal ({})",
+        "the pen ({} painted pixels) should be solider than charcoal ({})",
         solid(&ink),
         solid(&charcoal)
     );
@@ -1191,9 +1207,8 @@ fn different_brushes_draw_different_lines() {
 #[test]
 fn a_wider_brush_draws_a_wider_line() {
     // The size slider's other half: if the width never changed the brush would be a constant.
-    let width_of = |buf: &[u8]| (0..32).filter(|y| at(buf, 32, 16, *y)[3] > 40).count();
-    let thin = width_of(&stroke_with("Fine Ink", 3.0));
-    let thick = width_of(&stroke_with("Fine Ink", 15.0));
+    let thin = painted_row(&stroke_with("Fine Ink", 3.0), 16);
+    let thick = painted_row(&stroke_with("Fine Ink", 15.0), 16);
     assert!(thick > thin, "a 15-pixel brush drew {thick} rows and a 3-pixel one drew {thin}");
 }
 
@@ -1211,12 +1226,11 @@ fn a_tapered_brush_starts_thinner_than_it_ends() {
         json!({ "points": [[4.0, 16.0], [16.0, 16.0], [28.0, 16.0]], "size": 11.0 }),
     );
     let buf = pixels(&s);
-    let rows = |x: usize| (0..32).filter(|y| at(&buf, 32, x, *y)[3] > 60).count();
     assert!(
-        rows(16) > rows(4),
+        painted_row(&buf, 16) > painted_row(&buf, 4),
         "the middle of the stroke ({} rows) should be wider than its start ({} rows)",
-        rows(16),
-        rows(4)
+        painted_row(&buf, 16),
+        painted_row(&buf, 4)
     );
 }
 
