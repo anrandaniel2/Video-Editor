@@ -144,20 +144,23 @@ jobs:
           cargo run -q -p filmcraft-android --example brush_sheet
           ls -l brush_sheet.png brush_small.png
           echo "PNG $(base64 -w0 brush_small.png | head -c 40)"
-      # The sheet comes back through an annotation, because the job summary is not always readable
-      # from where this is watched and the artifact host never is. The small sheet is 3 kB, so the
-      # whole PNG fits in one message.
-      - name: Bring the sheet back
+      # As an artifact, which is the one route that carries the whole image: an annotation queue
+      # holds eight messages and drops the tail of anything long.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: brush-sheet
+          path: |
+            brush_sheet.png
+            half_*.png
+          if-no-files-found: warn
+      - name: Report the sheet
         if: always()
         run: |
           echo "::notice title=Sheet size::$(stat -c%s brush_small.png 2>/dev/null || echo 0) bytes"
           # The annotation queue carries eight messages and no more, so the sheet is sent as
           # halves, two rows each, and only the two halves that show the most are sent.
           echo "::notice title=Full size::$(stat -c%s brush_sheet.png 2>/dev/null || echo 0) bytes"
-          for f in half_a.png half_b.png; do
-            [ -f "$f" ] || continue
-            echo "::notice title=${f%.png}::$(base64 -w0 "$f" | head -c 60000)"
-          done
 
   apk:
     name: APK
