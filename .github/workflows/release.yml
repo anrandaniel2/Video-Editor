@@ -144,14 +144,16 @@ jobs:
           cargo run -q -p filmcraft-android --example brush_sheet
           ls -l brush_sheet.png brush_small.png
           echo "PNG $(base64 -w0 brush_small.png | head -c 40)"
-      - name: Publish the sheet
+      # The sheet comes back through an annotation, because the job summary is not always readable
+      # from where this is watched and the artifact host never is. The small sheet is 3 kB, so the
+      # whole PNG fits in one message.
+      - name: Bring the sheet back
         if: always()
         run: |
-          if [ -f brush_sheet.png ]; then
-            echo "## The brush sheet" >> "$GITHUB_STEP_SUMMARY"
-            echo "![brushes](data:image/png;base64,$(base64 -w0 brush_sheet.png))" >> "$GITHUB_STEP_SUMMARY"
-            echo "PNGLEN $(stat -c%s brush_sheet.png)" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "::notice title=Sheet size::$(stat -c%s brush_small.png 2>/dev/null || echo 0) bytes"
+          base64 -w0 brush_small.png 2>/dev/null | fold -w 3000 | nl -ba | while read -r n chunk; do
+            echo "::notice title=PNG-${n}::${chunk}"
+          done
 
   apk:
     name: APK
