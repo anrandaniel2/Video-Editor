@@ -21,6 +21,17 @@ fn write_png(path: &str, rgba: &[u8], w: u32, h: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Write one grey channel, which is a third of the bytes of the colour sheet.
+fn write_gray_png(path: &str, gray: &[u8], w: u32, h: u32) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    encoder.set_color(png::ColorType::Grayscale);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(gray).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
     let names = commands::execute(&mut Session::new(), "brush.presets.list", serde_json::json!({}))
         .map_err(|e| e.to_string())?;
@@ -65,7 +76,21 @@ fn main() -> Result<(), String> {
         sheet[start..start + px.len()].copy_from_slice(&px);
     }
 
-    write_png("brush_sheet.png", &sheet, w, h * names.len() as u32)?;
+    // A second, smaller sheet: one grey channel, quarter scale, which is small enough to carry in
+    // a check-run summary and still legible enough to judge a brush by.
+    let rows = names.len() as u32;
+    let small: Vec<u8> = (0..rows).flat_map(|row| {
+        (0..h).step_by(4).flat_map(move |y| {
+            (0..w).step_by(4).map(move |x| {
+                let i = ((row * h + y) * w + x) as usize * 4;
+                // What the eye reads: luminance, with the white background staying white.
+                ((u32::from(sheet[i]) * 299 + u32::from(sheet[i + 1]) * 587 + u32::from(sheet[i + 2]) * 114)
+                    / 1000) as u8
+            })
+        })
+    }).collect();
+    write_gray_png("brush_small.png", &small, w / 4, (h / 4) * rows)?;
+    write_png("brush_sheet.png", &sheet, w, h * rows)?;
     println!("wrote brush_sheet.png: {w}x{h}, {} brushes", names.len());
     for (i, n) in names.iter().enumerate() {
         println!("  row {}: {n}", i + 1);

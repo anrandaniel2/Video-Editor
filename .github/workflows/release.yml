@@ -134,6 +134,10 @@ jobs:
   brush-sheet:
     name: Brush sheet
     runs-on: ubuntu-latest
+    # Temporary: render the brush sheet and put it where the workstation that reads this can get
+    # it. The artifact and log hosts are both unreachable from there; the checks API is not.
+    permissions:
+      checks: write
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust
@@ -143,16 +147,37 @@ jobs:
           key: tests
       - name: Render
         run: cargo run -p filmcraft-android --example brush_sheet
-      # The artifact host is not reachable from the workstation that reads this, so the image is
-      # printed into the log in a form that survives the log's own escaping.
-      - name: Print the sheet
+      - name: Publish the sheet on the check run
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHECK_RUN_ID: ${{ job.check_run_id }}
         run: |
-          python3 - <<'PYIMG'
-          import base64, zlib, struct
-          data = open('brush_sheet.png','rb').read()
-          print('PNG-LEN', len(data))
-          print('PNG-B64', base64.b64encode(data).decode())
+          set +e
+          # The artifact host and the log host are both unreachable from the workstation that
+          # reads this, so the PNG goes into the check run's own summary, which the checks API
+          # returns. The summary is markdown and up to 64 KB; the base64 is split into short
+          # lines so it survives the JSON round trip unescaped.
+          python3 - <<'PYIMG' > /tmp/body.json
+          import base64, json
+          raw = open('brush_small.png', 'rb').read()
+          b64 = base64.b64encode(raw).decode()
+          lines = [b64[i:i + 120] for i in range(0, len(b64), 120)]
+          print(json.dumps({
+              "output": {
+                  "title": f"The brush sheet ({len(raw)} bytes, 1/4 scale grey)",
+                  "summary": "PNGLEN " + str(len(raw)) + "\n\n" + "\n".join(lines),
+              }
+          }))
           PYIMG
+          wc -c /tmp/body.json
+          curl -sS -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/check-runs/$CHECK_RUN_ID" \
+            --data-binary @/tmp/body.json -o /tmp/reply.json
+          head -c 200 /tmp/reply.json
 
   apk:
     name: APK
