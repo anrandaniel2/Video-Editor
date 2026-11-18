@@ -2,8 +2,12 @@ package io.github.artcraftandroid.photocraft.studio
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -36,7 +40,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import kotlin.math.roundToInt
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -236,7 +239,7 @@ fun PanelFrame(
         Column(
             Modifier
                 .weight(1f, fill = false)
-                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                .verticalScroll(rememberScrollState()),
         ) {
             body()
         }
@@ -316,8 +319,8 @@ fun StudioSlider(
     val current by androidx.compose.runtime.rememberUpdatedState(fraction)
     Box(
         modifier.height(20.dp).pointerInput(Unit) {
-            androidx.compose.foundation.gestures.awaitEachGesture {
-                val down = androidx.compose.foundation.gestures.awaitFirstDown()
+            awaitEachGesture {
+                val down = awaitFirstDown()
                 down.consume()
                 var last = down.position.x
                 var v = current

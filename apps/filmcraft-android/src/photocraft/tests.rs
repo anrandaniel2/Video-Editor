@@ -1383,7 +1383,7 @@ fn a_brush_command_names_the_brush_it_left_in_hand() {
     assert_eq!(edited["spacing"], json!(0.3));
     // The name is the brush's, and the brush is still the one picked: editing a setting must not
     // silently reset the rest of it.
-    assert_eq!(s.tools.brush.tip, super::brush::Tip::Chisel, "the tip survived the edit");
+    assert_eq!(s.tools.brush.tip, super::brush::Tip::Ragged, "the tip survived the edit");
     assert!(s.tools.brush.grain > 0.5, "the grain survived the edit");
 }
 
@@ -1394,10 +1394,12 @@ fn a_glaze_does_not_darken_where_its_own_stamps_overlap() {
     // discs, and it is why a hard brush's stroke looked blotchy along its middle.
     //
     // Two strokes over the same path: one with the glaze a brush's own, one forced to build up.
-    let glaze = stroke_with("Round Pen", 9.0);
+    // `Fine Liner` is a glaze in the library; setting one stroke to build up instead isolates the
+    // rendering mode from every other difference between brushes.
+    let glaze = stroke_with("Fine Liner", 9.0);
     let build = {
         let mut s = session();
-        run(&mut s, "tools.setBrush", json!({ "preset": "Round Pen" }));
+        run(&mut s, "tools.setBrush", json!({ "preset": "Fine Liner" }));
         run(&mut s, "brush.set", json!({ "rendering": "buildup" }));
         run(&mut s, "layer.new.layer", json!({}));
         run(
