@@ -129,8 +129,8 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
             | (colour[2] as u64) << 8
             | points.len() as u64,
         stamps: 0,
-        total: 0,
         // Set below, once the path's length is known: the taper is measured against it.
+        total: 0.0,
         step: 1.0,
     };
     // A taper needs to know where the stroke ends before it starts, so the length comes first.

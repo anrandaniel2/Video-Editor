@@ -404,6 +404,7 @@ impl PhotoSession {
                 fit: model::PictureFit::Stretch,
             }),
             style: LayerStyle::default(),
+            offset: (0.0, 0.0),
         });
         doc.active_layer = Some(id);
         doc.selected = vec![id];

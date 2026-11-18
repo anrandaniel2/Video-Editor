@@ -526,7 +526,7 @@ impl Document {
             children: Vec::new(),
             content: Content::Pixels(fill),
             style: LayerStyle::default(),
-                offset: (0.0, 0.0),
+            offset: (0.0, 0.0),
         });
         Ok(doc)
     }
@@ -565,7 +565,7 @@ impl Document {
             children: Vec::new(),
             content: Content::Pixels(None),
             style: LayerStyle::default(),
-                offset: (0.0, 0.0),
+            offset: (0.0, 0.0),
         });
         Ok(at)
     }

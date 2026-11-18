@@ -990,7 +990,7 @@ fn new_adjustment(session: &mut Session, adjustment: Adjustment, name: &str) -> 
         children: Vec::new(),
         content: Content::Adjustment(adjustment),
         style: LayerStyle::default(),
-                offset: (0.0, 0.0),
+        offset: (0.0, 0.0),
     });
     doc.active_layer = Some(id);
     doc.touch();
@@ -1181,7 +1181,7 @@ fn new_shape(session: &mut Session, shape: Shape) -> Result<Value, Fail> {
         children: Vec::new(),
         content: Content::Shape(shape),
         style: LayerStyle::default(),
-                offset: (0.0, 0.0),
+        offset: (0.0, 0.0),
     });
     doc.active_layer = Some(id);
     doc.touch();

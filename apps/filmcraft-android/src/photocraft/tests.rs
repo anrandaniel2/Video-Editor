@@ -817,7 +817,7 @@ fn a_picture_can_be_moved_and_fitted_after_it_is_placed() {
                 fit: PictureFit::Stretch,
             }),
             style: LayerStyle::default(),
-                offset: (0.0, 0.0),
+            offset: (0.0, 0.0),
         });
         doc.active_layer = Some(id);
     }
@@ -1060,7 +1060,7 @@ fn a_framed_text_run_wraps_to_its_box_and_a_plain_one_does_not() {
             children: Vec::new(),
             content: Content::Text(content),
             style: LayerStyle::default(),
-                offset: (0.0, 0.0),
+            offset: (0.0, 0.0),
         });
     };
     run_text(&mut plain, false);
@@ -1119,7 +1119,7 @@ fn opening_a_picture_twice_lands_on_the_picture_both_times() {
             children: Vec::new(),
             content: Content::Pixels(Some(std::sync::Arc::new(rgba))),
             style: LayerStyle::default(),
-                offset: (0.0, 0.0),
+            offset: (0.0, 0.0),
         });
         let index = s.push(doc);
         s.select_index(index);
