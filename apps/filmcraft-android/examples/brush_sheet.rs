@@ -76,13 +76,14 @@ fn main() -> Result<(), String> {
         sheet[start..start + px.len()].copy_from_slice(&px);
     }
 
-    // A second, smaller sheet: one grey channel, quarter scale, which is small enough to carry in
-    // a check-run summary and still legible enough to judge a brush by.
+    // A second sheet at half scale, in grey: small enough for one annotation message, large
+    // enough that a brush's edge and grain can still be judged by it. The full-resolution sheet
+    // is the one to open properly; this is the one that can travel back.
     let rows = names.len() as u32;
     let mut small: Vec<u8> = Vec::new();
     for row in 0..rows {
-        for y in (0..h).step_by(4) {
-            for x in (0..w).step_by(4) {
+        for y in (0..h).step_by(2) {
+            for x in (0..w).step_by(2) {
                 let i = ((row * h + y) * w + x) as usize * 4;
                 // What the eye reads: luminance, with the white background staying white.
                 let lum = (u32::from(sheet[i]) * 299
@@ -93,7 +94,7 @@ fn main() -> Result<(), String> {
             }
         }
     }
-    write_gray_png("brush_small.png", &small, w / 4, (h / 4) * rows)?;
+    write_gray_png("brush_small.png", &small, w / 2, (h / 2) * rows)?;
     write_png("brush_sheet.png", &sheet, w, h * rows)?;
     // Two halves at full resolution: every brush, large enough to judge an edge by, in as many
     // images as an annotation queue will carry.

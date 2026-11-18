@@ -161,6 +161,8 @@ jobs:
           # The annotation queue carries eight messages and no more, so the sheet is sent as
           # halves, two rows each, and only the two halves that show the most are sent.
           echo "::notice title=Full size::$(stat -c%s brush_sheet.png 2>/dev/null || echo 0) bytes"
+          # The half-scale sheet is the one that fits: one message, every brush.
+          echo "::notice title=SHEET::$(base64 -w0 brush_small.png | head -c 60000)"
 
   apk:
     name: APK
