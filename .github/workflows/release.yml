@@ -131,6 +131,28 @@ jobs:
           exit $status
 
   # TEMPORARY: render the brush sheet so the drawing can be looked at rather than imagined.
+  # The brush sheet: every brush in the library drawn with one gesture, as a PNG in the job
+  # summary. A test can say two strokes differ; only an image says whether they differ the way the
+  # panel promises. Temporary: it exists to look at this branch's brushes, not to guard the build.
+  brush-sheet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Draw every brush
+        run: |
+          cargo run -q -p filmcraft-android --example brush_sheet
+          ls -l brush_sheet.png brush_small.png
+          echo "PNG $(base64 -w0 brush_small.png | head -c 40)"
+      - name: Publish the sheet
+        if: always()
+        run: |
+          if [ -f brush_sheet.png ]; then
+            echo "## The brush sheet" >> "$GITHUB_STEP_SUMMARY"
+            echo "![brushes](data:image/png;base64,$(base64 -w0 brush_sheet.png))" >> "$GITHUB_STEP_SUMMARY"
+            echo "PNGLEN $(stat -c%s brush_sheet.png)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   apk:
     name: APK
     runs-on: ubuntu-latest
