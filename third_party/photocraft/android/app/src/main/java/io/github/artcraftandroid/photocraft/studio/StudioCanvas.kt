@@ -164,7 +164,7 @@ fun StudioCanvas(
                         down.consume()
                         var last = down.position
                         while (true) {
-                            val event = awaitPointerEvent()
+                            val event = this.awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) break
                             state.panX = (state.panX + (change.position.x - last.x)).coerceIn(-maxX, maxX)

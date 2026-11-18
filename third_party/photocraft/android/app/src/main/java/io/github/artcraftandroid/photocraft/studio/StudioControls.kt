@@ -225,7 +225,21 @@ fun PanelFrame(
             HeaderButton("close", "Close $name panel", onClick = onClose)
         }
         PanelDivider()
-        body()
+        // The body scrolls, so a panel taller than the screen still reaches its last control.
+        //
+        // It used to be a bare `body()` in this Column: nothing bounded it, so the brush panel
+        // simply drew past the bottom of the window and the sliders under the brush list were
+        // unreachable. A panel is never taller than the window now, and everything in it can be
+        // scrolled to.
+        // `weight` bounds it against the window, which is what the panels are placed in: without
+        // it the Column is free to be taller than the screen and the last slider is off it.
+        Column(
+            Modifier
+                .weight(1f, fill = false)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+        ) {
+            body()
+        }
     }
 }
 
@@ -308,7 +322,7 @@ fun StudioSlider(
                 var last = down.position.x
                 var v = current
                 while (true) {
-                    val event = awaitPointerEvent()
+                    val event = this.awaitPointerEvent()
                     val c = event.changes.firstOrNull { it.id == down.id } ?: break
                     if (!c.pressed) break
                     val travel = (size.width - 2 * KnobInset.toPx()).coerceAtLeast(1f)

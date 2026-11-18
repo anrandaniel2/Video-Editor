@@ -822,6 +822,33 @@ private fun BrushesBody(a: StudioActions) {
                 modifier = Modifier.fillMaxWidth(),
             ) { f -> edit(org.json.JSONObject().put("flow", f.toDouble())) }
             Spacer(Modifier.height(8.dp))
+            // Procraft's StreamLine: the hand's path is pulled towards a smooth curve before it is
+            // stamped. It is the difference between a line that carries every tremor of the finger
+            // and one that reads as drawn, and the engine already applies whatever this sets.
+            StudioValueSlider(
+                label = "StreamLine",
+                fraction = brush.streamline,
+                valueText = "${(brush.streamline * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f -> edit(org.json.JSONObject().put("streamline", f.toDouble())) }
+            Spacer(Modifier.height(8.dp))
+            // Procraft's rendering modes, in the four behaviours they come to here. A glaze keeps
+            // the strongest stamp, so overlapping stamps of one stroke never darken one another;
+            // a build-up adds them, which is what an airbrush wants.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for ((mode, label) in listOf(
+                    "glaze" to "Glaze",
+                    "buildup" to "Blend",
+                    "gradual" to "Gradual",
+                )) {
+                    BrushChoicePill(
+                        text = label,
+                        on = brush.rendering == mode,
+                        modifier = Modifier.weight(1f),
+                    ) { edit(org.json.JSONObject().put("rendering", mode)) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for ((mode, label) in listOf("canvas" to "Paper grain", "stamp" to "Brush grain")) {
                     BrushChoicePill(

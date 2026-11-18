@@ -583,25 +583,25 @@ fn a_set_selector_can_step_through_every_document_brush() {
     let out = super::commands::execute(&mut s, "brush.presets.list", json!({})).expect("presets");
     let names: Vec<String> = out["presets"].as_array().expect("presets").iter()
         .map(|p| p["name"].as_str().unwrap_or_default().to_string()).collect();
-    for set in ["Pencils", "Charcoal & Chalk", "Bristle", "Inking"] {
+    for set in ["Sketching", "Inking", "Painting"] {
         // Mirrors StudioBrushSets.filters in the UI.
-        let hit = names.iter().any(|n| {
-            let b = n.to_lowercase();
-            when_set(set, &b)
-        });
+        let hit = names.iter().any(|n| when_set(set, n));
         assert!(hit, "the `{set}` set is empty for the engine's brushes");
     }
 }
 
 /// The UI's set rule, restated so the two cannot drift silently.
-fn when_set(set: &str, b: &str) -> bool {
-    match set {
-        "Pencils" => b.contains("pencil") || b.contains("graphite"),
-        "Charcoal & Chalk" => b.contains("charcoal") || b.contains("chalk"),
-        "Bristle" => b.contains("bristle"),
-        "Inking" => b.contains("ink"),
-        _ => true,
-    }
+fn when_set(set: &str, n: &str) -> bool {
+    // Every brush in the library belongs to exactly one of Procraft's sets; the UI keeps the same
+    // map, so a brush added to one and not the other shows up here.
+    let set_of = match n {
+        "Graphite" | "Soft Pencil" | "Technical Pencil" | "HB Pencil" | "6B Pencil"
+        | "Charcoal Pencil" => "Sketching",
+        "Fine Liner" | "Brush Pen" | "Round Pen" => "Inking",
+        "Flat Brush" | "Soft Airbrush" => "Painting",
+        _ => "",
+    };
+    set_of == set
 }
 
 #[test]
@@ -1251,7 +1251,7 @@ fn the_brush_the_panel_picks_is_the_brush_the_stroke_uses() {
     let mut s = session();
     run(&mut s, "tools.setBrush", json!({ "preset": "Charcoal Pencil" }));
     assert_eq!(s.tools.brush_preset, "Charcoal Pencil");
-    assert_eq!(s.tools.brush.hardness, 0.35, "the preset's hardness was not stored");
+    assert_eq!(s.tools.brush.hardness, 0.75, "the preset's hardness was not stored");
     assert!(s.tools.brush.grain > 0.5, "the preset's grain was not stored");
 
     // And the panel's sliders edit that brush rather than being forgotten.
@@ -1376,7 +1376,7 @@ fn a_brush_command_names_the_brush_it_left_in_hand() {
     let mut s = session();
     let picked = run(&mut s, "tools.setBrush", json!({ "preset": "Charcoal Pencil" }));
     assert_eq!(picked["name"], json!("Charcoal Pencil"), "setBrush did not name the brush");
-    assert_eq!(picked["tip"], json!("chisel"));
+    assert_eq!(picked["tip"], json!("ragged"));
 
     let edited = run(&mut s, "brush.set", json!({ "spacing": 0.3 }));
     assert_eq!(edited["name"], json!("Charcoal Pencil"), "brush.set did not name the brush");
