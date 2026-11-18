@@ -705,6 +705,17 @@ private fun BrushesBody(a: StudioActions) {
             .border(width = 0.dp, color = Color.Transparent)
             .padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 11.dp),
     ) {
+        // The brush's shape: the settings that make one brush unlike another. These edit the
+        // brush in hand (`brush.set`) rather than picking a preset, so the next stroke follows
+        // the slider that was just moved.
+        //
+        // They live behind two tabs because the panel frame does not scroll and the panel is a
+        // fixed width: six sliders and two rows of pills under the brush list would put the last
+        // of them below the screen with no way to reach it. "Tip" is the silhouette, "Texture" is
+        // how the tip lays paint down.
+        val brush = e.brush
+        val edit: (org.json.JSONObject) -> Unit = { o -> scope.engine { e.setBrushParams(o) } }
+
         // Procraft's own size and opacity sliders. The size is on its 2.2 curve, so the small end
         // -- where brush sizes actually live -- gets most of the track; the knob drags relatively,
         // so an exact width is reachable instead of being a product of where the thumb landed.
@@ -730,16 +741,6 @@ private fun BrushesBody(a: StudioActions) {
             s.setValue("brushOpacity", pct.toString())
             scope.engine { e.setBrush(opacity = pct / 100f) }
         }
-        // The brush's shape: the settings that make one brush unlike another. These edit the
-        // brush in hand (`brush.set`) rather than picking a preset, so the next stroke follows
-        // the slider that was just moved.
-        //
-        // They live behind two tabs because the panel frame does not scroll and the panel is a
-        // fixed width: six sliders and two rows of pills under the brush list would put the last
-        // of them below the screen with no way to reach it. "Tip" is the silhouette, "Texture" is
-        // how the tip lays paint down.
-        val brush = e.brush
-        val edit: (org.json.JSONObject) -> Unit = { o -> scope.engine { e.setBrushParams(o) } }
         var tab by remember { mutableStateOf("tip") }
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {

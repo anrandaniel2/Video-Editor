@@ -204,7 +204,7 @@ class StudioState(workspace: WorkspaceId) {
     var page by mutableStateOf(8)
     var brush by mutableStateOf("HB Pencil")
     var search by mutableStateOf("")
-    var category by mutableStateOf("Pencils")
+    var category by mutableStateOf("Sketching")
 
     /** The panel values, by the reference's keys. */
     var values by mutableStateOf(
@@ -268,7 +268,7 @@ class StudioState(workspace: WorkspaceId) {
         page = 8
         brush = "HB Pencil"
         search = ""
-        category = "Pencils"
+        category = "Sketching"
         values = values + mapOf(
             "opacity" to "100", "blend" to "Normal", "size" to "14", "brushSize" to "24",
             "brushOpacity" to "100", "colour" to "#f59ac9", "channel" to "Master",
@@ -307,16 +307,6 @@ val StudioBrushes = listOf(
     "Fine Liner", "Brush Pen", "Round Pen", "Flat Brush",
     // Painting
     "Soft Airbrush",
-)
-
-/** The set each brush belongs to, as the panel groups them. */
-val StudioBrushSets: Map<String, String> = mapOf(
-    "Graphite" to "Sketching", "Soft Pencil" to "Sketching",
-    "Technical Pencil" to "Sketching", "HB Pencil" to "Sketching",
-    "6B Pencil" to "Sketching", "Charcoal Pencil" to "Sketching",
-    "Fine Liner" to "Inking", "Brush Pen" to "Inking",
-    "Round Pen" to "Inking", "Flat Brush" to "Painting",
-    "Soft Airbrush" to "Painting",
 )
 
 /**
@@ -387,19 +377,27 @@ data class BrushInfo(
  * engine shows up in the set it belongs to without being registered twice.
  */
 object StudioBrushSets {
-    val names = listOf("Pencils", "Charcoal & Chalk", "Bristle", "Inking", "All Brushes")
+    /**
+     * Procraft's own sets, in its own order.
+     *
+     * These used to be invented groupings guessed from the brush's name ("everything with
+     * `pencil` in it"), which meant the sets did not match the brushes they held. Each brush now
+     * knows the set it came from, and the sets are that list.
+     */
+    val names = listOf("Sketching", "Inking", "Painting", "All Brushes")
+
+    /** The set each brush came from, by the name the engine knows it by. */
+    private val byBrush: Map<String, String> = mapOf(
+        "Graphite" to "Sketching", "Soft Pencil" to "Sketching",
+        "Technical Pencil" to "Sketching", "HB Pencil" to "Sketching",
+        "6B Pencil" to "Sketching", "Charcoal Pencil" to "Sketching",
+        "Fine Liner" to "Inking", "Brush Pen" to "Inking", "Round Pen" to "Inking",
+        "Flat Brush" to "Painting", "Soft Airbrush" to "Painting",
+    )
 
     /** Whether a brush belongs to a set. */
-    fun filters(set: String, brush: String): Boolean {
-        val b = brush.lowercase()
-        return when (set) {
-            "Pencils" -> b.contains("pencil") || b.contains("graphite")
-            "Charcoal & Chalk" -> b.contains("charcoal") || b.contains("chalk")
-            "Bristle" -> b.contains("bristle")
-            "Inking" -> b.contains("ink")
-            else -> true
-        }
-    }
+    fun filters(set: String, brush: String): Boolean =
+        set == "All Brushes" || byBrush[brush] == set
 }
 
 /** The Colour panel's swatches. */
