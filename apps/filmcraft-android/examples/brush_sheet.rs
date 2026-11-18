@@ -11,7 +11,7 @@
 use filmcraft_android::photocraft::{commands, compose, model::Document, Session};
 
 /// Write RGBA to a PNG, with no colour management: what the engine composited is what is shown.
-fn write_png(path: &str, rgba: &[u8], w: u32, h: u32) -> Result<(), String> {
+fn write_png<P: AsRef<std::path::Path>>(path: P, rgba: &[u8], w: u32, h: u32) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w, h);
     encoder.set_color(png::ColorType::Rgba);
@@ -95,6 +95,14 @@ fn main() -> Result<(), String> {
     }
     write_gray_png("brush_small.png", &small, w / 4, (h / 4) * rows)?;
     write_png("brush_sheet.png", &sheet, w, h * rows)?;
+    // Strips of three rows at full resolution: small enough that every chunk of their base64 gets
+    // through an annotation queue, large enough to judge a brush's edge by.
+    for (strip, set) in names.chunks(3).enumerate() {
+        let start_row = strip * 3;
+        let a = start_row * h as usize * w as usize * 4;
+        let b = ((start_row + set.len()) * h as usize * w as usize * 4).min(sheet.len());
+        write_png(&format!("strip_{strip}.png"), &sheet[a..b], w, h * set.len() as u32)?;
+    }
     println!("wrote brush_sheet.png: {w}x{h}, {} brushes", names.len());
     for (i, n) in names.iter().enumerate() {
         println!("  row {}: {n}", i + 1);
