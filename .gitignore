@@ -15,3 +15,9 @@ local.properties
 /third_party/photocraft/android/*/build/
 /third_party/photocraft/android/build/
 /third_party/photocraft/android/.gradle/
+
+# The brush sheet harness writes these; they are for looking at, not keeping.
+brush_sheet.png
+brush_small.png
+strip_*.png
+half_*.png

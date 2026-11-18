@@ -131,46 +131,6 @@ jobs:
           exit $status
 
   # TEMPORARY: render the brush sheet so the drawing can be looked at rather than imagined.
-  # The brush sheet: every brush in the library drawn with one gesture, as a PNG in the job
-  # summary. A test can say two strokes differ; only an image says whether they differ the way the
-  # panel promises. Temporary: it exists to look at this branch's brushes, not to guard the build.
-  brush-sheet:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Draw every brush
-        run: |
-          cargo run -q -p filmcraft-android --example brush_sheet
-          ls -l brush_sheet.png brush_small.png
-          echo "PNG $(base64 -w0 brush_small.png | head -c 40)"
-      # As an artifact, which is the one route that carries the whole image: an annotation queue
-      # holds eight messages and drops the tail of anything long.
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: brush-sheet
-          path: |
-            brush_sheet.png
-            half_*.png
-          if-no-files-found: warn
-      - name: Report the sheet
-        if: always()
-        run: |
-          echo "::notice title=Sheet size::$(stat -c%s brush_small.png 2>/dev/null || echo 0) bytes"
-          # The annotation queue carries eight messages and no more, so the sheet is sent as
-          # halves, two rows each, and only the two halves that show the most are sent.
-          echo "::notice title=Full size::$(stat -c%s brush_sheet.png 2>/dev/null || echo 0) bytes"
-          # Strips, because an annotation message holds about 3 kB of base64 and a queue holds
-          # eight of them: the first two strips are the sketch and the ink sets.
-          n=0
-          for f in strip_*.png; do
-            [ -f "$f" ] || continue
-            echo "::notice title=${f%.png}::$(base64 -w0 "$f")"
-            n=$((n+1))
-            [ $n -ge 4 ] && break
-          done
-
   apk:
     name: APK
     runs-on: ubuntu-latest
