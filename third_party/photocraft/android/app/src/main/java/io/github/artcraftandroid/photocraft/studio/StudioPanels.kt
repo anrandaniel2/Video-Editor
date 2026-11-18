@@ -661,7 +661,7 @@ private fun BrushesBody(a: StudioActions) {
             StudioIcons.Glyph("chevron-right", Color(0xFFB9BEAF), 13.dp)
         }
     }
-    Column(Modifier.fillMaxWidth().heightIn(max = 355.dp).verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 232.dp).verticalScroll(rememberScrollState())) {
         brushes.forEachIndexed { _, info ->
             val name = info.name
             val on = s.brush == name
@@ -745,67 +745,102 @@ private fun BrushesBody(a: StudioActions) {
         // The brush's shape: the settings that make one brush unlike another. These edit the
         // brush in hand (`brush.set`) rather than picking a preset, so the next stroke follows
         // the slider that was just moved.
+        //
+        // They live behind two tabs because the panel frame does not scroll and the panel is a
+        // fixed width: six sliders and two rows of pills under the brush list would put the last
+        // of them below the screen with no way to reach it. "Tip" is the silhouette, "Texture" is
+        // how the tip lays paint down.
         val brush = e.brush
         val edit: (org.json.JSONObject) -> Unit = { o -> scope.engine { e.setBrushParams(o) } }
-        Spacer(Modifier.height(8.dp))
-        StudioValueSlider(
-            label = "Hardness",
-            fraction = brush.hardness,
-            valueText = "${(brush.hardness * 100).toInt()}%",
-            modifier = Modifier.fillMaxWidth(),
-        ) { f ->
-            // The hardness is part of the brush *and* of the tool state the panels read, so both
-            // are told: otherwise the slider and the preset list drift apart.
-            scope.engine { e.setBrush(hardness = f) }
-            edit(org.json.JSONObject().put("hardness", f.toDouble()))
-        }
-        Spacer(Modifier.height(8.dp))
-        StudioValueSlider(
-            label = "Grain",
-            fraction = brush.grain,
-            valueText = "${(brush.grain * 100).toInt()}%",
-            modifier = Modifier.fillMaxWidth(),
-        ) { f -> edit(org.json.JSONObject().put("grain", f.toDouble())) }
-        Spacer(Modifier.height(8.dp))
-        StudioValueSlider(
-            label = "Spacing",
-            fraction = ((brush.spacing - 0.02f) / 0.58f).coerceIn(0f, 1f),
-            valueText = "${(brush.spacing * 100).toInt()}%",
-            modifier = Modifier.fillMaxWidth(),
-        ) { f -> edit(org.json.JSONObject().put("spacing", (0.02f + f * 0.58f).toDouble())) }
-        Spacer(Modifier.height(8.dp))
-        StudioValueSlider(
-            label = "Flow",
-            fraction = brush.flow,
-            valueText = "${(brush.flow * 100).toInt()}%",
-            modifier = Modifier.fillMaxWidth(),
-        ) { f -> edit(org.json.JSONObject().put("flow", f.toDouble())) }
-        Spacer(Modifier.height(8.dp))
-        StudioValueSlider(
-            label = "Taper",
-            fraction = (brush.taper / 0.5f).coerceIn(0f, 1f),
-            valueText = "${(brush.taper * 100).toInt()}%",
-            modifier = Modifier.fillMaxWidth(),
-        ) { f -> edit(org.json.JSONObject().put("taper", (f * 0.5f).toDouble())) }
-        // The tip and the grain's mode are choices, not positions on a track: two rows of pills.
-        Spacer(Modifier.height(8.dp))
+        var tab by remember { mutableStateOf("tip") }
+        Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            for (tip in listOf("round", "chisel", "flat", "ragged", "cloud")) {
-                BrushChoicePill(
-                    text = tip.replaceFirstChar(Char::uppercase),
-                    on = brush.tip == tip,
-                    modifier = Modifier.weight(1f),
-                ) { edit(org.json.JSONObject().put("tip", tip)) }
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            for ((mode, label) in listOf("canvas" to "Canvas grain", "stamp" to "Travelling grain")) {
+            for ((key, label) in listOf("tip" to "Tip", "texture" to "Texture")) {
                 BrushChoicePill(
                     text = label,
-                    on = brush.grainMode == mode,
-                    modifier = Modifier.weight(2f),
-                ) { edit(org.json.JSONObject().put("grainMode", mode)) }
+                    on = tab == key,
+                    modifier = Modifier.weight(1f),
+                ) { tab = key }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        if (tab == "tip") {
+            // The silhouette: which shape the stamp is, how big its falloff, and how it is squashed.
+            StudioValueSlider(
+                label = "Hardness",
+                fraction = brush.hardness,
+                valueText = "${(brush.hardness * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f ->
+                // The hardness is part of the brush *and* of the tool state the panels read, so
+                // both are told: otherwise the slider and the preset list drift apart.
+                scope.engine { e.setBrush(hardness = f) }
+                edit(org.json.JSONObject().put("hardness", f.toDouble()))
+            }
+            Spacer(Modifier.height(8.dp))
+            StudioValueSlider(
+                label = "Roundness",
+                fraction = (brush.roundness - 0.05f) / 0.95f,
+                valueText = "${(brush.roundness * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f -> edit(org.json.JSONObject().put("roundness", (0.05f + f * 0.95f).toDouble())) }
+            Spacer(Modifier.height(8.dp))
+            StudioValueSlider(
+                label = "Taper",
+                fraction = (brush.taper / 0.5f).coerceIn(0f, 1f),
+                valueText = "${(brush.taper * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f -> edit(org.json.JSONObject().put("taper", (f * 0.5f).toDouble())) }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for (tip in listOf("round", "chisel", "flat", "ragged", "cloud")) {
+                    BrushChoicePill(
+                        text = tip.take(4).replaceFirstChar(Char::uppercase),
+                        on = brush.tip == tip,
+                        modifier = Modifier.weight(1f),
+                    ) { edit(org.json.JSONObject().put("tip", tip)) }
+                }
+            }
+        } else {
+            // The texture: how the tip breaks up (grain), how often it stamps (spacing), how much
+            // paint each stamp lays down (flow), and whether the grain is fixed to the paper or
+            // travels with the stamp -- Procraft's canvas/brush grain switch.
+            StudioValueSlider(
+                label = "Grain",
+                fraction = brush.grain,
+                valueText = "${(brush.grain * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f -> edit(org.json.JSONObject().put("grain", f.toDouble())) }
+            Spacer(Modifier.height(8.dp))
+            StudioValueSlider(
+                label = "Granularity",
+                fraction = brush.grainScale,
+                valueText = "${(brush.grainScale * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f -> edit(org.json.JSONObject().put("grainScale", f.toDouble())) }
+            Spacer(Modifier.height(8.dp))
+            StudioValueSlider(
+                label = "Spacing",
+                fraction = ((brush.spacing - 0.02f) / 0.58f).coerceIn(0f, 1f),
+                valueText = "${(brush.spacing * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f -> edit(org.json.JSONObject().put("spacing", (0.02f + f * 0.58f).toDouble())) }
+            Spacer(Modifier.height(8.dp))
+            StudioValueSlider(
+                label = "Flow",
+                fraction = brush.flow,
+                valueText = "${(brush.flow * 100).toInt()}%",
+                modifier = Modifier.fillMaxWidth(),
+            ) { f -> edit(org.json.JSONObject().put("flow", f.toDouble())) }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                for ((mode, label) in listOf("canvas" to "Paper grain", "stamp" to "Brush grain")) {
+                    BrushChoicePill(
+                        text = label,
+                        on = brush.grainMode == mode,
+                        modifier = Modifier.weight(1f),
+                    ) { edit(org.json.JSONObject().put("grainMode", mode)) }
+                }
             }
         }
     }
