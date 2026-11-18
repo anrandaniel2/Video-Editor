@@ -130,6 +130,24 @@ jobs:
           done
           exit $status
 
+  # TEMPORARY: render the brush sheet so the drawing can be looked at rather than imagined.
+  brush-sheet:
+    name: Brush sheet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tests
+      - name: Render
+        run: cargo run -p filmcraft-android --example brush_sheet
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brush-sheet
+          path: brush_sheet.png
+
   apk:
     name: APK
     runs-on: ubuntu-latest
