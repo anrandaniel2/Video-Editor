@@ -47,6 +47,12 @@ pub struct Layer {
     pub content: Content,
     /// The layer's effects: what is drawn around its own pixels.
     pub style: LayerStyle,
+    /// Where the layer sits, in document pixels from where it was made.
+    ///
+    /// This is what the Move tool moves: a layer is still the same layer -- same pixels, same
+    /// effects, same mask -- it is simply drawn somewhere else. Baking the movement into the
+    /// pixels instead would resample them and make the move impossible to undo exactly.
+    pub offset: (f64, f64),
 }
 
 /// The layer effects the Effects panel offers.
@@ -520,6 +526,7 @@ impl Document {
             children: Vec::new(),
             content: Content::Pixels(fill),
             style: LayerStyle::default(),
+                offset: (0.0, 0.0),
         });
         Ok(doc)
     }
@@ -558,6 +565,7 @@ impl Document {
             children: Vec::new(),
             content: Content::Pixels(None),
             style: LayerStyle::default(),
+                offset: (0.0, 0.0),
         });
         Ok(at)
     }

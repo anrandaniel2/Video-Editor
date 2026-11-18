@@ -33,6 +33,7 @@ fn bad(what: impl std::fmt::Display) -> Fail {
 /// them, and a test can assert the surface has not shrunk.
 pub const IDS: &[&str] = &[
     "brush.presets.list",
+    "brush.set",
     "command.list",
     "document.inspect",
     "document.sampleColor",
@@ -46,6 +47,7 @@ pub const IDS: &[&str] = &[
     "layer.new.layer",
     "layer.newAdjustmentLayer.curves",
     "layer.newAdjustmentLayer.levels",
+    "layer.move",
     "layer.select",
     "layer.setProps",
     "page.add",
@@ -133,6 +135,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                 children: Vec::new(),
                 content: Content::Pixels(None),
                 style: LayerStyle::default(),
+                offset: (0.0, 0.0),
             };
             // Straight to the top of the tree, which is where a new layer goes and where the
             // studio's Layers panel expects to find it. (An earlier version pulled the active
@@ -160,6 +163,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                 children: Vec::new(),
                 content: Content::Group,
                 style: LayerStyle::default(),
+                offset: (0.0, 0.0),
             });
             doc.active_layer = Some(id);
             doc.touch();
@@ -191,6 +195,33 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             doc.active_layer = doc.doc.layers().last().map(|l| l.id);
             doc.touch();
             Ok(json!({ "deleted": id }))
+        }
+        // `layer.move`: the Move tool's drag, as a nudge of the layer rather than a selection.
+        //
+        // The rail's Move tool used to make a marquee, which is what the Rect tool does: a tool
+        // in a pixel editor that does not move anything. The offset is kept on the layer, so the
+        // pixels are never resampled and undoing a move restores it exactly.
+        "layer.move" => {
+            let doc = session.active_mut().ok_or("Open a picture first.")?;
+            let id = match params.get("layer") {
+                Some(v) => v.as_u64().ok_or("`layer` is not a layer id.")?,
+                None => doc.active_layer.ok_or("Select a layer first.")?,
+            };
+            let dx = params.get("dx").and_then(Value::as_f64).unwrap_or(0.0);
+            let dy = params.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
+            if dx == 0.0 && dy == 0.0 {
+                return Err("A move needs a distance.".into());
+            }
+            if doc.doc.find(id).is_none() {
+                return Err("That layer is gone.".into());
+            }
+            doc.push_history_coalescing("Move layer", params.get("coalesce").and_then(Value::as_str));
+            let layer = doc.doc.find_mut(id).ok_or("That layer is gone.")?;
+            layer.offset.0 += dx;
+            layer.offset.1 += dy;
+            let offset = layer.offset;
+            doc.touch();
+            Ok(json!({ "layer": id, "offset": [offset.0, offset.1] }))
         }
         "layer.select" => {
             let doc = session.active_mut().ok_or("Open a picture first.")?;
@@ -247,23 +278,41 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             if let Some(v) = params.get("opacity").and_then(Value::as_f64) {
                 t.brush_opacity = v.clamp(0.0, 1.0);
             }
+            let mut applied: Option<super::brush::Brush> = None;
             if let Some(v) = params.get("preset").and_then(Value::as_str) {
                 t.brush_preset = v.to_string();
-                // The preset carries its own tip: selecting a brush the panel lists has to change
-                // what the brush does, or the list is eight names for one brush.
-                if let Some((hardness, grain, wet)) = brush_tip(v) {
-                    t.brush_hardness = hardness;
-                    t.brush_grain = grain;
-                    t.brush_wet = wet;
+                // The preset carries its whole tip -- silhouette, spacing, taper, grain -- because
+                // selecting a brush has to change the shape of the line, not just its darkness.
+                if let Some(brush) = brush_tip(v) {
+                    t.brush_hardness = brush.hardness;
+                    t.brush_grain = brush.grain;
+                    t.brush_wet = if brush.wet { 1.0 } else { 0.0 };
+                    t.brush = brush;
+                    applied = Some(brush);
                 }
             }
+            let brush = applied.unwrap_or(t.brush);
             Ok(json!({
                 "size": t.brush_size,
                 "hardness": t.brush_hardness,
                 "opacity": t.brush_opacity,
                 "preset": t.brush_preset,
                 "grain": t.brush_grain,
+                "tip": brush.tip.as_str(),
+                "spacing": brush.spacing,
             }))
+        }
+        // `brush.set`: the brush's own settings, the way the panel's controls send them. The
+        // preset list sets a whole brush; this edits the one in hand, which is what makes the
+        // panel's spacing and taper sliders mean something.
+        "brush.set" => {
+            let mut brush = session.tools.brush;
+            brush.merge(&params).map_err(bad)?;
+            session.tools.brush = brush;
+            session.tools.brush_hardness = brush.hardness;
+            session.tools.brush_grain = brush.grain;
+            session.tools.brush_wet = if brush.wet { 1.0 } else { 0.0 };
+            Ok(brush.to_json())
         }
         "tools.setColors" => {
             let t = &mut session.tools;
@@ -344,6 +393,7 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                     leading: number_or(&params, "leading", 1.2).clamp(0.5, 4.0),
                 }),
                 style: LayerStyle::default(),
+                offset: (0.0, 0.0),
             });
             doc.active_layer = Some(id);
             doc.touch();
@@ -794,38 +844,17 @@ pub fn enabled(session: &Session, id: &str) -> Result<(), Fail> {
 /// edge is broken up, and the wetness makes a stroke build up rather than lay down flat colour.
 /// The panel sends its brush name back with `tools.setBrush` and every stroke afterwards carries
 /// it, so picking "Compressed Charcoal" has to change what the brush does.
-/// A preset's tip: hardness, grain, wetness. `None` for a name the panel does not list.
-fn brush_tip(name: &str) -> Option<(f64, f64, f64)> {
-    Some(match name {
-        "Natural Pencil 6B" => (1.0, 0.55, 0.0),
-        "Natural Pencil 2B" => (0.95, 0.32, 0.0),
-        "Natural Pencil 4B" => (0.98, 0.42, 0.0),
-        "Compressed Charcoal" => (0.35, 0.85, 0.0),
-        "Dense Graphite" => (0.75, 0.60, 0.0),
-        "Round Dry Bristle" => (0.55, 0.70, 0.0),
-        "Soft Chalk" => (0.25, 0.90, 0.0),
-        "Fine Ink" => (1.0, 0.0, 0.0),
-        _ => return None,
-    })
+/// A preset's brush, or `None` for a name the panel does not list.
+///
+/// The tip is not a pair of numbers any more: it has a silhouette, a spacing, a taper and its own
+/// grain, and all of them come from the brush the panel named. Anything the panel does not list
+/// falls back to the brush the studio is already using.
+fn brush_tip(name: &str) -> Option<super::brush::Brush> {
+    super::brush::by_name(name)
 }
 
 fn brush_presets() -> Vec<Value> {
-    [
-        // name, hardness, grain, wetness
-        ("Natural Pencil 6B", 1.0, 0.55, 0.0),
-        ("Natural Pencil 2B", 0.95, 0.32, 0.0),
-        ("Natural Pencil 4B", 0.98, 0.42, 0.0),
-        ("Compressed Charcoal", 0.35, 0.85, 0.0),
-        ("Dense Graphite", 0.75, 0.60, 0.0),
-        ("Round Dry Bristle", 0.55, 0.70, 0.0),
-        ("Soft Chalk", 0.25, 0.90, 0.0),
-        ("Fine Ink", 1.0, 0.0, 0.0),
-    ]
-    .into_iter()
-    .map(|(name, hardness, grain, wetness)| {
-        json!({ "name": name, "hardness": hardness, "grain": grain, "wetness": wetness })
-    })
-    .collect()
+    super::brush::library_json()
 }
 
 /// `layer.setProps`: visibility, lock, opacity, blend, name, clipping.
@@ -890,6 +919,7 @@ fn new_adjustment(session: &mut Session, adjustment: Adjustment, name: &str) -> 
         children: Vec::new(),
         content: Content::Adjustment(adjustment),
         style: LayerStyle::default(),
+                offset: (0.0, 0.0),
     });
     doc.active_layer = Some(id);
     doc.touch();
@@ -1080,6 +1110,7 @@ fn new_shape(session: &mut Session, shape: Shape) -> Result<Value, Fail> {
         children: Vec::new(),
         content: Content::Shape(shape),
         style: LayerStyle::default(),
+                offset: (0.0, 0.0),
     });
     doc.active_layer = Some(id);
     doc.touch();

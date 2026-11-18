@@ -817,6 +817,7 @@ fn a_picture_can_be_moved_and_fitted_after_it_is_placed() {
                 fit: PictureFit::Stretch,
             }),
             style: LayerStyle::default(),
+                offset: (0.0, 0.0),
         });
         doc.active_layer = Some(id);
     }
@@ -1059,6 +1060,7 @@ fn a_framed_text_run_wraps_to_its_box_and_a_plain_one_does_not() {
             children: Vec::new(),
             content: Content::Text(content),
             style: LayerStyle::default(),
+                offset: (0.0, 0.0),
         });
     };
     run_text(&mut plain, false);
@@ -1117,6 +1119,7 @@ fn opening_a_picture_twice_lands_on_the_picture_both_times() {
             children: Vec::new(),
             content: Content::Pixels(Some(std::sync::Arc::new(rgba))),
             style: LayerStyle::default(),
+                offset: (0.0, 0.0),
         });
         let index = s.push(doc);
         s.select_index(index);
@@ -1147,4 +1150,156 @@ fn a_new_document_has_its_own_serial() {
     c.add_page(None, 24, 24).expect("a second page");
     assert_eq!(c.serial, before, "the document's identity is unchanged by a page");
     assert_eq!(c.pages.len(), 2);
+}
+
+/// A stroke across the canvas with a named brush, at a size a 32-pixel document can show.
+fn stroke_with(name: &str, size: f64) -> Vec<u8> {
+    let mut s = session();
+    run(&mut s, "tools.setBrush", json!({ "preset": name, "size": size }));
+    run(
+        &mut s,
+        "paint.stroke",
+        json!({ "points": [[6.0, 16.0], [12.0, 16.0], [20.0, 16.0], [26.0, 16.0]], "size": size }),
+    );
+    pixels(&s)
+}
+
+#[test]
+fn different_brushes_draw_different_lines() {
+    // The complaint this exists for: eight names, one line. Each brush is drawn with the same
+    // gesture and the same size, so the only thing that can differ is the brush.
+    let ink = stroke_with("Fine Ink", 9.0);
+    let charcoal = stroke_with("Compressed Charcoal", 9.0);
+    let chalk = stroke_with("Soft Chalk", 9.0);
+    let bristle = stroke_with("Round Dry Bristle", 9.0);
+    assert_ne!(ink, charcoal, "ink and charcoal drew the same stroke");
+    assert_ne!(charcoal, chalk, "charcoal and chalk drew the same stroke");
+    assert_ne!(chalk, bristle, "chalk and bristle drew the same stroke");
+    assert_ne!(ink, bristle, "ink and bristle drew the same stroke");
+
+    // Ink is the clean line: a hard tip with no grain, so its middle is nearly solid. Charcoal is
+    // broken up, so the same gesture must leave fewer solid pixels behind.
+    let solid = |buf: &[u8]| buf.chunks(4).filter(|p| p[3] > 200).count();
+    assert!(
+        solid(&ink) > solid(&charcoal),
+        "the pen ({} solid pixels) should be solider than charcoal ({})",
+        solid(&ink),
+        solid(&charcoal)
+    );
+}
+
+#[test]
+fn a_wider_brush_draws_a_wider_line() {
+    // The size slider's other half: if the width never changed the brush would be a constant.
+    let width_of = |buf: &[u8]| (0..32).filter(|y| at(buf, 32, 16, *y)[3] > 40).count();
+    let thin = width_of(&stroke_with("Fine Ink", 3.0));
+    let thick = width_of(&stroke_with("Fine Ink", 15.0));
+    assert!(thick > thin, "a 15-pixel brush drew {thick} rows and a 3-pixel one drew {thin}");
+}
+
+#[test]
+fn a_tapered_brush_starts_thinner_than_it_ends() {
+    // A taper is visible only if the ends of a stroke are narrower than its middle; without it the
+    // setting would be a number nothing reads.
+    let mut s = session();
+    run(&mut s, "tools.setBrush", json!({ "preset": "Fine Ink", "size": 11.0 }));
+    // A long taper on the brush in hand, the way the panel's slider would set it.
+    run(&mut s, "brush.set", json!({ "taper": 0.4 }));
+    run(
+        &mut s,
+        "paint.stroke",
+        json!({ "points": [[4.0, 16.0], [16.0, 16.0], [28.0, 16.0]], "size": 11.0 }),
+    );
+    let buf = pixels(&s);
+    let rows = |x: usize| (0..32).filter(|y| at(&buf, 32, x, *y)[3] > 60).count();
+    assert!(
+        rows(16) > rows(4),
+        "the middle of the stroke ({} rows) should be wider than its start ({} rows)",
+        rows(16),
+        rows(4)
+    );
+}
+
+#[test]
+fn the_brush_the_panel_picks_is_the_brush_the_stroke_uses() {
+    // `tools.setBrush` has to store the whole tip, not just its name: the engine reads
+    // `tools.brush`, and a name that never reached it is a panel that lies about the brush.
+    let mut s = session();
+    run(&mut s, "tools.setBrush", json!({ "preset": "Compressed Charcoal" }));
+    assert_eq!(s.tools.brush_preset, "Compressed Charcoal");
+    assert_eq!(s.tools.brush.hardness, 0.35, "the preset's hardness was not stored");
+    assert!(s.tools.brush.grain > 0.5, "the preset's grain was not stored");
+
+    // And the panel's sliders edit that brush rather than being forgotten.
+    run(&mut s, "brush.set", json!({ "spacing": 0.5, "flow": 0.4 }));
+    assert_eq!(s.tools.brush.spacing, 0.5);
+    assert_eq!(s.tools.brush.flow, 0.4);
+    assert!(s.tools.brush.grain > 0.5, "editing the spacing reset the grain");
+}
+
+#[test]
+fn the_move_tool_moves_the_layer_it_is_dragged_over() {
+    // A Move tool that made a marquee is the tool the complaint was about: it has to change what
+    // the picture looks like, and it has to be undoable without resampling the pixels.
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(
+        &mut s,
+        "paint.stroke",
+        json!({ "points": [[10.0, 10.0], [14.0, 10.0]], "color": "#000000", "size": 6.0 }),
+    );
+    assert_eq!(at(&pixels(&s), 32, 12, 10), [0, 0, 0, 255], "the stroke is where it was drawn");
+
+    let reply = run(&mut s, "layer.move", json!({ "dx": 6.0, "dy": 0.0 }));
+    assert_eq!(reply["offset"], json!([6.0, 0.0]));
+    let after = pixels(&s);
+    assert_eq!(at(&after, 32, 18, 10), [0, 0, 0, 255], "the stroke moved six pixels right");
+    assert_eq!(at(&after, 32, 12, 10), [255, 255, 255, 255], "and left its old place empty");
+
+    // A second nudge adds to the first, and undo takes the whole move back.
+    run(&mut s, "layer.move", json!({ "dx": 2.0, "dy": 0.0, "coalesce": "move.1" }));
+    assert_eq!(at(&pixels(&s), 32, 20, 10), [0, 0, 0, 255], "the second nudge added to the first");
+    assert!(s.active_mut().unwrap().undo(), "the move is one undoable step");
+    assert_eq!(
+        at(&pixels(&s), 32, 12, 10),
+        [0, 0, 0, 255],
+        "undo put the stroke back where it was drawn"
+    );
+}
+
+#[test]
+fn a_move_is_not_a_resample() {
+    // The reason the offset lives on the layer: a shape moved and moved back finds exactly the
+    // pixels that were there, which a resample never does.
+    let mut s = session();
+    run(&mut s, "layer.new.layer", json!({}));
+    run(&mut s, "paint.stroke", json!({ "points": [[8.0, 8.0]], "color": "#FF0000", "size": 8.0 }));
+    let before = pixels(&s);
+    run(&mut s, "layer.move", json!({ "dx": 5.0, "dy": 3.0 }));
+    assert_ne!(pixels(&s), before, "the move changed the picture");
+    run(&mut s, "layer.move", json!({ "dx": -5.0, "dy": -3.0 }));
+    assert_eq!(pixels(&s), before, "a move and its opposite returned the exact pixels");
+}
+
+#[test]
+fn every_tool_in_the_rail_has_a_command() {
+    // The rail's tools, by the engine command each one ends in. Clone and Heal had commands the
+    // canvas never sent; Gradient had one and no drag; Move had none at all. This is the check
+    // that the rail and the engine still agree about what a tool does.
+    for id in [
+        "paint.bucket",         // Fill
+        "paint.gradient",       // Gradient
+        "paint.cloneStamp",     // Clone
+        "paint.spotHealing",    // Heal
+        "paint.stroke",         // Brush, Eraser
+        "paint.pencil",         // Pencil
+        "select.lasso",         // Lasso
+        "select.magicWand",     // Wand
+        "select.rect",          // Rect
+        "type.create",          // Type
+        "document.sampleColor", // Eyedropper
+        "layer.move",           // Move
+    ] {
+        assert!(super::commands::known(id), "the rail needs `{id}` and the engine does not have it");
+    }
 }

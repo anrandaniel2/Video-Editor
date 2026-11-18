@@ -89,6 +89,18 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
         (doc.doc.width(), doc.doc.height())
     };
     let selection = session.active().and_then(|d| d.doc.selection().clone());
+    // The brush the stroke was made with: its tip, its grain, its spacing, and the randomness that
+    // stops a hand-drawn line looking stamped. Read before the layer is borrowed mutably, and once
+    // for the whole stroke, because every stamp of one stroke shares it.
+    let mut brush = session.tools.brush;
+    // A command may override the tip for this stroke only: the sliders send hardness and grain,
+    // and a stroke that ignored them would be a slider that does nothing.
+    brush.hardness = hardness;
+    brush.grain = grain;
+    if straight {
+        brush.tip = super::brush::Tip::Round;
+        brush.roundness = 1.0;
+    }
     let layer = target(session)?;
     let Content::Pixels(pixels) = &mut layer.content else { unreachable!() };
     // `make_mut` is what keeps the undo snapshot cheap: the clone happened when the snapshot was
@@ -98,149 +110,290 @@ pub fn stroke(session: &mut Session, params: &Value) -> Result<Value, Fail> {
     );
 
     let radius = (size / 2.0).max(0.25);
+    let mut stroke = Stroke {
+        // A struct literal does not coerce, so the slice and the mask are taken explicitly.
+        pixels: px.as_mut_slice(),
+        width,
+        height,
+        radius,
+        opacity,
+        colour,
+        straight,
+        erasing,
+        brush,
+        selection: selection.as_deref(),
+        // A fixed seed per stroke: the same drag paints the same way twice, so undo brings back
+        // what was replaced rather than a differently speckled line.
+        seed: (colour[0] as u64) << 24
+            | (colour[1] as u64) << 16
+            | (colour[2] as u64) << 8
+            | points.len() as u64,
+        stamps: 0,
+        total: 0,
+        // Set below, once the path's length is known: the taper is measured against it.
+        step: 1.0,
+    };
+    // A taper needs to know where the stroke ends before it starts, so the length comes first.
+    let length: f64 = points
+        .windows(2)
+        .map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt())
+        .sum();
+    stroke.total = length;
+    stroke.step = (radius * 2.0 * stroke.brush.spacing).max(0.4);
     for pair in points.windows(2) {
-        stamp_segment(px, width, height, pair[0], pair[1], radius, hardness, opacity, colour, straight, erasing, grain, selection.as_deref());
+        stroke.segment(pair[0], pair[1]);
     }
     if points.len() == 1 {
-        stamp_segment(px, width, height, points[0], points[0], radius, hardness, opacity, colour, straight, erasing, grain, selection.as_deref());
+        stroke.segment(points[0], points[0]);
     }
+    let stamps = stroke.stamps;
     session.active_mut().unwrap().touch();
-    Ok(serde_json::json!({ "points": points.len() }))
+    Ok(serde_json::json!({
+        "points": points.len(),
+        "brush": session.tools.brush_preset,
+        "stamps": stamps,
+    }))
 }
 
-/// Stamp a round tip along the segment `a`..`b`.
-#[allow(clippy::too_many_arguments)]
-fn stamp_segment(
-    pixels: &mut [u8],
+/// One stroke being painted: everything a stamp needs, and the running position along the path
+/// that the taper is measured against.
+struct Stroke<'a> {
+    pixels: &'a mut [u8],
     width: u32,
     height: u32,
-    a: (f64, f64),
-    b: (f64, f64),
     radius: f64,
-    hardness: f64,
     opacity: f64,
     colour: [u8; 4],
     straight: bool,
     erasing: bool,
-    grain: f64,
-    selection: Option<&[u8]>,
-) {
-    let dx = b.0 - a.0;
-    let dy = b.1 - a.1;
-    let length = (dx * dx + dy * dy).sqrt();
-    // One stamp every half radius keeps the stroke solid without stamping the same pixel twice.
-    let step = (radius * 0.5).max(0.5);
-    let steps = ((length / step).ceil() as usize).max(1);
-    for i in 0..=steps {
-        let t = if steps == 0 { 0.0 } else { i as f64 / steps as f64 };
-        let cx = a.0 + dx * t;
-        let cy = a.1 + dy * t;
-        stamp(pixels, width, height, cx, cy, radius, hardness, opacity, colour, straight, erasing, grain, selection);
-    }
+    brush: super::brush::Brush,
+    selection: Option<&'a [u8]>,
+    seed: u64,
+    /// How many stamps have been laid so far, and the stroke's whole length: together they place
+    /// the taper.
+    stamps: u64,
+    total: f64,
+    step: f64,
 }
 
-/// Stamp one round tip, anti-aliased at the edge and eased by `hardness`.
-#[allow(clippy::too_many_arguments)]
-fn stamp(
-    pixels: &mut [u8],
-    width: u32,
-    height: u32,
-    cx: f64,
-    cy: f64,
-    radius: f64,
-    hardness: f64,
-    opacity: f64,
-    colour: [u8; 4],
-    straight: bool,
-    erasing: bool,
-    grain: f64,
-    selection: Option<&[u8]>,
-) {
-    let x0 = ((cx - radius).floor() as i64).max(0);
-    let y0 = ((cy - radius).floor() as i64).max(0);
-    let x1 = ((cx + radius).ceil() as i64).min(i64::from(width) - 1);
-    let y1 = ((cy + radius).ceil() as i64).min(i64::from(height) - 1);
-    if x1 < x0 || y1 < y0 {
-        return;
-    }
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            // A selection confines paint; that is the whole point of making one.
-            if let Some(mask) = selection {
-                if mask[y as usize * width as usize + x as usize] == 0 {
-                    continue;
-                }
-            }
-            let d = ((x as f64 + 0.5 - cx).powi(2) + (y as f64 + 0.5 - cy).powi(2)).sqrt();
-            // `hardness` is where the falloff begins: 1 is a hard edge, 0 a soft one.
-            let edge = if straight {
-                1.0
-            } else {
-                let inner = radius * hardness.clamp(0.0, 1.0);
-                if d <= inner {
-                    1.0
-                } else if d >= radius {
-                    0.0
-                } else {
-                    1.0 - (d - inner) / (radius - inner).max(1e-6)
-                }
-            };
-            // Grain breaks the tip's edge up: charcoal skips and speckles, ink does not. The
-            // pattern is a hash of the pixel, not a random number, so the same stroke paints the
-            // same way twice -- an undo that came back speckled differently would be a lie.
-            let edge = if grain > 0.0 {
-                // A cheap integer hash of the pixel's position. Deterministic on purpose: the same
-                // stroke must paint the same way twice, or an undo would come back speckled
-                // differently from what it replaced.
-                let mut h = (x as u32).wrapping_mul(0x9E3779B1) ^ (y as u32).wrapping_mul(0x85EBCA77);
-                h ^= h >> 15;
-                h = h.wrapping_mul(0xC2B2AE3D);
-                h ^= h >> 13;
-                let n = (h & 0xFFFF) as f64 / 65535.0;
-                // Full strength at the tip's centre, thinning towards its rim, scaled by the
-                // preset's grain: a soft chalk breaks up all over its edge, fine ink not at all.
-                let radial = 1.0 - (d / radius).clamp(0.0, 1.0);
-                let tooth = 1.0 - grain * radial * (1.0 - n);
-                edge * tooth
-            } else {
-                edge
-            };
-            if edge <= 0.0 {
-                continue;
-            }
-            let i = ((y as usize) * width as usize + x as usize) * 4;
-            // The Eraser takes alpha away rather than painting transparent on top: painting
-            // transparent is a no-op source-over, so it would look like the tool did nothing.
-            if erasing {
-                let da = pixels[i + 3] as f64 / 255.0;
-                let out_a = (da * (1.0 - edge * opacity)).clamp(0.0, 1.0);
-                pixels[i + 3] = (out_a * 255.0).round() as u8;
-                // A pixel that keeps alpha keeps its colour; one that loses all of it holds none.
-                if out_a <= 0.0 {
-                    pixels[i] = 0;
-                    pixels[i + 1] = 0;
-                    pixels[i + 2] = 0;
-                }
-                continue;
-            }
-            let sa = edge * opacity * (colour[3] as f64 / 255.0);
-            if sa <= 0.0 {
-                continue;
-            }
-            let da = pixels[i + 3] as f64 / 255.0;
-            let out_a = sa + da * (1.0 - sa);
-            if out_a <= 0.0 {
-                continue;
-            }
-            for c in 0..3 {
-                let sc = colour[c] as f64 / 255.0;
-                let dc = pixels[i + c] as f64 / 255.0;
-                let v = (sc * sa + dc * da * (1.0 - sa)) / out_a;
-                pixels[i + c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-            }
-            pixels[i + 3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
+impl Stroke<'_> {
+    /// Stamp along one segment of the hand's path.
+    fn segment(&mut self, a: (f64, f64), b: (f64, f64)) {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let length = (dx * dx + dy * dy).sqrt();
+        let steps = ((length / self.step).ceil() as usize).max(1);
+        // The direction this segment runs in: a chisel or a flat brush turns with the hand, which
+        // is what makes the width of the line change as it curves.
+        let angle = dy.atan2(dx);
+        for i in 0..=steps {
+            let t = if steps == 0 { 0.0 } else { i as f64 / steps as f64 };
+            self.stamp_at(a.0 + dx * t, a.1 + dy * t, angle);
         }
     }
+
+    /// One step of the path: `count` stamps, each with the brush's own rotation and jitter, laid at
+    /// the flow the brush and the opacity slider give.
+    fn stamp_at(&mut self, cx: f64, cy: f64, direction: f64) {
+        let count = self.brush.count.max(1);
+        for i in 0..count {
+            // Deterministic pseudo-randomness: a hash of the stamp's index and the stroke's seed.
+            let mut h = self.seed ^ self.stamps.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            h ^= (i as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+            h ^= h >> 31;
+            h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            h ^= h >> 29;
+            let rnd = |bits: u32| ((h >> bits) & 0xFFFF) as f64 / 65535.0;
+
+            // The stamp's size: jitter reduces it, and the taper shrinks it at each end of the
+            // stroke, which is what makes a chalk line start and finish thin.
+            let mut radius = self.radius;
+            if self.brush.jitter > 0.0 {
+                radius *= 1.0 - self.brush.jitter * 0.7 * rnd(0);
+            }
+            radius *= self.taper_scale();
+            if radius < 0.25 {
+                continue;
+            }
+
+            // The stamp's rotation: the brush's own, plus the stroke's direction if it follows the
+            // hand, plus the scatter.
+            let mut rotation = self.brush.rotation + self.brush.follow * direction;
+            if self.brush.scatter > 0.0 {
+                rotation += (rnd(16) * 2.0 - 1.0) * self.brush.scatter * std::f64::consts::PI;
+            }
+
+            // A scattered stamp is thrown off the path a little, in stamp diameters.
+            let (mut sx, mut sy) = (cx, cy);
+            if self.brush.scatter > 0.0 && count > 1 {
+                let offset = self.brush.scatter * 0.25 * radius;
+                sx += (rnd(32) * 2.0 - 1.0) * offset;
+                sy += (rnd(48) * 2.0 - 1.0) * offset;
+            }
+
+            // Flow: what one stamp lays down. The opacity slider scales the whole stroke.
+            let mut alpha = self.opacity * self.brush.flow.min(1.0);
+            if self.brush.jitter > 0.0 {
+                alpha *= 1.0 - self.brush.jitter * 0.5 * rnd(8);
+            }
+            alpha *= self.taper_scale();
+
+            self.stamp_one(sx, sy, radius, rotation, alpha);
+            self.stamps += 1;
+        }
+    }
+
+    /// The taper's size at the current stamp: 1 in the middle of the stroke, less at each end.
+    fn taper_scale(&self) -> f64 {
+        let taper = self.brush.taper;
+        if taper <= 0.0 || self.total <= 0.0 {
+            return 1.0;
+        }
+        let along = (self.stamps as f64 * self.step) / self.total;
+        // Distance from the nearest end, in fractions of the stroke.
+        let from_end = along.min(1.0 - along).min(0.5);
+        // A linear ramp over `taper` of the stroke, floored so the tip still paints something.
+        (from_end / taper.max(1e-6)).clamp(0.15, 1.0)
+    }
+
+    /// One stamp: the tip's silhouette, the grain that breaks it up, and the blend.
+    fn stamp_one(&mut self, cx: f64, cy: f64, radius: f64, rotation: f64, opacity: f64) {
+        use super::brush::{GrainMode, Tip};
+        let width = self.width;
+        let height = self.height;
+        let x0 = ((cx - radius).floor() as i64).max(0);
+        let y0 = ((cy - radius).floor() as i64).max(0);
+        let x1 = ((cx + radius).ceil() as i64).min(i64::from(width) - 1);
+        let y1 = ((cy + radius).ceil() as i64).min(i64::from(height) - 1);
+        if x1 < x0 || y1 < y0 {
+            return;
+        }
+        // The stamp's own axes: roundness squashes it across the rotation.
+        let (sin, cos) = rotation.sin_cos();
+        let roundness = self.brush.roundness.clamp(0.05, 1.0);
+        let hardness = self.brush.hardness;
+        let grain = self.brush.grain;
+        let grain_scale = self.brush.grain_scale;
+        let grain_mode = self.brush.grain_mode;
+        let tip = self.brush.tip;
+        let straight = self.straight;
+        let colour = self.colour;
+        let erasing = self.erasing;
+        let seed = self.seed;
+
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if let Some(mask) = self.selection {
+                    if mask[y as usize * width as usize + x as usize] == 0 {
+                        continue;
+                    }
+                }
+                // Into the stamp's own frame, where it is a circle of radius one.
+                let dx = x as f64 + 0.5 - cx;
+                let dy = y as f64 + 0.5 - cy;
+                let u = (dx * cos + dy * sin) / radius;
+                let v = (-dx * sin + dy * cos) / (radius * roundness);
+                let d = (u * u + v * v).sqrt();
+                if d >= 1.0 {
+                    continue;
+                }
+                // The tip's silhouette: a disc eased by hardness, except where the tip is not a
+                // disc. `straight` is the pencil's hard, aliased edge.
+                let inner = hardness.clamp(0.0, 1.0);
+                let mut edge = if straight || d <= inner {
+                    1.0
+                } else {
+                    1.0 - (d - inner) / (1.0 - inner).max(1e-6)
+                };
+                match tip {
+                    // A ragged rim is eaten into by the grain: the tooth shows at the silhouette
+                    // rather than over the whole stamp.
+                    Tip::Ragged => {
+                        if grain > 0.0 {
+                            let n = hash01(x as u32, y as u32, seed);
+                            edge *= (1.0 - grain * d * d * (1.0 - n) * 1.6).clamp(0.0, 1.0);
+                        }
+                    }
+                    // A cloud is three lobes: soft all over, with no hard edge anywhere, which is
+                    // what an airbrush and a chalk have in common.
+                    Tip::Cloud => {
+                        let mut best: f64 = 0.0;
+                        for (ox, oy) in [(0.0, 0.32), (-0.28, -0.2), (0.28, -0.2)] {
+                            let lu = u - ox;
+                            let lv = v - oy;
+                            let ld = (lu * lu + lv * lv).sqrt() / 0.72;
+                            let falloff = if ld <= inner {
+                                1.0
+                            } else {
+                                1.0 - (ld - inner) / (1.0 - inner).max(1e-6)
+                            };
+                            best = best.max(falloff.clamp(0.0, 1.0));
+                        }
+                        edge *= best;
+                    }
+                    _ => {}
+                }
+                if edge <= 0.0 {
+                    continue;
+                }
+                // Grain inside the stamp: travelling with it (stamp mode) or fixed to the canvas.
+                if grain > 0.0 && !matches!(tip, Tip::Ragged) {
+                    let (gx, gy) = match grain_mode {
+                        GrainMode::Stamp => (
+                            (((u * 0.5 + 0.5) * 255.0) * grain_scale.max(0.05)).round() as u32,
+                            (((v * 0.5 + 0.5) * 255.0) * grain_scale.max(0.05)).round() as u32,
+                        ),
+                        GrainMode::Canvas => (x as u32, y as u32),
+                    };
+                    let n = hash01(gx, gy, seed);
+                    // Grain shows most where the stamp is thin, and only as deep as its setting.
+                    edge *= (1.0 - grain * (1.0 - d * 0.6) * (1.0 - n)).clamp(0.0, 1.0);
+                }
+                if edge <= 0.0 {
+                    continue;
+                }
+
+                let i = ((y as usize) * width as usize + x as usize) * 4;
+                if erasing {
+                    let da = self.pixels[i + 3] as f64 / 255.0;
+                    let out_a = (da * (1.0 - edge * opacity)).clamp(0.0, 1.0);
+                    self.pixels[i + 3] = (out_a * 255.0).round() as u8;
+                    if out_a <= 0.0 {
+                        self.pixels[i] = 0;
+                        self.pixels[i + 1] = 0;
+                        self.pixels[i + 2] = 0;
+                    }
+                    continue;
+                }
+                let sa = edge * opacity * (colour[3] as f64 / 255.0);
+                if sa <= 0.0 {
+                    continue;
+                }
+                let da = self.pixels[i + 3] as f64 / 255.0;
+                let out_a = sa + da * (1.0 - sa);
+                if out_a <= 0.0 {
+                    continue;
+                }
+                for c in 0..3 {
+                    let sc = colour[c] as f64 / 255.0;
+                    let dc = self.pixels[i + c] as f64 / 255.0;
+                    let v = (sc * sa + dc * da * (1.0 - sa)) / out_a;
+                    self.pixels[i + c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+                self.pixels[i + 3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+        }
+    }
+}
+
+/// A deterministic value in 0..1 for a position and a seed.
+fn hash01(x: u32, y: u32, seed: u64) -> f64 {
+    let mut h = seed ^ (x as u64).wrapping_mul(0x9E37_79B1) ^ (y as u64).wrapping_mul(0x85EB_CA77);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x27D4_EB2F_1656_67C5);
+    h ^= h >> 16;
+    (h & 0xFFFF) as f64 / 65535.0
 }
 
 /// `paint.bucket`: flood fill from a point, bounded by `tolerance` (0..=255).

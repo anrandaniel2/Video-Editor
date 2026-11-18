@@ -274,6 +274,35 @@ fn composite_layer(
     if !l.visible || l.opacity <= 0.0 {
         return;
     }
+    // A layer that has been moved is drawn where it now sits. The offset is applied to the layer's
+    // own finished tile, so the picture, its shape, its text or its picture moves as one thing --
+    // and the pixels underneath are never resampled.
+    let (dx, dy) = l.offset;
+    if dx.abs() >= 0.5 || dy.abs() >= 0.5 {
+        // The layer is composited onto its own transparent tile at full strength, so the tile is
+        // the layer as one object; it is then slid into place and blended once.
+        let mut tile = vec![0u8; out.len()];
+        let mut solo = l.clone();
+        solo.opacity = 1.0;
+        solo.blend = Blend::Normal;
+        solo.style = Default::default();
+        solo.clipped = false;
+        solo.offset = (0.0, 0.0);
+        composite_layer(&solo, doc, x0, y0, w, h, &mut tile, 1.0);
+        let mut moved = shift(&tile, w as usize, h as usize, dx, dy);
+        // The effects belong to the moved layer, so they are computed after the slide: a shadow
+        // sits under the place the layer now is, not under the place it came from.
+        let mut under = vec![0u8; out.len()];
+        apply_style(&mut moved, &mut under, &l.style, w as usize, h as usize);
+        if l.clipped {
+            clip_to_alpha(&mut moved, out, w as usize, h as usize);
+        }
+        if under.iter().any(|&v| v != 0) {
+            over(out, &under, w as usize, h as usize, w as usize);
+        }
+        blend_into(out, &moved, w as usize, h as usize, parent_alpha * l.opacity.clamp(0.0, 1.0), l.blend);
+        return;
+    }
     let alpha = parent_alpha * l.opacity.clamp(0.0, 1.0);
     match &l.content {
         Content::Group => {
@@ -380,6 +409,47 @@ fn composite_layer(
         }
     }
     // A group's children have already been composited; nothing else to do here.
+}
+
+/// Shift a composited layer by a whole-or-part pixel offset, bilinearly so a half-pixel move is
+/// smooth rather than a jump between two whole positions.
+fn shift(src: &[u8], w: usize, h: usize, dx: f64, dy: f64) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    for y in 0..h {
+        for x in 0..w {
+            // Where this pixel of the moved layer came from.
+            let (sx, sy) = (x as f64 - dx, y as f64 - dy);
+            let (x0, y0) = (sx.floor(), sy.floor());
+            let (fx, fy) = (sx - x0, sy - y0);
+            let (x0, y0) = (x0 as isize, y0 as isize);
+            let mut acc = [0.0f64; 4];
+            let mut wsum = 0.0;
+            for (ox, oy, weight) in [
+                (0, 0, (1.0 - fx) * (1.0 - fy)),
+                (1, 0, fx * (1.0 - fy)),
+                (0, 1, (1.0 - fx) * fy),
+                (1, 1, fx * fy),
+            ] {
+                let (px, py) = (x0 + ox, y0 + oy);
+                if px < 0 || py < 0 || px >= w as isize || py >= h as isize || weight <= 0.0 {
+                    continue;
+                }
+                let i = (py as usize * w + px as usize) * 4;
+                for c in 0..4 {
+                    acc[c] += src[i + c] as f64 * weight;
+                }
+                wsum += weight;
+            }
+            if wsum <= 0.0 {
+                continue;
+            }
+            let o = (y * w + x) * 4;
+            for c in 0..4 {
+                out[o + c] = (acc[c] / wsum).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
 }
 
 /// Multiply `src` by the alpha of `under`, so a clipped layer only shows where its parent paints.

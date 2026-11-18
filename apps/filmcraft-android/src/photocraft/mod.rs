@@ -15,6 +15,7 @@
 //! command ids. The drawing canvas's tiled document is a flat layer stack addressed by method. They
 //! are different models, and bending one into the other would make both worse.
 
+pub mod brush;
 pub mod commands;
 pub mod compose;
 pub mod model;
@@ -85,6 +86,10 @@ pub struct Tools {
     /// a stroke build rather than lay flat.
     pub brush_grain: f64,
     pub brush_wet: f64,
+    /// The brush itself: the tip, spacing, flow, taper and grain the next stroke is stamped with.
+    /// The panel's sliders edit this in place, so a change to the hardness survives until the next
+    /// brush is picked -- a brush is a set of settings, not a label on two numbers.
+    pub brush: crate::photocraft::brush::Brush,
     pub foreground: [u8; 4],
     pub background: [u8; 4],
 }
@@ -100,6 +105,7 @@ impl Default for Tools {
             brush_preset: "Fine Ink".into(),
             brush_grain: 0.0,
             brush_wet: 0.0,
+            brush: crate::photocraft::brush::by_name("Fine Ink").unwrap_or_default(),
             foreground: [0, 0, 0, 255],
             background: [255, 255, 255, 255],
         }
