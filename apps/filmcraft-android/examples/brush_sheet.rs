@@ -95,13 +95,13 @@ fn main() -> Result<(), String> {
     }
     write_gray_png("brush_small.png", &small, w / 4, (h / 4) * rows)?;
     write_png("brush_sheet.png", &sheet, w, h * rows)?;
-    // Strips of three rows at full resolution: small enough that every chunk of their base64 gets
-    // through an annotation queue, large enough to judge a brush's edge by.
-    for (strip, set) in names.chunks(3).enumerate() {
-        let start_row = strip * 3;
-        let a = start_row * h as usize * w as usize * 4;
-        let b = ((start_row + set.len()) * h as usize * w as usize * 4).min(sheet.len());
-        write_png(&format!("strip_{strip}.png"), &sheet[a..b], w, h * set.len() as u32)?;
+    // Two halves at full resolution: every brush, large enough to judge an edge by, in as many
+    // images as an annotation queue will carry.
+    let half = (rows + 1) / 2;
+    for (i, set) in names.chunks(half.max(1) as usize).enumerate() {
+        let a = i * half as usize * h as usize * w as usize * 4;
+        let b = ((i * half as usize) + set.len()) * h as usize * w as usize * 4;
+        write_png(&format!("half_{}.png", (b'A' + i as u8) as char), &sheet[a..b.min(sheet.len())], w, h * set.len() as u32)?;
     }
     println!("wrote brush_sheet.png: {w}x{h}, {} brushes", names.len());
     for (i, n) in names.iter().enumerate() {

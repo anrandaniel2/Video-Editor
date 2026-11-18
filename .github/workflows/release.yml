@@ -151,14 +151,12 @@ jobs:
         if: always()
         run: |
           echo "::notice title=Sheet size::$(stat -c%s brush_small.png 2>/dev/null || echo 0) bytes"
-          # An annotation queue is capped, so one 92 kB sheet loses its tail. The sheet is sent in
-          # strips of two rows instead: each is small enough to arrive whole.
+          # The annotation queue carries eight messages and no more, so the sheet is sent as
+          # halves, two rows each, and only the two halves that show the most are sent.
           echo "::notice title=Full size::$(stat -c%s brush_sheet.png 2>/dev/null || echo 0) bytes"
-          for f in strip_*.png; do
+          for f in half_a.png half_b.png; do
             [ -f "$f" ] || continue
-            base64 -w0 "$f" | fold -w 3000 | nl -ba -w 3 | while read -r n chunk; do
-              echo "::notice title=${f%.png}-${n}::${chunk}"
-            done
+            echo "::notice title=${f%.png}::$(base64 -w0 "$f" | head -c 60000)"
           done
 
   apk:
