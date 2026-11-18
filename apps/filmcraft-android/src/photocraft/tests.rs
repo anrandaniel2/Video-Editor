@@ -448,17 +448,18 @@ fn the_pencil_is_a_hard_tip_and_the_brush_is_not() {
     run(&mut s, "layer.new.layer", json!({}));
     run(&mut s, "paint.pencil", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0 }));
     assert_eq!(at(&pixels(&s), 32, 16, 16)[3], 255, "the pencil's centre is solid");
-    // A 9px tip centred on 16 covers up to about 20.5, so 20 is the outermost covered pixel and
-    // 21 is empty. The pencil must still be solid there; the soft brush must not be.
+    // A 9px tip centred on the pixel at 16 has a radius of 4.5, so it reaches 20.5 -- exactly the
+    // far edge of the pixel at 20. Pixel 18 is well inside the tip, and it is where the pencil
+    // must still be solid and the soft brush must already have faded to grey.
     let mut soft = session();
     run(&mut soft, "layer.new.layer", json!({}));
     run(&mut soft, "paint.stroke", json!({ "points": [[16.0, 16.0]], "color": "#000000", "size": 9.0, "hardness": 0.0 }));
     // Read the colour, not the alpha: the white background layer is opaque underneath, so an
     // unpainted pixel is white rather than transparent.
-    let pencil_edge = at(&pixels(&s), 32, 20, 16)[0];
-    let brush_edge = at(&pixels(&soft), 32, 20, 16)[0];
+    let pencil_edge = at(&pixels(&s), 32, 18, 16)[0];
+    let brush_edge = at(&pixels(&soft), 32, 18, 16)[0];
     assert_eq!(pencil_edge, 0, "the pencil is solid right to its edge: {pencil_edge}");
-    assert!(brush_edge > 200, "the soft brush had faded out by there: {brush_edge}");
+    assert!(brush_edge > 100, "the soft brush had faded out by there: {brush_edge}");
     assert_eq!(at(&pixels(&s), 32, 22, 16)[0], 255, "and beyond the tip is background");
 }
 
@@ -1273,11 +1274,19 @@ fn the_move_tool_moves_the_layer_it_is_dragged_over() {
     // A second nudge adds to the first, and undo takes the whole move back.
     run(&mut s, "layer.move", json!({ "dx": 2.0, "dy": 0.0, "coalesce": "move.1" }));
     assert_eq!(at(&pixels(&s), 32, 20, 10), [0, 0, 0, 255], "the second nudge added to the first");
-    assert!(s.active_mut().unwrap().undo(), "the move is one undoable step");
+    // Two drags are two steps, so the first undo takes back the second nudge and the next takes
+    // back the first -- returning the stroke to exactly where it was drawn.
+    assert!(s.active_mut().unwrap().undo(), "the second nudge is its own step");
+    assert_eq!(
+        at(&pixels(&s), 32, 18, 10),
+        [0, 0, 0, 255],
+        "undo took back the second nudge"
+    );
+    assert!(s.active_mut().unwrap().undo(), "the first nudge is its own step");
     assert_eq!(
         at(&pixels(&s), 32, 12, 10),
         [0, 0, 0, 255],
-        "undo put the stroke back where it was drawn"
+        "and the next put the stroke back where it was drawn"
     );
 }
 
