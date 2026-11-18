@@ -79,16 +79,20 @@ fn main() -> Result<(), String> {
     // A second, smaller sheet: one grey channel, quarter scale, which is small enough to carry in
     // a check-run summary and still legible enough to judge a brush by.
     let rows = names.len() as u32;
-    let small: Vec<u8> = (0..rows).flat_map(|row| {
-        (0..h).step_by(4).flat_map(move |y| {
-            (0..w).step_by(4).map(move |x| {
+    let mut small: Vec<u8> = Vec::new();
+    for row in 0..rows {
+        for y in (0..h).step_by(4) {
+            for x in (0..w).step_by(4) {
                 let i = ((row * h + y) * w + x) as usize * 4;
                 // What the eye reads: luminance, with the white background staying white.
-                ((u32::from(sheet[i]) * 299 + u32::from(sheet[i + 1]) * 587 + u32::from(sheet[i + 2]) * 114)
-                    / 1000) as u8
-            })
-        })
-    }).collect();
+                let lum = (u32::from(sheet[i]) * 299
+                    + u32::from(sheet[i + 1]) * 587
+                    + u32::from(sheet[i + 2]) * 114)
+                    / 1000;
+                small.push(lum as u8);
+            }
+        }
+    }
     write_gray_png("brush_small.png", &small, w / 4, (h / 4) * rows)?;
     write_png("brush_sheet.png", &sheet, w, h * rows)?;
     println!("wrote brush_sheet.png: {w}x{h}, {} brushes", names.len());
