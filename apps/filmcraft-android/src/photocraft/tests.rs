@@ -1363,3 +1363,22 @@ fn a_crop_refuses_to_leave_an_unusable_page() {
     );
     assert_eq!(s.active().unwrap().doc.width(), 32, "the refused crop left the page alone");
 }
+
+#[test]
+fn a_brush_command_names_the_brush_it_left_in_hand() {
+    // The panel edits the brush in hand, so every command that changes it has to say which brush
+    // that now is. A reply with settings and no name leaves the sliders editing the previous
+    // brush -- the charcoal's hardness shown on the ink's card.
+    let mut s = session();
+    let picked = run(&mut s, "tools.setBrush", json!({ "preset": "Compressed Charcoal" }));
+    assert_eq!(picked["name"], json!("Compressed Charcoal"), "setBrush did not name the brush");
+    assert_eq!(picked["tip"], json!("chisel"));
+
+    let edited = run(&mut s, "brush.set", json!({ "spacing": 0.3 }));
+    assert_eq!(edited["name"], json!("Compressed Charcoal"), "brush.set did not name the brush");
+    assert_eq!(edited["spacing"], json!(0.3));
+    // The name is the brush's, and the brush is still the one picked: editing a setting must not
+    // silently reset the rest of it.
+    assert_eq!(s.tools.brush.tip, super::brush::Tip::Chisel, "the tip survived the edit");
+    assert!(s.tools.brush.grain > 0.5, "the grain survived the edit");
+}

@@ -317,7 +317,6 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             if let Some(v) = params.get("opacity").and_then(Value::as_f64) {
                 t.brush_opacity = v.clamp(0.0, 1.0);
             }
-            let mut applied: Option<super::brush::Brush> = None;
             if let Some(v) = params.get("preset").and_then(Value::as_str) {
                 t.brush_preset = v.to_string();
                 // The preset carries its whole tip -- silhouette, spacing, taper, grain -- because
@@ -327,19 +326,18 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
                     t.brush_grain = brush.grain;
                     t.brush_wet = if brush.wet { 1.0 } else { 0.0 };
                     t.brush = brush;
-                    applied = Some(brush);
                 }
             }
-            let brush = applied.unwrap_or(t.brush);
-            Ok(json!({
-                "size": t.brush_size,
-                "hardness": t.brush_hardness,
-                "opacity": t.brush_opacity,
-                "preset": t.brush_preset,
-                "grain": t.brush_grain,
-                "tip": brush.tip.as_str(),
-                "spacing": brush.spacing,
-            }))
+            // The reply is the brush itself, named: a panel that edits what a command returns
+            // needs to know that picking Charcoal made Charcoal the brush in hand, not only that
+            // its hardness changed.
+            let mut out = t.brush.to_json_named(&t.brush_preset);
+            if let Some(o) = out.as_object_mut() {
+                o.insert("size".into(), json!(t.brush_size));
+                o.insert("opacity".into(), json!(t.brush_opacity));
+                o.insert("preset".into(), json!(t.brush_preset));
+            }
+            Ok(out)
         }
         // `brush.set`: the brush's own settings, the way the panel's controls send them. The
         // preset list sets a whole brush; this edits the one in hand, which is what makes the
@@ -351,7 +349,9 @@ pub fn execute(session: &mut Session, id: &str, params: Value) -> Result<Value, 
             session.tools.brush_hardness = brush.hardness;
             session.tools.brush_grain = brush.grain;
             session.tools.brush_wet = if brush.wet { 1.0 } else { 0.0 };
-            Ok(brush.to_json())
+            // The reply names the brush, because the panel edits the one in hand: a reply without
+            // a name would leave it guessing which brush its sliders now belong to.
+            Ok(brush.to_json_named(&session.tools.brush_preset))
         }
         "tools.setColors" => {
             let t = &mut session.tools;

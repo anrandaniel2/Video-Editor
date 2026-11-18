@@ -199,7 +199,11 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
             if (hardness != null) p.put("hardness", hardness.toDouble().coerceIn(0.0, 1.0))
             if (opacity != null) p.put("opacity", opacity.toDouble().coerceIn(0.0, 1.0))
             if (preset != null) p.put("preset", preset)
-            if (p.length() > 0) engine.execute("tools.setBrush", p)
+            if (p.length() == 0) return@withContext
+            // The reply is the brush as the engine now holds it, named. Taking it means picking a
+            // brush and the panel's own sliders can never describe different brushes.
+            val reply = runCatching { JSONObject(engine.execute("tools.setBrush", p)) }.getOrNull()
+            if (reply != null) brush = BrushInfo.from(reply)
         }
 
     /**
@@ -562,8 +566,9 @@ class StudioEngine(val engine: PhotoEngine = PhotoEngine()) {
         }.getOrDefault(emptyList())
         brushLibrary = library
         brushPresets = library.map { it.name }
-        // A brush already in hand keeps it; a fresh studio takes the first one the engine lists.
-        if (brush.name.isEmpty() || library.none { it.name == brush.name }) {
+        // The library is a catalogue; the brush in hand is the one the engine stored, with whatever
+        // the sliders have changed about it. Only a studio with nothing in hand takes a default.
+        if (brush.name.isEmpty()) {
             brush = library.firstOrNull() ?: BrushInfo.fallback
         }
     }

@@ -149,7 +149,14 @@ impl Default for Brush {
 impl Brush {
     /// The brush as the panel reads it.
     pub fn to_json(self) -> serde_json::Value {
+        self.to_json_named("")
+    }
+
+    /// The brush with the name it is listed under, so a panel editing it can say which brush it
+    /// is editing rather than only what its settings are.
+    pub fn to_json_named(self, name: &str) -> serde_json::Value {
         serde_json::json!({
+            "name": name,
             "tip": self.tip.as_str(),
             "hardness": self.hardness,
             "grain": self.grain,

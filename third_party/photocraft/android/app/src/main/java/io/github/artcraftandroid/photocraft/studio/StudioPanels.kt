@@ -671,12 +671,9 @@ private fun BrushesBody(a: StudioActions) {
                     .border(1.dp, if (on) Color(0xFF358ED9) else Color.Transparent)
                     .clickable {
                         s.brush = name
-                        scope.engine {
-                            e.setBrush(preset = name)
-                            // The engine replies with the brush it stored; the panel's own
-                            // controls then edit that, not a stale copy.
-                            e.refreshBrushes()
-                        }
+                        // `setBrush` takes the engine's reply as the brush in hand, so the panel's
+                        // own controls below are editing the brush that was just picked.
+                        scope.engine { e.setBrush(preset = name) }
                 }
                     .padding(horizontal = 10.dp),
                 verticalArrangement = Arrangement.Center,
