@@ -313,6 +313,7 @@ jobs:
           summary, apks = sys.argv[1], sys.argv[2:]
           MB = 1000 * 1000
           lines = ["", "### APK size", ""]
+          notices = []
           for path in apks:
               with zipfile.ZipFile(path) as apk:
                   entries = [(i.filename, i.file_size, i.compress_size, i.compress_type) for i in apk.infolist()]
@@ -353,9 +354,15 @@ jobs:
               lines.append("Largest entries: "
                            + ", ".join("`%s` %.1f MB" % (e[0], e[2] / MB) for e in largest))
               lines.append("")
+              # Also an annotation: the summary is only on the run page, this is readable from the
+              # API, so the number can be checked where the APK is.
+              notices.append("::notice title=APK size::%s — %.1f MB (%.1f MB unpacked); %s"
+                             % (path.rsplit("/", 1)[-1], total / MB, unpacked / MB,
+                                ", ".join("%s %.1f MB" % (name, size / MB)
+                                          for name, size in sorted(parts.items(), key=lambda kv: -kv[1]))))
           with open(summary, "a") as out:
               out.write("\n".join(lines) + "\n")
-          print("\n".join(lines))
+          print("\n".join(lines + notices))
           PY
 
       - name: APK
