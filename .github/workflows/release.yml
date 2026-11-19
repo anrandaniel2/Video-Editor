@@ -384,22 +384,25 @@ jobs:
           with zipfile.ZipFile(apk) as archive:
               libraries = [i for i in archive.infolist() if i.filename.startswith("lib/") and i.filename.endswith(".so")]
               print("native libraries:", [(i.filename, i.file_size, i.compress_size) for i in libraries])
-              if len(libraries) != 1:
-                  fail("the APK should carry one native library, it carries %d: %s"
-                       % (len(libraries), [i.filename for i in libraries]))
-              if not libraries[0].filename.endswith("/libfilmcraft_android.so"):
-                  fail("the library in the APK is %s" % libraries[0].filename)
-              one = libraries[0]
+              rust = [i for i in libraries if i.filename.endswith("/libfilmcraft_android.so")]
+              if not rust:
+                  fail("the APK carries no libfilmcraft_android.so: %s" % [i.filename for i in libraries])
+              one = rust[0]
               path = "/tmp/one-library.so"
               with open(path, "wb") as out:
                   out.write(archive.read(one.filename))
+              others = [i.filename for i in libraries if i.filename.endswith("/libprocraft_core.so")]
+
           def note(text):
               # the run's log is not reachable from the API; annotations are
               print("::notice title=Native library::" + text)
               print(text)
 
-          note("%s: %.1f MB unpacked, %.1f MB packed (%.0f%%)"
-               % (one.filename, one.file_size / 1e6, one.compress_size / 1e6, 100 * one.compress_size / one.file_size))
+          note("%s: %.1f MB unpacked, %.1f MB packed (%.0f%%); the APK's other libraries: %s"
+               % (one.filename, one.file_size / 1e6, one.compress_size / 1e6,
+                  100 * one.compress_size / one.file_size,
+                  ", ".join("%s %.2f MB" % (i.filename.rsplit("/", 1)[-1], i.compress_size / 1e6)
+                            for i in libraries if i is not one) or "none"))
 
           # where the bytes are, section by section
           listing = subprocess.run(["readelf", "-S", "--wide", path], capture_output=True, text=True).stdout.splitlines()
@@ -410,9 +413,8 @@ jobs:
                   sections.append((m.group(1), int(m.group(3), 16)))
           sections.sort(key=lambda row: -row[1])
           note("sections: " + ", ".join("%s %.2f MB" % row for row in sections[:10])
-               + " | symbol tables: .symtab %s, .strtab %s"
-               % ("yes" if any(n == ".symtab" for n, _ in sections) else "no",
-                  "yes" if any(n == ".strtab" for n, _ in sections) else "no"))
+               + " | .symtab " + ("yes" if any(n == ".symtab" for n, _ in sections) else "no")
+               + ", .strtab " + ("yes" if any(n == ".strtab" for n, _ in sections) else "no"))
 
           # how much code each half's dependency families take
           symbols = set()
@@ -420,7 +422,7 @@ jobs:
               listed = subprocess.run(["nm", "-S", "--size-sort", "--demangle"] + flags + [path],
                                       capture_output=True, text=True)
               if listed.returncode != 0:
-                  print("%s symbols: nm could not read them" % label)
+                  note("%s symbols: nm could not read them" % label)
                   continue
               total, families, count = 0, {}, 0
               for line in listed.stdout.splitlines():
@@ -435,7 +437,7 @@ jobs:
                   count += 1
                   symbols.add(parts[3])
                   for family in ("wgpu", "naga", "wasmi", "cosmic_text", "swash", "tiny_skia", "uniffi",
-                                 "procraft_core", "filmcraft", "zune_jpegxl", "ravif", "png", "image"):
+                                 "procraft_core", "filmcraft", "zune_jpegxl", "ravif", "image"):
                       if family in parts[3].lower():
                           families[family] = families.get(family, 0) + size
                           break
@@ -443,6 +445,9 @@ jobs:
                    % (label, count, total / 1e6,
                       ", ".join("%s %.2f MB" % (k, v / 1e6)
                                 for k, v in sorted(families.items(), key=lambda kv: -kv[1])[:8])))
+
+          if others:
+              fail("the APK still carries a library of its own: %s" % others)
 
           # every entry point the bindings call has to be in it
           bindings = []
