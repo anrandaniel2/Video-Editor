@@ -388,11 +388,11 @@ jobs:
           print("\n".join(lines + notices))
           PY
 
-      # The two Rust libraries are most of the download: FilmCraft's engine, and the drawing and 3D
-      # half (ProCraft) as a library of its own. UniFFI finds a component's entry points by symbol,
-      # so this checks every one the Kotlin bindings call against the library that carries it, and
-      # says where each library's bytes are — sections, symbol families — so its size can be read
-      # from the run rather than guessed at.
+      # One library now, and it carries both halves: FilmCraft's engine, and the drawing and 3D half
+      # (ProCraft) that used to be a library of its own. UniFFI finds a component's entry points by
+      # symbol, so this checks every one the Kotlin bindings call against the library, and says
+      # where its bytes are — sections, symbol families — so its size can be read from the run
+      # rather than guessed at.
       - name: The native libraries, and every entry point
         run: |
           python3 - dist/*.apk <<'PY'
@@ -443,8 +443,10 @@ jobs:
               sections = []
               for line in subprocess.run(["readelf", "-S", "--wide", path],
                                          capture_output=True, text=True).stdout.splitlines():
-                  found = re.findall(r"\[\s*\d+\]\s+(\S+)\s+\S+\s+\S+\s+([0-9a-fA-F]+)", line)
-                  if found:
+                  # `[ 1] name type address offset size ...`: the size is the fifth column, and
+                  # a section with none (a null one) says nothing about the library's bytes
+                  found = re.findall(r"\[\s*\d+\]\s+(\S+)\s+\S+\s+\S+\s+\S+\s+([0-9a-fA-F]+)", line)
+                  if found and int(found[0][1], 16):
                       sections.append((found[0][0], int(found[0][1], 16)))
               biggest = ", ".join("%s %.2f MB" % (n, s / 1e6)
                                   for n, s in sorted(sections, key=lambda kv: -kv[1])[:6])
@@ -471,7 +473,12 @@ jobs:
           called = {}
           for file in bindings:
               text = open(file, encoding="utf-8", errors="replace").read()
-              for name in set(re.findall(r"\b(ffi_[A-Za-z0-9_]+)\b", text)):
+              # what the bindings *call*: uniffi's Kotlin mentions a helper it does not use in a
+              # comment ("ideally we'd pass these bytes to ffi_bytebuffer_from_bytes"), and a
+              # comment is not an entry point — that false alarm failed a build of its own
+              code = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+              code = re.sub(r"//[^\n]*", "", code)
+              for name in set(re.findall(r"\b(ffi_[A-Za-z0-9_]+)\b", code)):
                   called[name] = file
           if not called:
               fail("the generated bindings call no ffi_ entry point: they were not generated")
