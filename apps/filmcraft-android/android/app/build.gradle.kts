@@ -277,9 +277,10 @@ android {
     // not shipped that way: the file on the releases page and in F-Droid *is* the download, and it
     // carries two Rust libraries — `libfilmcraft_android.so` (the engine) and
     // `libprocraft_core.so` (the drawing and the 3D half, with wgpu and naga) — which are most of
-    // its bytes. ARM64 code deflates to about half its size, so compressing the libraries takes
-    // something like a third off the APK. Nothing at runtime changes: the installer extracts the
-    // libraries once, as every app did before Android 6, and the loader maps the extracted copies
+    // its bytes. ARM64 code deflates to about half its size: on 0.0.61-beta the signed APK is 40 MB,
+    // of which the libraries are 27 MB, where the default packing — where the same libraries are
+    // stored, not deflated — makes it about 70 MB. Nothing at runtime changes: the installer extracts
+    // the libraries once, as every app did before Android 6, and the loader maps the extracted copies
     // exactly as it mapped the ones inside the APK. No feature goes, and no code runs slower.
     //
     // The price is paid on the device instead of in the download: the installed app then holds the
