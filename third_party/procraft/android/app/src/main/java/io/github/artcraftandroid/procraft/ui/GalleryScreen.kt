@@ -1788,7 +1788,7 @@ private fun jxlPicture(asset: String): ImageBitmap? {
                 ?: return@withContext null
             val decoded = runCatching { io.github.artcraftandroid.procraft.core.decodePictureJxl(bytes) }.getOrNull()
                 ?: return@withContext null
-            android.graphics.Bitmap.createBitmap(decoded.width, decoded.height, android.graphics.Bitmap.Config.ARGB_8888)
+            android.graphics.Bitmap.createBitmap(decoded.width.toInt(), decoded.height.toInt(), android.graphics.Bitmap.Config.ARGB_8888)
                 .also { it.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(decoded.rgba)) }
                 .asImageBitmap()
         }
