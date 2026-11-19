@@ -61,10 +61,6 @@ use speech::{CaptionLook, CaptionStatus, SpeechAudio, SpeechSettings};
 use text::{Placement, TextStyle};
 
 uniffi::setup_scaffolding!();
-// ProCraft's half of the library brings its own scaffolding, from a crate of its own. Its entry
-// points are what the Android side loads by symbol, and UniFFI's re-export is what keeps them in
-// this library: the same arrangement as any UniFFI library built from several components.
-procraft_core::uniffi_reexport_scaffolding!();
 
 #[cfg(test)]
 mod tests;
