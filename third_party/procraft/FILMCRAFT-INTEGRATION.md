@@ -4,11 +4,9 @@ Vendored from https://github.com/artcraft-android/procraft at
 149800ca5e0143816de9c00e12e8319bba34d54e (MIT OR Apache-2.0).
 Upstream copyright, licenses, NOTICE and attribution accompany the source.
 
-FilmCraft builds the Android frontend as the `:procraft` Android library. ProCraft's
-crate is linked into FilmCraft's own library (`android/native` in the app), so one
-libfilmcraft_android.so ships and holds both halves; the drawing screen uses ProCraft's
-real native canvas, not DrawingView. A ProCraft built on its own still builds
-libprocraft_core.so from this workspace, and NativeWindows loads whichever is there.
+FilmCraft builds this isolated Cargo workspace and the Android frontend as the
+`:procraft` Android library. Both libfilmcraft_android.so and libprocraft_core.so
+ship; the drawing screen uses ProCraft's real native canvas, not DrawingView.
 The entire upstream project is included: Android, desktop, iOS, plugins, assets,
 documentation, packaging and tools. The library manifest has no launcher,
 widget, or competing FileProvider. The host supplies the export FileProvider path.
