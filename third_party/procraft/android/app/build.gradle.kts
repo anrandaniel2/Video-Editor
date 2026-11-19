@@ -40,10 +40,14 @@ abstract class CargoNdkBuild : DefaultTask() {
             "--remap-path-prefix=${File(workspaceDir.get()).absolutePath}=/procraft",
             "--remap-path-prefix=$cargoHome=/cargo",
         )
+        // Identical code folding: one copy of each distinct function body rather than one per
+        // monomorphisation and generic instantiation. Code only, never data, so nothing the
+        // library exports or reads by symbol changes (the app's own build says the same).
+        val fold = listOf("-Clink-arg=-Wl,--icf=all")
         execOperations.exec {
             workingDir(workspaceDir.get())
             environment("ANDROID_NDK_HOME", ndkDir.get())
-            environment("CARGO_ENCODED_RUSTFLAGS", remap.joinToString("\u001f"))
+            environment("CARGO_ENCODED_RUSTFLAGS", (remap + fold).joinToString("\u001f"))
             commandLine(
                 listOf(cargo.get(), "ndk") + targets +
                     listOf("--platform", apiLevel.get().toString(), "-o", out, "build", "--release", "-p", "procraft-core", "--lib"),

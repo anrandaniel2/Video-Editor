@@ -80,10 +80,17 @@ abstract class CargoNdkBuild : DefaultTask() {
             "--remap-path-prefix=${File(workspaceDir.get()).absolutePath}=/filmcraft",
             "--remap-path-prefix=$cargoHome=/cargo",
         )
+        // Identical code folding: the linker keeps one copy of each distinct function body instead
+        // of one per monomorphisation, generic instantiation and inlined-from-the-same-source
+        // duplicate, which is where a lot of a Rust library's text is. It folds code only, never
+        // data, so the exported symbols and UniFFI's metadata are untouched, and identical
+        // instructions at one address run exactly as fast as at two. Android's own platform builds
+        // link this way. No build-time cost worth naming: it is a link step, not a codegen one.
+        val fold = listOf("-Clink-arg=-Wl,--icf=all")
         execOperations.exec {
             workingDir(workspaceDir.get())
             environment("ANDROID_NDK_HOME", ndkDir.get())
-            environment("CARGO_ENCODED_RUSTFLAGS", remap.joinToString("\u001f"))
+            environment("CARGO_ENCODED_RUSTFLAGS", (remap + fold).joinToString("\u001f"))
             commandLine(
                 listOf(cargo.get(), "ndk") + targets +
                     listOf("--platform", apiLevel.get().toString(), "-o", out, "build", "--release", "-p", "filmcraft-android", "--lib"),
