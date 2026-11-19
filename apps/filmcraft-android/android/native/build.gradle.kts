@@ -103,8 +103,7 @@ abstract class UniffiBindgen : DefaultTask() {
 }
 
 android {
-    // not `...filmcraft.native`: `native` is a Java keyword, and a package name it is not
-    namespace = "io.github.artcraftandroid.filmcraft.nativelib"
+    namespace = "io.github.artcraftandroid.filmcraft.native"
     compileSdk = 37
     ndkVersion = "29.0.14206865"
 

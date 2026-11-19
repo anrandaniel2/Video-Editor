@@ -1,3 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- The library has no Android components of its own (see build.gradle.kts); namespace is set there. -->
-<manifest />
