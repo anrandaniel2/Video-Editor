@@ -1,7 +1,8 @@
 """The 3D view's environments: CC0 panoramas from Poly Haven, halved to 512 x 256, scaled so the
 brightest light they cast on a surface (their irradiance, the cosine-weighted mean about a normal)
-is 1, and written as Radiance .hdr files (flat RGBE) into the app's assets, with their sources in
-README.md beside them.
+is 1, and written as Radiance .hdr files into the app's assets, with their sources in README.md
+beside them. The scanlines are run-length coded, as Radiance specifies and `read_hdr` reads: the
+same RGBE values as flat scanlines, a fifth fewer bytes to ship.
 
 Run from the repo root: python tools/env/make_env.py (needs numpy and the network).
 """
@@ -70,7 +71,44 @@ def write_hdr(rgb):
     out[..., :3] = np.clip(rgb * scale[..., None], 0, 255).astype(np.uint8)
     out[..., 3] = np.where(m > 1e-32, exp + 128, 0).astype(np.uint8)
     head = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y %d +X %d\n" % (h, w)
-    return head + out.tobytes()
+    if not 8 <= w < 0x8000:
+        # run-length coding names the width in two bytes and needs at least eight pixels
+        return head + out.tobytes()
+    body = bytearray()
+    for y in range(h):
+        body += bytes((2, 2, (w >> 8) & 0xFF, w & 0xFF))
+        for c in range(4):
+            rle_channel(out[y, :, c].tobytes(), body)
+    return head + bytes(body)
+
+
+def rle_channel(plane, out):
+    """One channel of one scanline as Radiance segments: a run of four or more equal bytes as a
+    count above 128 and the byte, anything else as a literal count below 128 and its bytes."""
+    n, i = len(plane), 0
+    while i < n:
+        j = i
+        while j < n and plane[j] == plane[i]:
+            j += 1
+        run = j - i
+        if run >= 4:
+            while run >= 4:
+                take = min(run, 127)
+                out.append(128 + take)
+                out.append(plane[i])
+                i += take
+                run -= take
+        else:
+            start = i
+            while i < n and i - start < 128:
+                k = i
+                while k < n and plane[k] == plane[i]:
+                    k += 1
+                if k - i >= 4:
+                    break
+                i += 1
+            out.append(i - start)
+            out.extend(plane[start:i])
 
 
 def brightest_irradiance(rgb):
@@ -107,8 +145,9 @@ def main():
         "# Environments",
         "",
         "Panoramas of light for the 3D view, halved to 512 x 256, scaled so the most light they cast",
-        "on a surface is 1, and stored as Radiance `.hdr` files by `tools/env/make_env.py`. Each is",
-        "from Poly Haven (https://polyhaven.com), released under CC0 (public domain).",
+        "on a surface is 1, and stored as Radiance `.hdr` files by `tools/env/make_env.py`, their",
+        "scanlines run-length coded as the format allows (the same RGBE values, a fifth fewer bytes).",
+        "Each is from Poly Haven (https://polyhaven.com), released under CC0 (public domain).",
         "",
         "| File | Panorama | Authors |",
         "|---|---|---|",

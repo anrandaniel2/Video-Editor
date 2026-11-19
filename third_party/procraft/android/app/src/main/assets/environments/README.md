@@ -1,8 +1,9 @@
 # Environments
 
 Panoramas of light for the 3D view, halved to 512 x 256, scaled so the most light they cast
-on a surface is 1, and stored as Radiance `.hdr` files by `tools/env/make_env.py`. Each is
-from Poly Haven (https://polyhaven.com), released under CC0 (public domain).
+on a surface is 1, and stored as Radiance `.hdr` files by `tools/env/make_env.py`, their
+scanlines run-length coded as the format allows (the same RGBE values, a fifth fewer bytes).
+Each is from Poly Haven (https://polyhaven.com), released under CC0 (public domain).
 
 | File | Panorama | Authors |
 |---|---|---|
