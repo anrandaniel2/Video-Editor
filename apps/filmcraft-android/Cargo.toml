@@ -31,6 +31,11 @@ filmcraft-frame = { workspace = true }
 filmcraft-speech = { workspace = true, features = ["whisper"] }
 filmcraft-tts = { workspace = true, features = ["kokoro"] }
 serde_json = { workspace = true }
+# ProCraft's drawing and 3D half, linked into this library instead of shipped as a second one: it
+# paints with wgpu, and so does FilmCraft's own GPU half, so two libraries meant two copies of the
+# GPU stack in the APK (and two of naga, the shader compiler). UniFFI carries several components in
+# one library — each keeps its own namespace and Kotlin package — which is how they are merged here.
+procraft-core = { path = "../../third_party/procraft/crates/core" }
 # OpenRaster interchange: bounded archive/XML/PNG parsing in the native engine.
 zip = { version = "=7.2.0", default-features = false, features = ["deflate-flate2"] }
 png = "0.18"

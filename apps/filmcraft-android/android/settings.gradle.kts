@@ -24,5 +24,8 @@ dependencyResolutionManagement {
 rootProject.name = "FilmCraft"
 include(":app")
 
+// the one native library and its Kotlin bindings, shared by :app and :procraft
+include(":native")
+
 include(":procraft")
 project(":procraft").projectDir = file("../../../third_party/procraft/android/app")
