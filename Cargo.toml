@@ -1,9 +1,5 @@
 [workspace]
 resolver = "3"
-# third_party holds vendored projects that are cargo workspaces of their own (ProCraft's, built on
-# its own too). FilmCraft's library now links ProCraft's crate, and cargo only takes a path
-# dependency into another workspace once its tree is outside this one.
-exclude = ["third_party"]
 members = ["crates/aac", "crates/ac3", "crates/apv", "crates/audio-dsp", "crates/av1", "crates/avi", "crates/bitstream", "crates/captions", "crates/cfb", "crates/codecs", "crates/color", "crates/dng", "crates/dnx", "crates/edit", "crates/engine", "crates/export", "crates/flac", "crates/format", "crates/frame", "crates/geom", "crates/gpu", "crates/h264", "crates/h264enc", "crates/hevc", "crates/interchange", "crates/isobmff", "crates/matroska", "crates/media", "crates/mpa", "crates/mpeg2v", "crates/mpegts", "crates/mxf", "crates/ogg", "crates/opus", "crates/project", "crates/prores", "crates/render", "crates/scopes", "crates/speech", "crates/testkit", "crates/text", "crates/time", "crates/tts-text", "crates/tts", "crates/vp8", "crates/vp9", "apps/filmcraft-android", "apps/filmcraft-android/bindgen"]
 
 [workspace.package]
