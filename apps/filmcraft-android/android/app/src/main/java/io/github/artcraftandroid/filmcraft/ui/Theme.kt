@@ -6,20 +6,17 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.artcraftandroid.filmcraft.R
 
-/** Inter, FilmCraft's UI face (OFL; copied from FilmCraft's assets at build time). */
-val Inter = FontFamily(
-    Font(R.font.inter_regular, FontWeight.Normal),
-    Font(R.font.inter_medium, FontWeight.Medium),
-    Font(R.font.inter_semibold, FontWeight.SemiBold),
-    Font(R.font.inter_semibold, FontWeight.Bold),
-)
+/**
+ * Inter, FilmCraft's UI face (OFL). ProCraft ships the four faces as `res/font` resources (copied
+ * from the repository's `assets/fonts` at build time), so the app holds one copy of the font and
+ * both themes — FilmCraft's and the embedded ProCraft's — draw with it.
+ */
+val Inter: FontFamily = io.github.artcraftandroid.procraft.ui.Inter
 
 /**
  * FilmCraft's colours. The app is always dark: black screens, dark grey panels, a blue accent,

@@ -58,6 +58,42 @@ abstract class CargoNdkBuild : DefaultTask() {
     }
 }
 
+/** The repository root: ProCraft sits in `third_party`, and the fonts are FilmCraft's. */
+val repositoryDir: File = cargoWorkspaceDir.parentFile.parentFile
+
+/**
+ * Copies the repository's Inter faces (`assets/fonts`, one copy for the whole app) into `res/font`,
+ * and their licence into `res/raw`: a font is a resource, and both themes, the core's text engine
+ * and the licence screen read it from there.
+ */
+abstract class FontResources : DefaultTask() {
+    @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE) abstract val sourceDir: DirectoryProperty
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        File(out, "font").mkdirs()
+        File(out, "raw").mkdirs()
+        FACES.forEach { (face, resource) ->
+            sourceDir.get().file(face).asFile.copyTo(File(out, "font/$resource"), overwrite = true)
+        }
+        // the faces' licence, shown in the app: shipped beside them, in res/raw
+        File(out, "raw/inter_ofl.txt").writeText(sourceDir.get().file("OFL-Inter.txt").asFile.readText())
+    }
+
+    companion object {
+        /** the face in `assets/fonts`, and the resource it becomes (resource names are lower case) */
+        val FACES = listOf(
+            "Inter-Regular.ttf" to "inter_regular.ttf",
+            "Inter-Medium.ttf" to "inter_medium.ttf",
+            "Inter-SemiBold.ttf" to "inter_semibold.ttf",
+            "Inter-Bold.ttf" to "inter_bold.ttf",
+        )
+    }
+}
+
 /** Generates the Kotlin bindings from the library cargo built (UniFFI library mode). */
 abstract class UniffiBindgen : DefaultTask() {
     @get:Inject abstract val execOperations: ExecOperations
@@ -127,6 +163,12 @@ androidComponents {
         }
         variant.sources.jniLibs?.addGeneratedSourceDirectory(cargoBuild, CargoNdkBuild::outputDir)
         variant.sources.java?.addGeneratedSourceDirectory(bindgen, UniffiBindgen::outputDir)
+        val fonts = tasks.register<FontResources>("interFonts$name") {
+            group = "resources"
+            description = "Copies the repository's Inter faces into res/font"
+            sourceDir.set(File(repositoryDir, "assets/fonts"))
+        }
+        variant.sources.res?.addGeneratedSourceDirectory(fonts, FontResources::outputDir)
     }
 }
 

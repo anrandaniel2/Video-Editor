@@ -1,8 +1,10 @@
 package io.github.artcraftandroid.procraft.canvas
 
-import android.content.res.AssetManager
+import android.content.Context
+import android.content.res.Resources
 import android.graphics.RectF
 import android.graphics.Typeface
+import io.github.artcraftandroid.procraft.R
 import io.github.artcraftandroid.procraft.core.TextInfo
 import io.github.artcraftandroid.procraft.core.TextPicture
 import java.io.File
@@ -36,7 +38,7 @@ object TextRenderer {
     }
 
     /** Where the bundled Inter comes from (set once the app starts), for the lists' pictures. */
-    var assets: AssetManager? = null
+    var resources: Resources? = null
 
     private val ready = CountDownLatch(1)
     private val prepared = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -46,12 +48,13 @@ object TextRenderer {
      * families pointed at them), and the imported ones kept in [fontDir]; then lists them. Once
      * a process (an activity made again, as on turning, gives them no second time).
      */
-    fun prepare(assets: AssetManager, fontDir: File) {
-        this.assets = assets
+    fun prepare(context: Context, fontDir: File) {
+        val resources = context.resources
+        this.resources = resources
         if (!prepared.compareAndSet(false, true)) return
         Thread {
             for (face in INTER_FACES) {
-                runCatching { assets.open(face).use { io.github.artcraftandroid.procraft.core.addTextFont(it.readBytes()) } }
+                runCatching { resources.openRawResource(face).use { io.github.artcraftandroid.procraft.core.addTextFont(it.readBytes()) } }
             }
             io.github.artcraftandroid.procraft.core.addSystemTextFonts()
             io.github.artcraftandroid.procraft.core.setTextFontFolder(fontDir.path)
@@ -84,13 +87,13 @@ object TextRenderer {
     fun typeface(font: String, style: String): Typeface {
         val s = styles.firstOrNull { it.name == style } ?: styles.first { it.name == "Regular" }
         val base = if (font == INTER) {
-            val file = when {
-                s.weight >= 700 -> "fonts/Inter-Bold.ttf"
-                s.weight >= 600 -> "fonts/Inter-SemiBold.ttf"
-                s.weight >= 500 -> "fonts/Inter-Medium.ttf"
-                else -> "fonts/Inter-Regular.ttf"
+            val face = when {
+                s.weight >= 700 -> R.font.inter_bold
+                s.weight >= 600 -> R.font.inter_semibold
+                s.weight >= 500 -> R.font.inter_medium
+                else -> R.font.inter_regular
             }
-            assets?.let { runCatching { Typeface.createFromAsset(it, file) }.getOrNull() } ?: Typeface.SANS_SERIF
+            resources?.let { runCatching { it.getFont(face) }.getOrNull() } ?: Typeface.SANS_SERIF
         } else if (font.startsWith(FILE)) {
             val path = font.removePrefix(FILE)
             // a collection's later families say where in the file they start
@@ -139,5 +142,6 @@ object TextRenderer {
     const val INTER = "inter"
     /** An imported font's family: this, then the file's path. */
     const val FILE = "file:"
-    private val INTER_FACES = listOf("fonts/Inter-Regular.ttf", "fonts/Inter-Medium.ttf", "fonts/Inter-SemiBold.ttf", "fonts/Inter-Bold.ttf")
+    /** The faces the core gets at start: Inter's four weights, as resources (see `ui.Type.Inter`). */
+    private val INTER_FACES = listOf(R.font.inter_regular, R.font.inter_medium, R.font.inter_semibold, R.font.inter_bold)
 }

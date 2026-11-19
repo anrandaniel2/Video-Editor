@@ -1027,7 +1027,8 @@ private fun versionName(context: Context): String =
 
 private fun licences(context: Context): String {
     fun asset(name: String) = runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrDefault("")
-    return "The interface font is Inter, by The Inter Project Authors.\n\n${asset("fonts/Inter-OFL.txt")}\n\n" +
+    val inter = runCatching { context.resources.openRawResource(io.github.artcraftandroid.procraft.R.raw.inter_ofl).bufferedReader().use { it.readText() } }.getOrDefault("")
+    return "The interface font is Inter, by The Inter Project Authors.\n\n$inter\n\n" +
         "The app keeps Lucide icons (lucide.dev), by Lucide Icons and Contributors.\n\n${asset("icons/LICENSE-lucide.txt")}"
 }
 

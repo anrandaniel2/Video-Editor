@@ -344,11 +344,10 @@ androidComponents {
         }
         val assetsDir = File(cargoWorkspaceDir, "assets")
         val res = tasks.register<FilmcraftAssets>("filmcraftResources$name") {
+            // The fonts are ProCraft's to ship (`res/font`, one copy for the whole app): this module
+            // has none of its own.
             val map = mapOf(
                 "app-icon/hicolor/512x512/apps/ai.storyteller.filmcraft.png" to "drawable-nodpi/ic_launcher_tile.png",
-                "fonts/Inter-Regular.ttf" to "font/inter_regular.ttf",
-                "fonts/Inter-Medium.ttf" to "font/inter_medium.ttf",
-                "fonts/Inter-SemiBold.ttf" to "font/inter_semibold.ttf",
             )
             files.from(map.keys.map { File(assetsDir, it) })
             targets.set(map.mapKeys { (k, _) -> k.substringAfterLast('/') })

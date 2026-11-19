@@ -16,7 +16,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -25,6 +24,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.em
+import io.github.artcraftandroid.procraft.R
 import io.github.artcraftandroid.procraft.core.Plugins
 
 /** Touches leave no ripple: the controls show presses in their own ways, or not at all. */
@@ -37,25 +37,31 @@ private object NoIndication : androidx.compose.foundation.IndicationNodeFactory 
     override fun equals(other: Any?): Boolean = other === this
 }
 
-/** Letter spacing that brings the bundled face to the measured text widths (over 18–24 pt labels). */
+/**
+ * Letter spacing that brings the bundled face to the measured text widths (over 18–24 pt labels).
+ */
 private const val TRACKING = -0.045f
 
 /**
- * The app's theme: Inter (bundled in `assets/fonts`, OFL) for all text, with natural line heights
- * and no font padding, so text sits where the measured labels do. Interface text keeps its size
- * whatever the system font scale: sp equal dp inside the theme.
+ * Inter, the theme's face: the repository's `assets/fonts` (OFL), which the build copies into
+ * `res/font` — one copy for the whole app, shared with FilmCraft's own theme.
+ */
+val Inter = FontFamily(
+    Font(R.font.inter_regular, FontWeight.Normal),
+    Font(R.font.inter_medium, FontWeight.Medium),
+    Font(R.font.inter_semibold, FontWeight.SemiBold),
+    Font(R.font.inter_bold, FontWeight.Bold),
+)
+
+/**
+ * The app's theme: [Inter] for all text, with natural line heights and no font padding, so text
+ * sits where the measured labels do. Interface text keeps its size whatever the system font scale:
+ * sp equal dp inside the theme.
  */
 @Composable
 fun ProCraftTheme(interfaceSize: Float = 1f, content: @Composable () -> Unit) {
-    val assets = LocalContext.current.assets
-    val text = remember(assets) {
-        val family = FontFamily(
-            Font("fonts/Inter-Regular.ttf", assets, FontWeight.Normal),
-            Font("fonts/Inter-Medium.ttf", assets, FontWeight.Medium),
-            Font("fonts/Inter-SemiBold.ttf", assets, FontWeight.SemiBold),
-            Font("fonts/Inter-Bold.ttf", assets, FontWeight.Bold),
-        )
-        TextStyle(fontFamily = family, letterSpacing = TRACKING.em, platformStyle = PlatformTextStyle(includeFontPadding = false))
+    val text = remember {
+        TextStyle(fontFamily = Inter, letterSpacing = TRACKING.em, platformStyle = PlatformTextStyle(includeFontPadding = false))
     }
     val typography = remember(text) {
         val t = Typography()

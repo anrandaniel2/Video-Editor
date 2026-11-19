@@ -34,7 +34,7 @@ internal fun rememberProcraftModel(): CanvasViewModel {
     val app = LocalContext.current.applicationContext as Application
     val store = remember { ViewModelStore() }
     val model = remember {
-        TextRenderer.prepare(app.assets, File(app.filesDir, "fonts"))
+        TextRenderer.prepare(app, File(app.filesDir, "fonts"))
         io.github.artcraftandroid.procraft.core.setGpuRecordFolder(app.filesDir.path)
         ViewModelProvider.create(store, ViewModelProvider.AndroidViewModelFactory.getInstance(app))[CanvasViewModel::class]
     }
