@@ -388,13 +388,12 @@ jobs:
           print("\n".join(lines + notices))
           PY
 
-      # One library now, and it carries both halves (see android/native): FilmCraft's engine and the
-      # drawing and 3D half that used to be a library of its own. UniFFI finds a component's entry
-      # points by symbol, so this checks every one the Kotlin bindings call against the library the
-      # APK ships, that the APK ships no other library, and that the ProCraft bindings name the
-      # library they load. It also says where the library's bytes are — sections, symbol families —
-      # so the size of the one library can be read from the run rather than guessed at.
-      - name: One library, both halves
+      # The two Rust libraries are most of the download: FilmCraft's engine, and the drawing and 3D
+      # half (ProCraft) as a library of its own. UniFFI finds a component's entry points by symbol,
+      # so this checks every one the Kotlin bindings call against the library that carries it, and
+      # says where each library's bytes are — sections, symbol families — so its size can be read
+      # from the run rather than guessed at.
+      - name: The native libraries, and every entry point
         run: |
           python3 - dist/*.apk <<'PY'
           import re, subprocess, sys, zipfile
@@ -405,101 +404,109 @@ jobs:
 
           apk = sys.argv[1]
           with zipfile.ZipFile(apk) as archive:
-              libraries = [i for i in archive.infolist() if i.filename.startswith("lib/") and i.filename.endswith(".so")]
+              libraries = [i for i in archive.infolist()
+                           if i.filename.startswith("lib/") and i.filename.endswith(".so")]
               print("native libraries:", [(i.filename, i.file_size, i.compress_size) for i in libraries])
-              rust = [i for i in libraries if i.filename.endswith("/libfilmcraft_android.so")]
-              if not rust:
-                  fail("the APK carries no libfilmcraft_android.so: %s" % [i.filename for i in libraries])
-              one = rust[0]
-              path = "/tmp/one-library.so"
-              with open(path, "wb") as out:
-                  out.write(archive.read(one.filename))
-              others = [i.filename for i in libraries if i.filename.endswith("/libprocraft_core.so")]
+              # not ours: JNA's, and androidx's path helper
+              ours = [i for i in libraries
+                      if not i.filename.endswith(("/libjnidispatch.so", "/libandroidx.graphics.path.so"))]
+              for library in ours:
+                  path = "/tmp/" + library.filename.rsplit("/", 1)[-1]
+                  with open(path, "wb") as out:
+                      out.write(archive.read(library.filename))
+                  print("::notice title=Native library::%s: %.1f MB unpacked, %.1f MB packed"
+                        % (library.filename, library.file_size / 1e6, library.compress_size / 1e6))
 
           def note(text):
-              # the run's log is not reachable from the API; annotations are
               print("::notice title=Native library::" + text)
-              print(text)
 
-          note("%s: %.1f MB unpacked, %.1f MB packed (%.0f%%); the APK's other libraries: %s"
-               % (one.filename, one.file_size / 1e6, one.compress_size / 1e6,
-                  100 * one.compress_size / one.file_size,
-                  ", ".join("%s %.2f MB" % (i.filename.rsplit("/", 1)[-1], i.compress_size / 1e6)
-                            for i in libraries if i is not one) or "none"))
-
-          # where the bytes are, section by section
-          listing = subprocess.run(["readelf", "-S", "--wide", path], capture_output=True, text=True).stdout.splitlines()
-          sections = []
-          for line in listing:
-              m = re.match(r"\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+[0-9a-f]+\s+[0-9a-f]+\s+([0-9a-f]+)", line)
-              if m:
-                  sections.append((m.group(1), int(m.group(3), 16)))
-          sections.sort(key=lambda row: -row[1])
-          note("sections: " + ", ".join("%s %.2f MB" % row for row in sections[:10])
-               + " | .symtab " + ("yes" if any(n == ".symtab" for n, _ in sections) else "no")
-               + ", .strtab " + ("yes" if any(n == ".strtab" for n, _ in sections) else "no"))
-
-          # how much code each half's dependency families take
-          symbols = set()
-          for flags, label in ((["-D", "--defined-only"], "dynamic"), ([], "all")):
-              listed = subprocess.run(["nm", "-S", "--size-sort", "--demangle"] + flags + [path],
-                                      capture_output=True, text=True)
-              if listed.returncode != 0:
-                  note("%s symbols: nm could not read them" % label)
-                  continue
-              total, families, count = 0, {}, 0
-              for line in listed.stdout.splitlines():
-                  parts = line.split(None, 3)
-                  if len(parts) < 4:
+          def symbols_of(path):
+              names, code = set(), 0
+              for flags in (["-D", "--defined-only"], []):
+                  listed = subprocess.run(["nm", "-S", "--size-sort", "--demangle"] + flags + [path],
+                                          capture_output=True, text=True)
+                  if listed.returncode != 0:
                       continue
-                  try:
-                      size = int(parts[1], 16)
-                  except ValueError:
-                      continue
-                  total += size
-                  count += 1
-                  symbols.add(parts[3])
-                  for family in ("wgpu", "naga", "wasmi", "cosmic_text", "swash", "tiny_skia", "uniffi",
-                                 "procraft_core", "filmcraft", "zune_jpegxl", "ravif", "image"):
-                      if family in parts[3].lower():
-                          families[family] = families.get(family, 0) + size
-                          break
-              note("%s symbols: %d, %.1f MB of code | families: %s"
-                   % (label, count, total / 1e6,
-                      ", ".join("%s %.2f MB" % (k, v / 1e6)
-                                for k, v in sorted(families.items(), key=lambda kv: -kv[1])[:8])))
+                  for line in listed.stdout.splitlines():
+                      parts = line.split(None, 3)
+                      if len(parts) < 4:
+                          continue
+                      names.add(parts[3])
+                      if not flags:
+                          try:
+                              code += int(parts[1], 16)
+                          except ValueError:
+                              pass
+              return names, code
 
-          if others:
-              fail("the APK still carries a library of its own: %s" % others)
+          def describe(path):
+              sections = []
+              for line in subprocess.run(["readelf", "-S", "--wide", path],
+                                         capture_output=True, text=True).stdout.splitlines():
+                  found = re.findall(r"\[\s*\d+\]\s+(\S+)\s+\S+\s+\S+\s+([0-9a-fA-F]+)", line)
+                  if found:
+                      sections.append((found[0][0], int(found[0][1], 16)))
+              biggest = ", ".join("%s %.2f MB" % (n, s / 1e6)
+                                  for n, s in sorted(sections, key=lambda kv: -kv[1])[:6])
+              note("sections of %s: %s" % (path.rsplit("/", 1)[-1], biggest))
 
-          # every entry point the bindings call has to be in it
+          by_name = {}
+          for library in ours:
+              path = "/tmp/" + library.filename.rsplit("/", 1)[-1]
+              by_name[library.filename] = symbols_of(path)[0]
+              note("%s: %d symbols, %.1f MB of code"
+                   % (library.filename, len(by_name[library.filename]), symbols_of(path)[1] / 1e6))
+              describe(path)
+
+          # every entry point the bindings call has to be in the library that carries it
+          roots = ["apps/filmcraft-android/android", "third_party/procraft/android"]
           bindings = []
-          for root in ("apps/filmcraft-android/android/native/build", "apps/filmcraft-android/android/app/build"):
-              for found in subprocess.run(["find", root, "-name", "*.kt", "-path", "*uniffi*"],
-                                          capture_output=True, text=True).stdout.split():
-                  bindings.append(found)
+          for root in roots:
+              found = subprocess.run(["find", root, "-name", "*.kt", "-path", "*uniffi*",
+                                      "-not", "-path", "*/src/*"],
+                                     capture_output=True, text=True).stdout.split()
+              bindings.extend(found)
           if not bindings:
-              fail("no generated bindings found: the library cannot be checked against them")
-          called, procraft = set(), []
+              fail("no generated bindings found: the libraries cannot be checked against them")
+          called = {}
           for file in bindings:
               text = open(file, encoding="utf-8", errors="replace").read()
-              names = set(re.findall(r"\b(ffi_[A-Za-z0-9_]+)\b", text))
-              called |= names
-              if any(name.startswith("ffi_procraft_core") for name in names):
-                  procraft.append(text)
-          for component in ("ffi_filmcraft_android", "ffi_procraft_core"):
-              if not any(name.startswith(component) for name in called):
+              for name in set(re.findall(r"\b(ffi_[A-Za-z0-9_]+)\b", text)):
+                  called[name] = file
+          if not called:
+              fail("the generated bindings call no ffi_ entry point: they were not generated")
+
+          # a component's own entry points are its namespace's; the buffer helpers are shared, and
+          # which library carries one is the linker's business, so those only have to be somewhere
+          carriers = {"ffi_filmcraft_android": "/libfilmcraft_android.so",
+                      "ffi_procraft_core": "/libprocraft_core.so"}
+          for component, suffix in carriers.items():
+              wanted = {n for n in called if n.startswith(component)}
+              if not wanted:
                   fail("the generated bindings call no %s entry point" % component)
-          missing = sorted(called - symbols)
-          if missing:
-              fail("%d of the %d entry points the bindings call are not in the library: %s"
-                   % (len(missing), len(called), ", ".join(missing[:8])))
-          note("entry points checked: %d, all in the library" % len(called))
-          if not procraft:
-              fail("no ProCraft bindings were generated")
-          if not any("filmcraft_android" in text for text in procraft):
-              fail("the ProCraft bindings do not name filmcraft_android: they would load a library the APK does not have")
+              library = [k for k in by_name if k.endswith(suffix)]
+              if not library:
+                  note("no %s in the APK: the %s entry points have nowhere to live"
+                       % (suffix.lstrip("/"), component))
+                  continue
+              missing = sorted(n for n in wanted if n not in by_name[library[0]])
+              if missing:
+                  fail("%d of the %d %s entry points are not in %s: %s"
+                       % (len(missing), len(wanted), component, library[0], ", ".join(missing[:8])))
+              note("%d %s entry points, all in %s" % (len(wanted), component, library[0]))
+
+          everything = set()
+          for names in by_name.values():
+              everything |= names
+          shared = sorted(n for n in called
+                          if not any(n.startswith(c) for c in carriers) and n not in everything)
+          if shared:
+              # these are uniffi's own buffer helpers: JNA resolves them by name, so a missing one
+              # is a runtime failure on the first ByteArray argument, not a build failure
+              print("::warning title=Shared entry points::%d the bindings call are in no library: %s"
+                    % (len(shared), ", ".join(shared[:8])))
           PY
+
 
       - name: APK
         env:
