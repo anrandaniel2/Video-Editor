@@ -268,6 +268,39 @@ android {
         includeInApk = false
         includeInBundle = false
     }
+
+    // Size: the APK carries its native libraries compressed.
+    //
+    // Since AGP 3.6 an APK whose minSdk is 23 or more keeps `lib/**/*.so` uncompressed and page
+    // aligned, and sets `android:extractNativeLibs="false"` so the loader maps them straight out of
+    // the APK. That suits an app bundle, where the store compresses the download itself. This app is
+    // not shipped that way: the file on the releases page and in F-Droid *is* the download, and it
+    // carries two Rust libraries — `libfilmcraft_android.so` (the engine) and
+    // `libprocraft_core.so` (the drawing and the 3D half, with wgpu and naga) — which are most of
+    // its bytes. ARM64 code deflates to about half its size, so compressing the libraries takes
+    // something like a third off the APK. Nothing at runtime changes: the installer extracts the
+    // libraries once, as every app did before Android 6, and the loader maps the extracted copies
+    // exactly as it mapped the ones inside the APK. No feature goes, and no code runs slower.
+    //
+    // The price is paid on the device instead of in the download: the installed app then holds the
+    // APK plus its extracted libraries. `useLegacyPackaging = false` (or this whole block away)
+    // trades that back the other way: a bigger download, no extracted copy.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+
+        // Compiler and debugger metadata nothing reads at runtime: Kotlin's per-module metadata
+        // (used by the compiler, not the app) and the coroutines' debugger probes.
+        resources {
+            excludes += setOf(
+                "META-INF/*.kotlin_module",
+                "META-INF/*.version",
+                "DebugProbesKt.bin",
+            )
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

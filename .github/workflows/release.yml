@@ -26,6 +26,7 @@ on:
       # each Arena session's branch: a push here builds a dry-run APK
       - 'arena/aa65d60d-video-editor'
       - 'arena/c6cc15fc-video-editor'
+      - 'arena/526ed349-video-editor'
       # a release tag drafts a release; dryrun-<version> drafts one signed with the public key
     tags: ['v*', 'dryrun-*']
   workflow_dispatch:
@@ -298,6 +299,64 @@ jobs:
               "${extra[@]}" "$apk"
             "$apksigner" verify --verbose "$apk"
           done
+
+      # What the APK weighs, and what carries it, for the signed file — the one that is downloaded.
+      # The two Rust libraries are most of it, so a change that grows the download (a dependency, a
+      # format, an asset) is visible in the run itself, before it becomes a release. It also says how
+      # the libraries are packed: DEFLATED is the compression that keeps the APK small, STORED is the
+      # mmap-from-the-APK layout AGP would choose on its own.
+      - name: Size
+        run: |
+          python3 - "$GITHUB_STEP_SUMMARY" dist/*.apk <<'PY'
+          import sys, zipfile
+
+          summary, apks = sys.argv[1], sys.argv[2:]
+          MB = 1000 * 1000
+          lines = ["", "### APK size", ""]
+          for path in apks:
+              with zipfile.ZipFile(path) as apk:
+                  entries = [(i.filename, i.file_size, i.compress_size, i.compress_type) for i in apk.infolist()]
+
+              def part(name):
+                  if name.startswith("lib/"):
+                      return "native libraries"
+                  if name.endswith(".dex"):
+                      return "Kotlin/Java code"
+                  if name.startswith("res/") or name == "resources.arsc":
+                      return "resources"
+                  if name.startswith("assets/"):
+                      return "assets"
+                  return "other"
+
+              parts = {}
+              for name, _, packed, _ in entries:
+                  parts[part(name)] = parts.get(part(name), 0) + packed
+              total = sum(packed for _, _, packed, _ in entries)
+              unpacked = sum(size for _, size, _, _ in entries)
+              lines.append("**%s**: %.1f MB, %.1f MB unpacked (%d entries)"
+                           % (path.rsplit("/", 1)[-1], total / MB, unpacked / MB, len(entries)))
+              lines.append("")
+              lines.append("| part | MB |")
+              lines.append("| --- | --- |")
+              for name, size in sorted(parts.items(), key=lambda kv: -kv[1]):
+                  lines.append("| %s | %.1f |" % (name, size / MB))
+              native = sorted((e for e in entries if e[0].startswith("lib/")), key=lambda e: -e[2])
+              if native:
+                  lines.append("")
+                  lines.append("| native library | MB in the APK | MB unpacked | packed |")
+                  lines.append("| --- | --- | --- | --- |")
+                  for name, size, packed, method in native:
+                      lines.append("| `%s` | %.1f | %.1f | %s |"
+                                   % (name, packed / MB, size / MB, {0: "STORED", 8: "DEFLATED"}.get(method, method)))
+              largest = sorted(entries, key=lambda e: -e[2])[:8]
+              lines.append("")
+              lines.append("Largest entries: "
+                           + ", ".join("`%s` %.1f MB" % (e[0], e[2] / MB) for e in largest))
+              lines.append("")
+          with open(summary, "a") as out:
+              out.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
 
       - name: APK
         env:
