@@ -104,6 +104,13 @@ pub(crate) fn start(s: &mut Session, path: &str, settings: &ExportSettings) -> R
     if seq.duration() <= filmcraft_time::Tick::ZERO {
         return Err(MobileError::Command("Add something to the timeline before exporting.".into()));
     }
+    // Composite on the GPU when this phone has one. A phone without (no Vulkan adapter, or a
+    // driver wgpu cannot make a device from) exports on the CPU and says so: an export that
+    // quietly renders on the CPU while its settings asked for the GPU is what this replaced.
+    let gpu = filmcraft_gpu::ExportRenderer::new().is_some();
+    if !gpu {
+        s.toast("No GPU on this device: exporting on the CPU.");
+    }
     let r = ex(
         s,
         "file.exportMedia",
@@ -120,8 +127,9 @@ pub(crate) fn start(s: &mut Session, path: &str, settings: &ExportSettings) -> R
             "audio": true, "range": "entire",
             // captions are part of the picture, as in the preview
             "burnCaptions": true,
-            // composite on the GPU (registered at startup); the CPU renders as the fallback
-            "gpuRendering": "auto",
+            // the GPU compositor (registered at startup) when this device has one; a GPU that
+            // fails mid-export fails the export with its reason, it does not hand frames to the CPU
+            "gpuRendering": if gpu { "auto" } else { "off" },
             "hardwareEncoding": "auto",
         }),
     )?;

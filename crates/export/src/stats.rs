@@ -122,7 +122,9 @@ pub fn note_gpu_frame() {
     GPU_FRAMES.fetch_add(1, Ordering::Relaxed);
 }
 
-/// The GPU renderer declined a frame (the CPU reference renderer took it).
+/// A frame went to the CPU while GPU rendering was on: one the planner hands back as a single CPU
+/// image by design (an adjustment layer, a complex transition, HDR). A frame the GPU *declines*
+/// is no longer a fallback — it fails the export with its reason.
 pub fn note_gpu_fallback() {
     GPU_FALLBACKS.fetch_add(1, Ordering::Relaxed);
 }
@@ -145,7 +147,10 @@ pub fn reset_export_lock_wait() {
 /// GPU-vs-CPU frame counters of the export renderer (per-process, like the hardware ones).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GpuRenderStats {
+    /// Frames the registered GPU renderer composited.
     pub frames: u64,
+    /// Frames the planner sends to the CPU by design while GPU rendering is on (see
+    /// [`note_gpu_fallback`]); a declining GPU is an export error, not one of these.
     pub fallbacks: u64,
 }
 

@@ -122,7 +122,9 @@ fn wgpu_choice(candidates: &[Candidate], power: PowerPreference) -> Option<usize
     usable.min_by_key(|(index, c)| (type_order(c.device_type, power), *index)).map(|(index, _)| index)
 }
 
-/// A wgpu instance over the native backends (Vulkan, Metal, DX12), and OpenGL except on Windows.
+/// A wgpu instance over the native backends (Vulkan, Metal, DX12), and OpenGL on the desktop
+/// platforms where it is the only one that works (see [`native_backends`]: not Windows, and never
+/// on Android, where Vulkan is the only backend the app asks for).
 /// There GL starts a WGL context thread inside the vendor driver (NVIDIA's `nvoglv64` is both its
 /// GL driver and its Vulkan ICD); instances created and devices dropped concurrently then deadlock
 /// in that driver (#3418). Elsewhere GL stays, for machines where it is the only working backend.

@@ -1,9 +1,10 @@
 //! The GPU compositor for exports, registered at startup.
 //!
-//! Frames composite on the phone's GPU (Vulkan or OpenGL) through `filmcraft-gpu`'s WGSL
-//! compositor — the same plan and the same maths as the CPU reference renderer, which stays the
-//! fallback for frames the shaders don't cover and for devices without a GPU adapter. On an
-//! effects-heavy edit this is what keeps export off the CPU's cores.
+//! Frames composite on the phone's GPU (Vulkan) through `filmcraft-gpu`'s WGSL compositor — the
+//! same plan and the same maths as the CPU reference renderer. On an effects-heavy edit this is
+//! what keeps export off the CPU's cores. The CPU is not a fallback: `export::start` asks for the
+//! GPU only when the device has one (and says so when it has not), and a GPU that fails mid-export
+//! fails the export with its reason.
 
 use filmcraft_export::FrameRenderer;
 use filmcraft_project::{ItemId, Project};
@@ -19,8 +20,8 @@ impl FrameRenderer for GpuFrames {
     }
 }
 
-/// Register the GPU frame renderer once. A device without an adapter gets the CPU renderer, as
-/// before.
+/// Register the GPU frame renderer once. A device without an adapter offers nothing, and the
+/// export that asks for the GPU then says the device has none rather than rendering on the CPU.
 pub(crate) fn register() {
     use std::sync::Once;
     static ONCE: Once = Once::new();

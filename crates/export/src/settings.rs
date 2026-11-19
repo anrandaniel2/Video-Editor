@@ -75,11 +75,11 @@ pub enum HardwareEncoding {
     Auto,
 }
 
-/// Whether the picture of an export may be composited on the GPU (`filmcraft-gpu`'s off-screen
-/// compositor) instead of the CPU reference renderer. Auto = use the GPU when the app registered
-/// a GPU frame renderer and the machine has an adapter; the CPU result is the fallback either
-/// way. On an effects-heavy edit it exports 2.4× (1080p) to 3.2× (4K) faster, and a single plain
-/// clip takes the same time (`docs/performance.md`). The GPU matches the CPU within the
+/// Whether the picture of an export is composited on the GPU (`filmcraft-gpu`'s off-screen
+/// compositor) instead of the CPU reference renderer. Auto = composite on the GPU: an export with
+/// no GPU to use, or one the GPU fails to render a frame of, stops and says so — it does not
+/// quietly render on the CPU. On an effects-heavy edit it exports 2.4× (1080p) to 3.2× (4K)
+/// faster, and a single plain clip takes the same time (`docs/performance.md`). The GPU matches the CPU within the
 /// compositor's parity tolerance, not bit for bit, so an export's bytes can depend on the
 /// machine's GPU. Off = the CPU reference renderer, byte-reproducible everywhere; Off is the
 /// default (opt-in per export) until GPU export has been measured on Windows and macOS.

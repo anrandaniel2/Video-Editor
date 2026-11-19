@@ -6,10 +6,10 @@
 //!
 //! Renderers share one off-screen wgpu device (no window), created by the first and kept for the
 //! process, so an export can run several (one per export worker; each has its own compositor and
-//! textures) without opening a device each. With no adapter (headless
-//! machine, unsupported GPU) [`ExportRenderer::new`] returns `None` and the export falls back to
-//! the CPU renderer; a `FramePlan::Image` plan (HDR / wide gamut / anything the plan sends to the
-//! CPU) is returned unchanged — it already is the CPU image.
+//! textures) without opening a device each. With no adapter (headless machine, unsupported GPU)
+//! [`ExportRenderer::new`] returns `None`, which is how the app learns to ask for the CPU renderer
+//! (`GpuRendering::Off`) instead of exports failing; a `FramePlan::Image` plan (HDR / wide gamut /
+//! anything the plan sends to the CPU) is returned unchanged — it already is the CPU image.
 
 use crate::{GpuCompositor, prepare};
 use filmcraft_project::{ItemId, Project};
