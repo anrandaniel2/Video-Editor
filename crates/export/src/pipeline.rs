@@ -61,6 +61,15 @@ impl Geometry {
     }
 }
 
+/// Said when GPU rendering was asked for and this device has no GPU wgpu can use. The setting is
+/// the user's: rather than quietly render every frame on the CPU, the export stops and says so.
+pub const GPU_UNAVAILABLE: &str =
+    "GPU rendering is on, but this device has no GPU wgpu can use. Turn GPU rendering off in the export settings to export on the CPU.";
+
+/// Said when the GPU accepted the export and then failed to render a frame (a driver fault).
+pub const GPU_FAILED: &str =
+    "GPU rendering is on, but the GPU failed to render a frame. Turn GPU rendering off in the export settings to export on the CPU.";
+
 /// GPU renderers shared by the export workers: a worker takes a free one for a frame and puts it
 /// back (a single renderer behind a mutex made the workers queue, GPU export ~20 % slower than CPU).
 struct RendererPool {
@@ -68,7 +77,8 @@ struct RendererPool {
     capacity: usize,
     renderers: std::sync::Mutex<Vec<Box<dyn FrameRenderer>>>,
     available: std::sync::Condvar,
-    /// A renderer panicked: the pool is retired and the rest of the export renders on the CPU.
+    /// A renderer panicked: the pool is retired, and the frames after it fail the export (there
+    /// is no CPU to fall back to).
     failed: std::sync::atomic::AtomicBool,
 }
 
@@ -88,7 +98,8 @@ impl RendererPool {
     /// Admitting more frame tasks than renderers could then deadlock this condition variable
     /// against the suspended outer frame's renderer. `None` once a renderer has
     /// panicked: the panicking renderer is dropped (its state can't be trusted) and so are the
-    /// others as they come back, so the caller falls back to the CPU for the rest of the export.
+    /// others as they come back, so the export stops with an error rather than rendering the rest
+    /// of itself on the CPU.
     fn with<R>(&self, f: impl FnOnce(&mut dyn FrameRenderer) -> R) -> Option<R> {
         use std::sync::atomic::Ordering;
         let mut free = self.renderers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -213,7 +224,10 @@ impl Pipeline {
                     break;
                 }
             }
-            RendererPool::new(list)
+            match RendererPool::new(list) {
+                Some(pool) => Some(pool),
+                None => return Err(ExportError::Unsupported(GPU_UNAVAILABLE.into())),
+            }
         };
         Ok(Pipeline {
             renderer,
@@ -237,30 +251,30 @@ impl Pipeline {
     }
 
     /// Output frame `f` as straight sRGB RGBA8 at the output size, or for HDR exports the encoded
-    /// R'G'B' floats (3 per pixel).
-    pub fn frame(&self, f: i64, sources: &dyn SourceProvider) -> (Vec<u8>, Vec<f32>) {
+    /// R'G'B' floats (3 per pixel). Fails when GPU rendering is on and the GPU could not render
+    /// the frame: the CPU is not a silent second choice.
+    pub fn frame(&self, f: i64, sources: &dyn SourceProvider) -> Result<(Vec<u8>, Vec<f32>)> {
         let t = self.rate.tick_of(f);
-        // The registered GPU renderer goes first; `None` (no adapter, a plan the GPU cannot
-        // draw, any internal error) falls back to the CPU reference renderer below. A frame the
-        // planner hands back as one CPU image anyway (an adjustment layer, a complex transition,
-        // HDR) does not take a pooled renderer: it would render on the CPU inside the pool, as
-        // many frames at a time as there are renderers instead of one per export thread.
+        // A frame the planner hands back as one CPU image anyway (an adjustment layer, a complex
+        // transition, HDR) does not take a pooled renderer: it would render on the CPU inside the
+        // pool, as many frames at a time as there are renderers instead of one per export thread.
+        // Every other frame belongs to the GPU when it is on: one it declines (no adapter, a plan
+        // it cannot draw, an internal error) fails the export with the reason.
         let pool = self.renderer.as_ref().filter(|_| !filmcraft_render::plan::is_cpu_frame(&self.project, self.seq, t));
-        let gpu = match pool {
+        let img = match pool {
             Some(pool) => {
                 let asked = web_time::Instant::now();
-                pool.with(|r| {
+                let gpu = pool.with(|r| {
                     crate::note_lock_wait(asked.elapsed());
                     r.render(&self.project, self.seq, t, self.opts, sources)
-                })
-                .flatten()
-            }
-            None => None,
-        };
-        let img = match gpu {
-            Some(img) => {
-                note_gpu_frame();
-                img
+                });
+                match gpu.flatten() {
+                    Some(img) => {
+                        note_gpu_frame();
+                        img
+                    }
+                    None => return Err(ExportError::Unsupported(GPU_FAILED.into())),
+                }
             }
             None => {
                 if self.renderer.is_some() {
@@ -284,7 +298,7 @@ impl Pipeline {
             }
             // the float image is not needed any more: its buffer serves the next frame's layers
             filmcraft_frame::pool::recycle_f32(img.px);
-            return (Vec::new(), out);
+            return Ok((Vec::new(), out));
         }
         let mut rgba = if self.alpha { img.to_rgba8() } else { img.over_black_rgba8() };
         // the float image is not needed any more: its buffer serves the next frame's layers
@@ -292,7 +306,7 @@ impl Pipeline {
         if lim.enabled {
             limit_rgba8(&mut rgba, lim.min_percent, lim.max_percent);
         }
-        (rgba, Vec::new())
+        Ok((rgba, Vec::new()))
     }
 
     /// Fit the rendered picture into the output frame.

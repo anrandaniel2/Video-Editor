@@ -14,3 +14,8 @@ workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 miniz_oxide = { workspace = true }
+# Panoramas are lossless JPEG XL, and this is a pure-Rust decoder for them (no C, so F-Droid and
+# every other build compiles it like the rest of the tree). Only the reader: `tools/env/make_env.py`
+# writes them, and the tests read the ones the app ships.
+jxl-oxide = { version = "0.12", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false }

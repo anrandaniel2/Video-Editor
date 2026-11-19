@@ -112,15 +112,16 @@ struct Ahead {
 
 /// Render frames `f..end` in parallel. `None` when a source was not ready for one of them (the
 /// pending flag, taken after every frame because it is per thread): the batch is incomplete and
-/// must be rendered again.
+/// must be rendered again. An error is a frame the GPU could not render: the export stops with
+/// that reason.
 /// `prepare` (the encoder's [`VideoEncoder::prepare_ahead`]) then works on each frame, numbered
 /// from `f0` like [`EncoderFrame::index`].
-fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider, prepare: Option<&PrepareAhead>, f0: i64) -> Option<Vec<Frame>> {
+fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider, prepare: Option<&PrepareAhead>, f0: i64) -> Result<Option<Vec<Frame>>> {
     let pending = AtomicBool::new(false);
-    let frames: Vec<Frame> = (f..end)
+    let frames: Vec<Result<Frame>> = (f..end)
         .into_par_iter()
         .map(|fi| {
-            let frame = pipe.frame(fi, sources);
+            let frame = pipe.frame(fi, sources)?;
             if filmcraft_media::pending::take() {
                 pending.store(true, Ordering::Relaxed);
             }
@@ -128,10 +129,11 @@ fn render_batch(pipe: &Pipeline, f: i64, end: i64, sources: &dyn SourceProvider,
                 let index = u64::try_from(fi - f0).unwrap_or(u64::MAX);
                 prepare(&EncoderFrame { width: pipe.w, height: pipe.h, rgba: &frame.0, hdr: pipe.hdr_out.then_some(frame.1.as_slice()), index });
             }
-            frame
+            Ok(frame)
         })
         .collect();
-    (!pending.load(Ordering::Relaxed)).then_some(frames)
+    let frames = frames.into_iter().collect::<Result<Vec<Frame>>>()?;
+    Ok((!pending.load(Ordering::Relaxed)).then_some(frames))
 }
 
 /// What encoding a batch came to.
@@ -540,7 +542,7 @@ impl Exporter {
             _ => {
                 let (f, end) = (self.next, self.next.saturating_add(self.batch_len()).min(self.f1));
                 let pipe = &self.pipe;
-                match timed(Stage::Render, || render_batch(pipe, f, end, sources, prepare.as_ref(), f0)) {
+                match timed(Stage::Render, || render_batch(pipe, f, end, sources, prepare.as_ref(), f0))? {
                     Some(frames) => (f, frames),
                     None => return Ok(Step::Pending),
                 }
@@ -564,7 +566,7 @@ impl Exporter {
             };
         };
         let pipe = self.pipe.clone();
-        let mut slot: Option<std::thread::Result<Option<Vec<Frame>>>> = None;
+        let mut slot: Option<std::thread::Result<Result<Option<Vec<Frame>>>>> = None;
         let mut encode_done: Option<web_time::Instant> = None;
         let encoded = rayon::in_place_scope(|s| {
             s.spawn(|_| {
@@ -585,9 +587,10 @@ impl Exporter {
                 progress.done.fetch_add((end - f) as u64, Ordering::Relaxed);
                 self.next = end;
                 match slot {
-                    Some(Ok(Some(frames))) => self.ahead = Some(Ahead { first: a, frames }),
+                    Some(Ok(Ok(Some(frames)))) => self.ahead = Some(Ahead { first: a, frames }),
                     // a source was not ready: the next step renders this batch again
-                    Some(Ok(None)) | None => {}
+                    Some(Ok(Ok(None))) | None => {}
+                    Some(Ok(Err(e))) => return Err(e),
                     Some(Err(_)) => return Err(ExportError::Encode("internal error while rendering a frame (the panic was logged by the panic hook)".into())),
                 }
                 Ok(Step::Progress)

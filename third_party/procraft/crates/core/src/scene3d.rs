@@ -1263,10 +1263,10 @@ impl CanvasSession {
         self.shared.lock().scene.as_ref().is_some_and(|s| s.paint_through)
     }
 
-    /// Lights the model by the environment `name` whose panorama is `hdr` (a Radiance `.hdr`)
+    /// Lights the model by the environment `name` whose panorama is `hdr` (a lossless JPEG XL)
     /// and shows it behind the model; false if it can't be read.
     pub fn set_model_environment(&self, name: String, hdr: Vec<u8>) -> bool {
-        let Some(panorama) = procraft_engine::environment::read_hdr(&hdr) else { return false };
+        let Some(panorama) = procraft_engine::environment::read_jxl(&hdr) else { return false };
         let mut st = self.shared.lock();
         let Some(scene) = st.scene.as_mut() else { return false };
         scene.environment = Some(panorama);
@@ -3976,8 +3976,9 @@ mod tests {
             st.ensure_canvas();
         }
         // lit by an environment, shown behind it (set up on the next frame)
-        let sky = procraft_engine::environment::Equirect::uniform([0.8, 0.9, 1.0]);
-        assert!(s.set_model_environment("sky".into(), procraft_engine::environment::write_hdr(&sky)));
+        // a shipped panorama: the app's own asset, decoded as the app decodes it
+        let sky = include_bytes!("../../../android/app/src/main/assets/environments/studio.jxl").to_vec();
+        assert!(s.set_model_environment("sky".into(), sky));
         assert!(!s.set_model_environment("bad".into(), b"not a picture".to_vec()));
         assert_eq!(s.model_environment().as_deref(), Some("sky"));
         frame(&s, 200);
@@ -5589,7 +5590,7 @@ f 1/1 2/2",
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!s.paint_through());
         s.set_paint_through(true);
-        let sky = procraft_engine::environment::write_hdr(&procraft_engine::environment::Equirect::uniform([0.5; 3]));
+        let sky = include_bytes!("../../../android/app/src/main/assets/environments/coast.jxl").to_vec();
         assert!(s.set_model_environment("coast".into(), sky));
         assert_eq!(s.model_exposure(), 1.0);
         s.set_model_exposure(9.0);

@@ -1776,6 +1776,27 @@ private fun Chip(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
+ * A picture the app ships as a lossless JPEG XL asset: Android's own decoders cannot read the
+ * format, so the native library decodes it off the main thread. Null until it is there.
+ */
+@Composable
+private fun jxlPicture(asset: String): ImageBitmap? {
+    val assets = androidx.compose.ui.platform.LocalContext.current.assets
+    val picture = androidx.compose.runtime.produceState<ImageBitmap?>(null, asset) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val bytes = runCatching { assets.open(asset).use { it.readBytes() } }.getOrNull()
+                ?: return@withContext null
+            val decoded = runCatching { io.github.artcraftandroid.procraft.core.decodePictureJxl(bytes) }.getOrNull()
+                ?: return@withContext null
+            android.graphics.Bitmap.createBitmap(decoded.width, decoded.height, android.graphics.Bitmap.Config.ARGB_8888)
+                .also { it.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(decoded.rgba)) }
+                .asImageBitmap()
+        }
+    }
+    return picture.value
+}
+
+/**
  * What the app is, over the gallery (blurred and dimmed under it): its icon 300 across, its name,
  * its version; a round button at the top right closes it, as back does.
  */
@@ -1793,11 +1814,10 @@ private fun AboutApp(onRecover: () -> Unit, onClose: () -> Unit) {
         Column(Modifier.fillMaxWidth().padding(top = 95.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             // the launcher icon: its field, and its picture drawn at the adaptive icon's full size
             Box(Modifier.size(300.dp).clip(RoundedCornerShape(67.dp)).background(AboutIconField), contentAlignment = Alignment.Center) {
-                androidx.compose.foundation.Image(
-                    androidx.compose.ui.res.painterResource(io.github.artcraftandroid.procraft.R.drawable.procraft_mark),
-                    contentDescription = null,
-                    modifier = Modifier.requiredSize(450.dp),
-                )
+                val mark = jxlPicture("mark.jxl")
+                if (mark != null) {
+                    Image(bitmap = mark, contentDescription = null, modifier = Modifier.requiredSize(450.dp))
+                }
             }
             Text("ProCraft", color = Color.White, fontSize = 64.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.padding(top = 12.dp))
             Text(version, color = AboutInk, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 14.dp))

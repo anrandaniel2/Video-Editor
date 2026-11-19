@@ -148,8 +148,9 @@ impl Gpu {
     }
 
     /// The backends a device is made from, best first: those `WGPU_BACKEND` names if it is set
-    /// (to try another when a driver fails); on Android Vulkan, then OpenGL ES (for a device
-    /// whose Vulkan is missing or fails); on Windows Vulkan and Direct3D 12, Direct3D 12 first on
+    /// (to try another when a driver fails); on Android Vulkan, and only Vulkan — no phone the
+    /// app supports lacks it, and a second driver stack was a fallback that hid a broken one, so
+    /// a device without it now says it has no GPU; on Windows Vulkan and Direct3D 12, Direct3D 12 first on
     /// ARM (the Snapdragon X's Vulkan driver fails as a canvas opens), then OpenGL (a GPU or
     /// driver too old for either); on Linux Vulkan, then OpenGL (the same); elsewhere the native
     /// API. A backend's index here is the one the other calls take.
@@ -158,7 +159,7 @@ impl Gpu {
             return vec![chosen];
         }
         if cfg!(target_os = "android") {
-            vec![wgpu::Backends::VULKAN, wgpu::Backends::GL]
+            vec![wgpu::Backends::VULKAN]
         } else if cfg!(all(windows, target_arch = "aarch64")) {
             vec![wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else if cfg!(windows) {

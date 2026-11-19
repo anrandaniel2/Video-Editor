@@ -1,6 +1,7 @@
 //! Environments for 3D painting's lighting: panoramas of light (equirectangular, linear RGB)
-//! read from Radiance `.hdr` files, their irradiance as spherical harmonics, and the table of the
-//! split-sum approximation to a rough surface's reflection (the "BRDF table").
+//! read from lossless JPEG XL files (`assets/environments`), their irradiance as spherical
+//! harmonics, and the table of the split-sum approximation to a rough surface's reflection (the
+//! "BRDF table").
 //!
 //! Directions are y up; a panorama's middle (u = 0.5) looks along -z, its left edge along +z
 //! through -x (u = atan2(x, -z) / 2pi + 0.5), its top row straight up.
@@ -118,106 +119,33 @@ pub fn irradiance(sh: &[[f32; 3]; 9], n: [f32; 3]) -> [f32; 3] {
     out.map(|v| v.max(0.0))
 }
 
-/// Reads a Radiance `.hdr` picture (RGBE, flat or run-length coded scanlines).
-pub fn read_hdr(bytes: &[u8]) -> Option<Equirect> {
-    // the header: lines up to an empty one, then the size line
-    let mut at = 0usize;
-    let line = |at: &mut usize| -> Option<String> {
-        let rest = bytes.get(*at..)?;
-        let end = rest.iter().position(|&b| b == b'\n')?;
-        let text = String::from_utf8_lossy(rest.get(..end)?).into_owned();
-        *at += end + 1;
-        Some(text)
-    };
-    let first = line(&mut at)?;
-    if !first.starts_with("#?") {
-        return None;
-    }
-    loop {
-        let l = line(&mut at)?;
-        if l.trim().is_empty() {
-            break;
-        }
-        if let Some(format) = l.strip_prefix("FORMAT=")
-            && format.trim() != "32-bit_rle_rgbe"
-        {
-            return None;
-        }
-    }
-    let size = line(&mut at)?;
-    let words: Vec<&str> = size.split_whitespace().collect();
-    let (height, width) = match words.as_slice() {
-        ["-Y", h, "+X", w] => (h.parse::<u32>().ok()?, w.parse::<u32>().ok()?),
-        _ => return None,
-    };
+/// Decodes a picture as its four 8-bit channels: the panorama format below is a Radiance RGBE
+/// pixel (red, green, blue, and the exponent all three share) in the four channels of a lossless
+/// JPEG XL image, which is 37% smaller than the same values deflated.
+pub fn decode_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let decoder = jxl_oxide::integration::JxlDecoder::new(std::io::Cursor::new(bytes)).ok()?;
+    let picture = image::DynamicImage::from_decoder(decoder).ok()?;
+    let (width, height) = (picture.width(), picture.height());
     if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 1 << 26 {
         return None;
     }
-    let mut pixels = Vec::with_capacity((width * height) as usize);
-    let mut scan = vec![[0u8; 4]; width as usize];
-    for _ in 0..height {
-        let head = bytes.get(at..at + 4)?;
-        let coded = (8..0x8000).contains(&width) && head.first() == Some(&2) && head.get(1) == Some(&2);
-        if coded {
-            at += 4;
-            // each of the four channels in turn: runs and literal stretches
-            for channel in 0..4 {
-                let mut x = 0usize;
-                while x < width as usize {
-                    let count = usize::from(*bytes.get(at)?);
-                    at += 1;
-                    if count > 128 {
-                        let value = *bytes.get(at)?;
-                        at += 1;
-                        for _ in 0..count - 128 {
-                            *scan.get_mut(x)?.get_mut(channel)? = value;
-                            x += 1;
-                        }
-                    } else {
-                        if count == 0 {
-                            return None;
-                        }
-                        for _ in 0..count {
-                            *scan.get_mut(x)?.get_mut(channel)? = *bytes.get(at)?;
-                            at += 1;
-                            x += 1;
-                        }
-                    }
-                }
-            }
-        } else {
-            for px in scan.iter_mut() {
-                *px = bytes.get(at..at + 4)?.try_into().ok()?;
-                at += 4;
-            }
-        }
-        pixels.extend(scan.iter().map(|&[r, g, b, e]| {
-            if e == 0 {
-                [0.0; 3]
-            } else {
-                let f = 2f32.powi(i32::from(e) - 136);
-                [f32::from(r) * f, f32::from(g) * f, f32::from(b) * f]
-            }
-        }));
-    }
-    Some(Equirect { width, height, pixels })
+    Some((width, height, picture.into_rgba8().into_raw()))
 }
 
-/// Writes a picture as a Radiance `.hdr` file (flat RGBE scanlines).
-pub fn write_hdr(e: &Equirect) -> Vec<u8> {
-    let mut out = format!("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {} +X {}\n", e.height, e.width).into_bytes();
-    for p in &e.pixels {
-        let m = p[0].max(p[1]).max(p[2]);
-        if m < 1e-32 {
-            out.extend_from_slice(&[0; 4]);
-            continue;
-        }
-        let exp = m.log2().floor() as i32 + 1;
-        let scale = 256.0 / 2f32.powi(exp);
-        let byte = |v: f32| (v * scale).clamp(0.0, 255.0) as u8;
-        out.extend_from_slice(&[byte(p[0]), byte(p[1]), byte(p[2]), (exp + 128).clamp(0, 255) as u8]);
+/// Reads a panorama: a lossless JPEG XL image whose four channels are Radiance RGBE values.
+pub fn read_jxl(bytes: &[u8]) -> Option<Equirect> {
+    let (width, height, rgba) = decode_rgba(bytes)?;
+    let mut pixels = Vec::with_capacity((width * height) as usize);
+    for px in rgba.chunks_exact(4) {
+        let Ok([r, g, b, e]) = <[u8; 4]>::try_from(px) else { continue };
+        pixels.push(if e == 0 {
+            [0.0; 3]
+        } else {
+            let f = 2f32.powi(i32::from(e) - 136);
+            [f32::from(r) * f, f32::from(g) * f, f32::from(b) * f]
+        });
     }
-    out
+    Some(Equirect { width, height, pixels })
 }
 
 /// The split-sum table for image lighting: for a view at cosine `n·v` across and a roughness
@@ -323,23 +251,54 @@ mod tests {
     }
 
     #[test]
-    fn hdr_files_round_trip() {
-        let e = Equirect {
-            width: 3,
-            height: 2,
-            pixels: vec![[0.0; 3], [1.0, 0.5, 0.25], [100.0, 3.0, 0.01], [2.0; 3], [0.1; 3], [7.5, 0.0, 1.0]],
-        };
-        let back = read_hdr(&write_hdr(&e)).unwrap();
-        assert_eq!((back.width, back.height), (3, 2));
-        // one exponent a pixel: as exact as its brightest channel allows
-        for (a, b) in back.pixels.iter().zip(&e.pixels) {
-            let most = b[0].max(b[1]).max(b[2]);
-            for (x, y) in a.iter().zip(b) {
-                assert!((x - y).abs() <= most / 128.0 + 1e-3, "{a:?} {b:?}");
-            }
+    fn what_is_not_a_panorama_is_refused() {
+        assert!(read_jxl(b"not a picture").is_none());
+        assert!(read_jxl(&[0xff, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_none());
+        assert!(read_jxl(&[]).is_none());
+    }
+
+    /// The shipped panoramas decode to exactly the pixels they were encoded from, checked by a
+    /// hash of every channel: a decoder that reordered, mixed or clipped a channel would not
+    /// land on these numbers.
+    #[test]
+    fn the_shipped_panoramas_decode_exactly() {
+        fn hash(bytes: &[u8]) -> u64 {
+            bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
         }
-        assert!(read_hdr(b"not a picture").is_none());
-        assert!(read_hdr(b"#?RADIANCE\n\n-Y 2 +X 2\n\x02\x02").is_none());
+        const PANORAMAS: [(&str, &[u8]); 11] = [
+            ("auditorium", include_bytes!("../../../android/app/src/main/assets/environments/auditorium.jxl")),
+            ("beach", include_bytes!("../../../android/app/src/main/assets/environments/beach.jxl")),
+            ("city", include_bytes!("../../../android/app/src/main/assets/environments/city.jxl")),
+            ("coast", include_bytes!("../../../android/app/src/main/assets/environments/coast.jxl")),
+            ("daytime", include_bytes!("../../../android/app/src/main/assets/environments/daytime.jxl")),
+            ("industrial", include_bytes!("../../../android/app/src/main/assets/environments/industrial.jxl")),
+            ("mountain", include_bytes!("../../../android/app/src/main/assets/environments/mountain.jxl")),
+            ("nightlife", include_bytes!("../../../android/app/src/main/assets/environments/nightlife.jxl")),
+            ("portside", include_bytes!("../../../android/app/src/main/assets/environments/portside.jxl")),
+            ("studio", include_bytes!("../../../android/app/src/main/assets/environments/studio.jxl")),
+            ("sunrise", include_bytes!("../../../android/app/src/main/assets/environments/sunrise.jxl")),
+        ];
+        const EXPECTED: [(&str, u64); 11] = [
+            ("auditorium", 11983526984295029015),
+            ("beach", 13497650157610206802),
+            ("city", 5068132712608070427),
+            ("coast", 15132380068274321166),
+            ("daytime", 1273513267537634091),
+            ("industrial", 17530366854053725617),
+            ("mountain", 11424415845225054351),
+            ("nightlife", 10853792694097603101),
+            ("portside", 17939853979399228985),
+            ("studio", 16862685554067676117),
+            ("sunrise", 14119447746814871867),
+        ];
+        for ((name, bytes), (expected_name, expected)) in PANORAMAS.iter().zip(EXPECTED) {
+            assert_eq!(*name, expected_name);
+            let (width, height, rgba) = decode_rgba(bytes).unwrap_or_else(|| panic!("{name} does not decode"));
+            assert_eq!((width, height), (512, 256), "{name}");
+            assert_eq!(hash(&rgba), expected, "{name} decodes to other pixels");
+            let panorama = read_jxl(bytes).unwrap();
+            assert!(panorama.pixels.iter().all(|p| p.iter().all(|v| v.is_finite() && *v >= 0.0)), "{name}");
+        }
     }
 
     #[test]

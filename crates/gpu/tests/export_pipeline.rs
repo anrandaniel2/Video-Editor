@@ -99,7 +99,11 @@ fn export_png(dir: &str, gpu: GpuRendering, size: (u32, u32)) {
     export_project_png(dir, gpu, size, false);
 }
 
-fn export_project_png(dir: &str, gpu: GpuRendering, (w, h): (u32, u32), adjusted: bool) {
+fn export_project_png(dir: &str, gpu: GpuRendering, size: (u32, u32), adjusted: bool) {
+    export_project_png_err(dir, gpu, size, adjusted).unwrap();
+}
+
+fn export_project_png_err(dir: &str, gpu: GpuRendering, (w, h): (u32, u32), adjusted: bool) -> filmcraft_export::ExportError {
     let (p, seq, m) = project_with(w, h, adjusted);
     let mut s = ExportSettings {
         format: Format::PngSequence,
@@ -108,7 +112,7 @@ fn export_project_png(dir: &str, gpu: GpuRendering, (w, h): (u32, u32), adjusted
     };
     s.range = Some(TimeRange::new(filmcraft_time::Tick::ZERO, filmcraft_time::FrameRate::FPS_24.tick_of(2)));
     s.gpu_rendering = gpu;
-    export(&p, seq, &s, &m, &Progress::default()).unwrap();
+    export(&p, seq, &s, &m, &Progress::default()).unwrap_err()
 }
 
 fn assert_parity(cpu_png: &[u8], gpu_png: &[u8], what: &str) {
@@ -137,10 +141,11 @@ fn gpu_export_matches_cpu_and_counts() {
         eprintln!("SKIPPED (gpu export pipeline): no adapter");
         return;
     };
-    // Clean registry first: Auto with no factory must be byte-equal to Off.
+    // Clean registry first: Auto with no renderer registered stops with the GPU's absence named,
+    // and Off is the CPU's own path.
     export_png("off-cpu", GpuRendering::Off, (320, 180));
-    export_png("off-auto", GpuRendering::Auto, (320, 180));
-    assert_eq!(png("off-cpu", "img000.png"), png("off-auto", "img000.png"), "Auto with no registered renderer must be byte-equal to Off");
+    let refused = export_project_png_err("off-auto", GpuRendering::Auto, (320, 180), false).to_string();
+    assert!(refused.contains("no GPU wgpu can use"), "Auto with no registered renderer must say the GPU is missing: {refused}");
 
     register_frame_renderer(|| Some(Box::new(GpuFrameRenderer(filmcraft_gpu::ExportRenderer::new().expect("adapter present")))));
     let sizes = [(320u32, 180u32), (17, 13), (1, 1), (257, 129)];

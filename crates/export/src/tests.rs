@@ -360,7 +360,9 @@ fn hdr_exports_signal_pq_and_hlg() {
 /// process-global and parallel tests would see each other's factories.
 #[test]
 fn gpu_hook_scenarios() {
-    // 1. Declining renderer: byte-equal to Off, and an empty registry too.
+    // 1. GPU rendering on with no GPU to be had (the factory declines, or nothing is
+    //    registered): the export stops and says so, instead of quietly rendering every frame on
+    //    the CPU for a setting the user turned on. Off is still the CPU's own path.
     crate::reset_frame_renderers_for_tests();
     crate::register_frame_renderer(|| None);
     let (p, seq, m) = project();
@@ -371,14 +373,15 @@ fn gpu_hook_scenarios() {
             Some(true) | None => crate::GpuRendering::Auto,
             Some(false) => crate::GpuRendering::Off,
         };
-        export(&p, seq, &s, &m, &Progress::default()).unwrap()
+        export(&p, seq, &s, &m, &Progress::default())
     };
-    mk(&tmp("off.png"), Some(false));
-    mk(&tmp("auto-declined.png"), Some(true));
-    assert_eq!(std::fs::read(tmp("off000.png")).unwrap(), std::fs::read(tmp("auto-declined000.png")).unwrap(), "declined GPU export must be byte-equal to Off");
+    mk(&tmp("off.png"), Some(false)).unwrap();
+    let declined = mk(&tmp("auto-declined.png"), Some(true)).unwrap_err().to_string();
+    assert!(declined.contains("no GPU wgpu can use"), "a declining factory must say the GPU is missing: {declined}");
+    assert!(std::fs::read(tmp("auto-declined000.png")).is_err(), "no frame may be written by an export that refuses to start");
     crate::reset_frame_renderers_for_tests();
-    mk(&tmp("auto-empty.png"), Some(true));
-    assert_eq!(std::fs::read(tmp("off000.png")).unwrap(), std::fs::read(tmp("auto-empty000.png")).unwrap(), "empty registry must behave like Off");
+    let empty = mk(&tmp("auto-empty.png"), Some(true)).unwrap_err().to_string();
+    assert!(empty.contains("no GPU wgpu can use"), "an empty registry must say the GPU is missing: {empty}");
 
     // 2. Producing renderer: counters up and its picture reaches the export.
     crate::reset_frame_renderers_for_tests();
@@ -429,8 +432,9 @@ fn gpu_hook_scenarios() {
         assert!(!bytes.is_empty(), "{w}x{h}: PNG written");
     }
 
-    // 4. A renderer that panics is dropped, not put back: the export still completes, every
-    //    frame comes from the CPU (byte-equal to Off), and no renderer is used after its panic.
+    // 4. A renderer that panics is dropped, not put back, and the export stops with the GPU's
+    //    failure: no frame is quietly rendered by the CPU in its place, and no renderer is used
+    //    again after its panic.
     crate::reset_frame_renderers_for_tests();
     PANICS.store(0, std::sync::atomic::Ordering::SeqCst);
     crate::register_frame_renderer(|| Some(Box::new(PanickingRenderer) as Box<dyn FrameRenderer>));
@@ -439,17 +443,12 @@ fn gpu_hook_scenarios() {
         let mut s = ExportSettings { format: Format::PngSequence, path: path.clone(), ..Default::default() };
         s.range = Some(TimeRange::new(Tick::ZERO, FrameRate::FPS_24.tick_of(12)));
         s.gpu_rendering = gpu;
-        export(&p, seq, &s, &m, &Progress::default()).unwrap()
+        export(&p, seq, &s, &m, &Progress::default())
     };
-    mk12(&tmp("panic-off.png"), crate::GpuRendering::Off);
-    mk12(&tmp("panic-auto.png"), crate::GpuRendering::Auto);
-    for f in ["000", "005", "011"] {
-        assert_eq!(
-            std::fs::read(tmp(&format!("panic-off{f}.png"))).unwrap(),
-            std::fs::read(tmp(&format!("panic-auto{f}.png"))).unwrap(),
-            "frame {f}: a panicking GPU renderer falls back to the CPU"
-        );
-    }
+    mk12(&tmp("panic-off.png"), crate::GpuRendering::Off).unwrap();
+    let panicked = mk12(&tmp("panic-auto.png"), crate::GpuRendering::Auto).unwrap_err().to_string();
+    assert!(panicked.contains("failed to render a frame"), "a panicking GPU renderer must fail the export: {panicked}");
+    assert!(PANICS.load(std::sync::atomic::Ordering::SeqCst) >= 1, "the renderer was never asked");
     // at most one panic per pooled renderer (4): none is used again after it panicked
     assert!(PANICS.load(std::sync::atomic::Ordering::SeqCst) <= 4, "renderer reused after a panic: {}", PANICS.load(std::sync::atomic::Ordering::SeqCst));
 

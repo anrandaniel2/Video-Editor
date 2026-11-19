@@ -166,4 +166,8 @@ opt-level = 3
 # the hot loops that were already vectorised.
 lto = "thin"
 codegen-units = 16
+# Abort on a panic instead of unwinding: the unwinding tables and landing pads were megabytes of
+# the native library in the APK, and nothing in an export may recover from a panic mid-frame
+# anyway (the export reports the failure and stops). The tests build with the default unwind.
+panic = "abort"
 

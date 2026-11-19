@@ -43,6 +43,7 @@ mod keys;
 #[cfg(target_os = "ios")]
 mod layer;
 mod layer_ops;
+mod picture;
 mod layers;
 mod liquify;
 mod modes;

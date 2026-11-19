@@ -242,14 +242,9 @@ fn damaged_models_and_environments_are_refused_not_a_crash() {
     survives("MTL", mtl, |b| {
         let _ = crate::mesh::read_mtl(&String::from_utf8_lossy(b));
     });
-    let sky = crate::environment::Equirect {
-        width: 16,
-        height: 8,
-        pixels: (0..128).map(|i| [i as f32 / 128.0, 0.5, 2.0]).collect(),
-    };
-    let good = crate::environment::write_hdr(&sky);
-    assert!(crate::environment::read_hdr(&good).is_some());
-    survives("HDR", &good, |b| {
-        let _ = crate::environment::read_hdr(b);
+    let good = include_bytes!("../../../android/app/src/main/assets/environments/coast.jxl").to_vec();
+    assert!(crate::environment::read_jxl(&good).is_some());
+    survives("panorama", &good, |b| {
+        let _ = crate::environment::read_jxl(b);
     });
 }

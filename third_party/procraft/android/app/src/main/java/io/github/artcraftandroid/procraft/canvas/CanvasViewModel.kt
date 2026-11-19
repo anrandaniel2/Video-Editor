@@ -1546,7 +1546,7 @@ class CanvasViewModel(app: Application) : AndroidViewModel(app) {
         modelEnvironment = name
         viewModelScope.launch {
             val assets = getApplication<Application>().assets
-            val hdr = withContext(Dispatchers.IO) { runCatching { assets.open("environments/$name.hdr").use { it.readBytes() } }.getOrNull() }
+            val hdr = withContext(Dispatchers.IO) { runCatching { assets.open("environments/$name.jxl").use { it.readBytes() } }.getOrNull() }
             if (hdr != null && session === s && modelEnvironment == name) s.setModelEnvironment(name, hdr)
         }
     }

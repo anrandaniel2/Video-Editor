@@ -137,10 +137,24 @@ pub(crate) fn native_instance() -> wgpu::Instance {
 /// as above: `WGPU_BACKEND` narrows the adapters chosen from them instead (`ExportRenderer::new`).
 fn native_descriptor() -> wgpu::InstanceDescriptor {
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-    desc.backends = if cfg!(windows) { wgpu::Backends::PRIMARY } else { wgpu::Backends::PRIMARY | wgpu::Backends::GL };
+    desc.backends = native_backends();
     desc.flags = desc.flags.with_env();
     desc.backend_options = desc.backend_options.with_env();
     desc
+}
+
+/// The backends [`native_descriptor`] asks for: Vulkan on Android, and only Vulkan. Every phone
+/// whose GPU the app can use has a Vulkan driver; the OpenGL ES path was a second claim on the
+/// same hardware that only ever masked a driver that could not do Vulkan, and it is gone: a phone
+/// without working Vulkan now says it has no GPU instead of drawing more slowly.
+fn native_backends() -> wgpu::Backends {
+    if cfg!(target_os = "android") {
+        wgpu::Backends::VULKAN
+    } else if cfg!(windows) {
+        wgpu::Backends::PRIMARY
+    } else {
+        wgpu::Backends::PRIMARY | wgpu::Backends::GL
+    }
 }
 
 /// The index of the adapter to draw with: [`wgpu_choice`], or the entry exposing the most
@@ -494,8 +508,7 @@ mod tests {
         }
         let desc = native_descriptor();
         assert!(desc.flags.contains(wgpu::InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER), "{:?}", desc.flags);
-        let backends = if cfg!(windows) { wgpu::Backends::PRIMARY } else { wgpu::Backends::PRIMARY | wgpu::Backends::GL };
-        assert_eq!(desc.backends, backends);
+        assert_eq!(desc.backends, native_backends());
     }
 
     /// Against the adapters of the machine running the tests: [`wgpu_choice`] is what wgpu's

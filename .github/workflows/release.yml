@@ -131,6 +131,29 @@ jobs:
           done
           exit $status
 
+      # The 3D view's panoramas are lossless JPEG XL now, and whether the decoder in the app
+      # reproduces the exact pixels they were encoded from is not something a build can show: this
+      # decodes all eleven and compares a hash of every channel against the values libjxl produced
+      # when they were written, so a decoder that swapped, mixed or clipped a channel cannot pass.
+      - name: The panoramas
+        run: |
+          set +e
+          # ProCraft is a cargo workspace of its own (the root one excludes third_party), so its
+          # tests run through its manifest. Its lock file is updated here as the engine gained the
+          # JPEG XL crates; nothing is built with --locked in this workflow.
+          cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-engine environment:: > /tmp/env-tests.txt 2>&1
+          status=$?
+          grep -E '^test .* \.\.\. (ok|FAILED)$' /tmp/env-tests.txt | tail -3 | while read -r line; do
+            echo "::notice title=Panoramas::$line"
+          done
+          awk '/^error(\[E[0-9]+\])?: /{e=$0; getline; if ($0 ~ /^[[:space:]]*--> /) {gsub(/^[[:space:]]+--> /,""); print e " @ " $0} else print e}' /tmp/env-tests.txt | head -20 | while IFS= read -r line; do
+            echo "::error title=Compile::$line"
+          done
+          awk '/^---- .* stdout ----$/{p=1; n=0; next} p&&n<6{print; n++}' /tmp/env-tests.txt | head -20 | while read -r line; do
+            echo "::error title=Why::$line"
+          done
+          exit $status
+
   # TEMPORARY: render the brush sheet so the drawing can be looked at rather than imagined.
   apk:
     name: APK
