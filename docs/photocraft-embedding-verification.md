@@ -43,7 +43,7 @@ which also went fully green, is per-test `::notice` annotation lines in the two 
 | 5 | Kotlin unit tests, incl. `VisualRouteTest` (video/drawing/picture/unknown routing) | `./gradlew :app:testReleaseUnitTest` (APK job, "Unit tests (Kotlin)") | pass |
 | 6 | Everything Kotlin compiles tree-wide (ShapesPanel, Fc→Pc aliasing, VisualRoute, the hosted canvas, gallery) | `./gradlew assembleRelease -Pfilmcraft.abis=arm64-v8a` (APK job, "Build") | pass |
 | 7 | APK assembles, SIGNS, size budget, native library presence and entry points | "Sign" → "Size" → "The native libraries, and every entry point" → "APK" | pass — `filmcraft-android-0.0.61-beta.apk`, 34.0 MB (79.1 MB unpacked), arm64-v8a; 53 `ffi_filmcraft_android` entry points, no `libprocraft_core.so` (ProCraft's Rust is linked into FilmCraft's native library, `libfilmcraft_android.so`); signed (public CI test key — see caveats) |
-| 8 | `git diff --check` / whitespace hygiene | every commit on this branch | pass |
+| 8 | whitespace hygiene (`git diff --check`) | authoring sandbox, this branch | pass |
 
 Not verified, deliberately and on the record:
 
@@ -57,7 +57,7 @@ Not verified, deliberately and on the record:
 - **The `GitHub Release` job** is tag-gated and was skipped on this push (as designed). The
   assembled APK is a **dry-run signed with the public CI test key** (CN=FilmCraft Dry Run),
   not the Play/F-Droid release key; no release was cut.
-- **Desktop/crown builds** were not run.
+- **Desktop/other target builds** were not run.
 
 ## The CI command list (as wired in `.github/workflows/release.yml`)
 
@@ -98,7 +98,8 @@ Local reproduction notes:
   crate (`apps/filmcraft-android/src/photocraft/*` — brush, commands, compose, model, paint,
   select, text and their tests), its Kotlin host (`PhotoCraftIntegration.kt`, `PhotoEditorScreen`,
   CanvasMapping, ViewModel, engine/studio files), `brush_sheet.rs`, the Gradle `sourceSets`,
-  the `.gitignore` entries and the CI photo-engine step. Roughly 15,000 deleted lines.
+  the `.gitignore` entries and the CI photo-engine step. 15,224 deleted lines against
+  508 added (branch diff against its base).
 - **The in-timeline playhead-frame "Photo" button and its stashed-picture path are removed,
   not re-routed** to the hosted canvas. A photo now always opens as its own hosted document;
   the overlay path (`prepareHostOverlay`) exists only for a frame handed to the canvas as
