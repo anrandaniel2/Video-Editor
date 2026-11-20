@@ -80,7 +80,7 @@ internal class ViewProjection(val eye: GizmoVec, val yawDeg: Double, val pitchDe
 
 /** Mesh display and hit-testing share the renderer's fixed, frame-centred camera. */
 internal class GizmoGeometry(val pose:GizmoPose,private val layer:Placement?,private val fw:Double,private val fh:Double,private val width:Double,private val height:Double,pixels:Double,private val orbit:ViewProjection?=null,private val poseIsWorld:Boolean=false) {
-    constructor(settings:Object3DSettings,layer:Placement?,fw:Double,fh:Double,width:Double,height:Double,pixels:Double):this(GizmoPose(settings.x,settings.y,settings.z,settings.rotationX,settings.rotationY,settings.rotationZ),layer,fw,fh,width,height,pixels)
+    constructor(settings:Object3DSettings,layer:Placement?,fw:Double,fh:Double,width:Double,height:Double,pixels:Double,orbit:ViewProjection?=null,poseIsWorld:Boolean=false):this(GizmoPose(settings.x,settings.y,settings.z,settings.rotationX,settings.rotationY,settings.rotationZ),layer,fw,fh,width,height,pixels,orbit,poseIsWorld)
     val origin=if(poseIsWorld)GizmoVec(pose.x,pose.y,pose.z)else GizmoVec((pose.x-fw/2)*pose.z.coerceAtLeast(1.0)/fh.coerceAtLeast(1.0),(pose.y-fh/2)*pose.z.coerceAtLeast(1.0)/fh.coerceAtLeast(1.0),pose.z.coerceAtLeast(1.0))
     val radius=(if(orbit!=null)pixels*orbit.depthOf(origin).coerceAtLeast(20.0)/fh.coerceAtLeast(1.0)/(width/fw.coerceAtLeast(1.0)) else pixels*origin.z/fh.coerceAtLeast(1.0)/(width/fw.coerceAtLeast(1.0)))/(layer?.scale?.absoluteValue ?: 1.0).coerceAtLeast(0.001)
     val axes=gizmoBasis.map {rotate(it)}
@@ -89,8 +89,8 @@ internal class GizmoGeometry(val pose:GizmoPose,private val layer:Placement?,pri
         if(width <= 0.0 || height <= 0.0 || fw <= 0.0 || fh <= 0.0) return null
         // frame pixels before the layer affine: the orbit camera, or the classic fixed camera
         val base = orbit?.projectFrame(world)
-            ?: if(world.z<1.0 || !world.x.isFinite() || !world.y.isFinite() || !world.z.isFinite()) null
-            else GizmoPoint(Offset((fw/2+fh*world.x/world.z).toFloat(), (fh/2+fh*world.y/world.z).toFloat()), world.z)
+            ?: (if(world.z<1.0 || !world.x.isFinite() || !world.y.isFinite() || !world.z.isFinite()) null
+            else GizmoPoint(Offset((fw/2+fh*world.x/world.z).toFloat(), (fh/2+fh*world.y/world.z).toFloat()), world.z))
             ?: return null
         // screen-space layer placement applies on top of either camera, about the frame centre
         val a=Math.toRadians(layer?.rotation ?: 0.0);val scale=(layer?.scale ?: 1.0)
