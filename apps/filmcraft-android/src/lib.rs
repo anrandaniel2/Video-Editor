@@ -37,7 +37,6 @@ pub mod drawing_geometry;
 pub mod drawing_brush_engine;
 pub mod drawing_animation;
 pub mod drawing_tiles;
-pub mod photocraft;
 pub mod drawing_precision;
 pub mod drawing_openraster;
 pub mod export;

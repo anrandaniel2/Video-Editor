@@ -11484,3 +11484,62 @@ fn brushes_brought_in_keep_their_size_range_through_a_restart() {
     }
     assert!(shifted.is_empty());
 }
+
+#[test]
+fn quickshape_an_arc_snaps_and_bends_by_its_middle_in_both_entry_paths() {
+    use crate::quickshape::QuickShapeKind;
+    // the session is square (canvas == window: the view is 1:1), the bow asked for (160 + 140cos, 175 + 30sin)
+    let Some(s) = session(320, 320) else { return };
+    s.set_brush_size(0.02);
+    // a flat bow, as a hand draws one
+    let pts: Vec<PenSample> = (0..=60)
+        .map(|i| {
+            let t = 0.4 + i as f32 / 60.0 * 2.3;
+            sample(160.0 + 140.0 * t.cos(), 175.0 + 30.0 * t.sin(), f64::from(i) * 8.0)
+        })
+        .collect();
+    let draw = || {
+        s.stroke_begin(PointerKind::Finger, pts[..1].to_vec());
+        s.stroke_add(pts[1..].to_vec());
+    };
+
+    // ---- the explicit Shapes path: the stroke ends, the Shapes panel lifts, quickshape_last
+    draw();
+    s.stroke_end(vec![]);
+    let info = s.quickshape_last().expect("the stroke snaps to a shape");
+    assert_eq!(info.kind, QuickShapeKind::Arc, "{info:?}");
+    assert_eq!(info.handles.len(), 6, "two ends and the middle, in window pixels");
+    // the middle bends: ends pinned, stays an arc, handles follow (as a drag begins with a step, like the touches do)
+    let (start_x, start_y) = (info.handles[0], info.handles[1]);
+    let (mid_x, mid_y) = (info.handles[2], info.handles[3]);
+    let (end_x, end_y) = (info.handles[4], info.handles[5]);
+    let bend = -20.0f32;
+    s.quickshape_step();
+    let bent = s.quickshape_move_handle(1, mid_x, mid_y + bend).expect("the arc is still editable");
+    assert_eq!(bent.kind, QuickShapeKind::Arc, "{bent:?}");
+    assert!((bent.handles[0] - start_x).abs() < 0.5 && (bent.handles[1] - start_y).abs() < 0.5, "{bent:?}");
+    assert!((bent.handles[4] - end_x).abs() < 0.5 && (bent.handles[5] - end_y).abs() < 0.5, "{bent:?}");
+    assert!(bent.handles.iter().all(|v| v.is_finite()), "{bent:?}");
+    // the bend moved the middle by close to what was asked (it is on the fitted ellipse)
+    assert!(((bent.handles[3] - mid_y) - bend).abs() < 2.0, "the middle follows the drag: {bent:?} vs y={mid_y}");
+    // one tap elsewhere (a finger down on the shape's own outline ends editing, not the shape),
+    // then keep it: the shape stays an arc in the kept stroke
+    s.quickshape_done();
+    assert!(s.quickshape_info().is_none());
+
+    // ---- the long-press recognition path: held still, snaps the same stroke
+    draw();
+    let held = s.quickshape_hold().expect("a held stroke snaps");
+    assert_eq!(held.kind, QuickShapeKind::Arc, "{held:?}");
+    let (hx, hy) = (held.handles[2], held.handles[3]);
+    s.quickshape_step();
+    let held_bent = s.quickshape_move_handle(1, hx, hy - 25.0).expect("editable while held");
+    assert_eq!(held_bent.kind, QuickShapeKind::Arc, "{held_bent:?}");
+    assert!(held_bent.handles.iter().all(|v| v.is_finite()), "{held_bent:?}");
+    // one step of undo takes the drag back, the shape as it held still behind it
+    assert!(s.info().can_undo);
+    s.undo();
+    let undone = s.quickshape_info().expect("after one undo the drag is gone");
+    assert_eq!(undone.kind, QuickShapeKind::Arc);
+    s.quickshape_done();
+}

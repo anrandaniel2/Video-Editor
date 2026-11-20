@@ -25,39 +25,45 @@ val Inter: FontFamily = io.github.artcraftandroid.procraft.ui.Inter
 object Fc {
     val Gallery = Color(0xFF282828)
     // surfaces
-    val Black = Color(0xFF1C1C1C)
-    /** Full-screen pages over the editor (export). */
-    val Layer1 = Color(0xFF212121)
-    /** Bottom panels, dialogs, menus, the text strip. */
-    val Panel = Color(0xFF303030)
+    /** The dark surround the drawing window sits in (procraft's reference). */
+    val Black = io.github.artcraftandroid.procraft.ui.Pc.Surround
+    /** Full-screen pages over the editor (export): the gallery's ground (procraft's reference). */
+    val Layer1 get() = io.github.artcraftandroid.procraft.ui.Pc.GalleryBackground
+    /** Bottom panels, dialogs, menus, the text strip (procraft's reference row). */
+    val Panel get() = io.github.artcraftandroid.procraft.ui.Pc.Row
     /** Rows and cards on panels. */
     val Raised = Color(0xFF414141)
-    /** The band behind the navigation buttons under a panel. */
-    val PanelBand = Color(0xFF212121)
+    /** The band behind the navigation buttons under a panel (procraft's reference gallery ground). */
+    val PanelBand get() = io.github.artcraftandroid.procraft.ui.Pc.GalleryBackground
     /** Timeline lanes. */
     val Lane = Color(0xFF191919)
     val Hover = Color(0x1CFFFFFF)
-    val Hairline = Color(0x24FFFFFF)
+    /** (procraft's reference glass edge) */
+    val Hairline get() = io.github.artcraftandroid.procraft.ui.Pc.GlassMenuEdge
     val Scrim = Color(0x99000000)
     /** Behind a bottom sheet: a light dim, the page stays readable. */
     val SheetScrim = Color(0x52000000)
 
     // text and icons
     val Title = Color(0xFFF2F2F2)
-    val Body = Color(0xFFFFFFFF)
+    /** (procraft's reference ink) */
+    val Body get() = io.github.artcraftandroid.procraft.ui.Pc.Text
     val Secondary = Color(0xFFAFAFAF)
     val Detail = Color(0xFF8A8A8A)
     val Disabled = Color(0xFF444444)
-    val Icon = Color(0xFFFFFFFF)
+    /** (procraft's reference ink) */
+    val Icon get() = io.github.artcraftandroid.procraft.ui.Pc.Text
 
     // accent
-    val Accent = Color(0xFF0076FD)
+    /** The interface's blue; a plugin's given accent shows in its place (procraft's reference). */
+    val Accent get() = io.github.artcraftandroid.procraft.ui.Pc.Accent
     val AccentLight = Color(0xFF3294FF)
     val Negative = Color(0xFFFC432E)
     val Recording = Color(0xFFF83A2B)
 
     // controls
-    val SliderOn = Color(0xFF0076FD)
+    /** (procraft's reference accent) */
+    val SliderOn get() = io.github.artcraftandroid.procraft.ui.Pc.Accent
     val SliderOff = Color(0xFF484848)
     val SliderDisabled = Color(0xFF323232)
     val ThumbFill = Color(0xFF0E0E0E)
@@ -128,7 +134,7 @@ object FcType {
 
 /** Sizes shared by the screens. */
 object FcSize {
-    val TopBar = 44.dp
+    val TopBar = io.github.artcraftandroid.procraft.ui.Pc.BarHeight
     val TopButton = 44.dp
     val Transport = 48.dp
     val FrameBar = 96.dp

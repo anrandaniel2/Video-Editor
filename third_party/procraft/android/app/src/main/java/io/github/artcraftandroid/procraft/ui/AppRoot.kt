@@ -242,6 +242,14 @@ fun AppRoot(vm: CanvasViewModel) {
                         }
                     }
                 }
+                // the host's shapes library hangs from the shapes button (FilmCraft only), as the other popovers do
+                if (vm.hostShapes && vm.hostClose != null && !vm.barsHidden) {
+                    val shapesWidth = 330.dp.coerceAtMost((maxWidth - Pc.PopoverGap * 2).coerceAtLeast(240.dp))
+                    val shapesX = maxWidth - Pc.toolCentreFromRight(2, maxWidth, 6)
+                    val clear = if (vm.showSideBar) Pc.SideBarWidth + Pc.PopoverGap else Pc.PopoverGap
+                    val shapesPlace = if (vm.rightHanded) popoverPlace(shapesWidth, shapesX, maxWidth, minRight = clear) else popoverPlace(shapesWidth, shapesX, maxWidth, clear)
+                    ShapesLibraryPanel(vm, shapesPlace.arrowX, Modifier.offset(x = shapesPlace.left, y = Pc.BarHeight))
+                }
                 // the colour panel dragged out by its grabber: a window over the canvas until closed
                 FloatingColors(vm, maxWidth, maxHeight)
                 if (vm.transforming && !vm.barsHidden) {

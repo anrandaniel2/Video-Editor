@@ -173,6 +173,7 @@ internal fun ProcraftDrawingPanel(ed: EditorController, close: () -> Unit, photo
             // photo, and a later photo would come up blank.
             ed.blankDrawing = false
             ed.drawingPicture = null
+            ed.drawingArtwork = null
             ed.drawingPreset = null
         }
     }

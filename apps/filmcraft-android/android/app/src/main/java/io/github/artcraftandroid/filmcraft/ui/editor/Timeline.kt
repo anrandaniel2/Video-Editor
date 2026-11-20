@@ -602,7 +602,7 @@ private fun DrawScope.drawClip(
         drawHandle(Rect(r.right, r.top, r.right + hw, r.bottom), left = false, dp)
         if (lane.kind == LaneKind.MAIN || c.kind == ClipKind.TEXT) {
             val label = TimelineMath.badge(c.duration)
-            val lay = measurer.measure(label, TextStyle(fontFamily = Inter, fontSize = 13.sp, color = Color(0xFF6BC7FF)))
+            val lay = measurer.measure(label, TextStyle(fontFamily = Inter, fontSize = 13.sp, color = Fc.VideoClip.content))
             val bw = lay.size.width + 8 * dp
             val bx = min(r.right, size.width) - bw - 4 * dp
             if (bx > r.left + 4 * dp) {

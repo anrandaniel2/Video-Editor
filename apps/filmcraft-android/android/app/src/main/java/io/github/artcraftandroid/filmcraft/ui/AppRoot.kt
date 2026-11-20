@@ -34,13 +34,15 @@ import io.github.artcraftandroid.filmcraft.ui.home.SettingsScreen
 fun AppRoot(vm: AppViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var crashNotice by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(io.github.artcraftandroid.filmcraft.CrashReports.hasReport(context)) }
-    if (crashNotice) androidx.compose.material3.AlertDialog(
-        onDismissRequest = { crashNotice = false },
-        title = { Text("Crash report available") },
-        text = { Text("The last error was saved on this device. Share it to help identify the exact failure. Nothing is sent automatically.") },
-        confirmButton = { androidx.compose.material3.TextButton(onClick = { crashNotice = false; io.github.artcraftandroid.filmcraft.CrashReports.share(context) }) { Text("Share report") } },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = { crashNotice = false }) { Text("Not now") } },
-    )
+    if (crashNotice) io.github.artcraftandroid.filmcraft.ui.FcDialog(
+        title = "Crash report available",
+        confirm = "Share report",
+        onConfirm = { crashNotice = false; io.github.artcraftandroid.filmcraft.CrashReports.share(context) },
+        onDismiss = { crashNotice = false },
+        dismiss = "Not now",
+    ) {
+        Text("The last error was saved on this device. Share it to help identify the exact failure. Nothing is sent automatically.", style = FcType.Body, color = Fc.Body)
+    }
     val snackbars = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
         for (m in vm.messages) snackbars.showSnackbar(m)

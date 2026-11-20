@@ -1464,7 +1464,7 @@ fun ChromaticPanel(vm: CanvasViewModel, modifier: Modifier = Modifier) {
     }
 }
 
-private fun QuickShapeKind.label() = when (this) {
+internal fun QuickShapeKind.quickshapeLabel() = when (this) {
     QuickShapeKind.LINE -> "Line"
     QuickShapeKind.POLYLINE -> "Polyline"
     QuickShapeKind.ARC -> "Arc"
@@ -1478,7 +1478,7 @@ private fun QuickShapeKind.label() = when (this) {
     QuickShapeKind.SQUARE -> "Square"
 }
 
-private fun QuickShapeKind.icon() = when (this) {
+internal fun QuickShapeKind.quickshapeIcon() = when (this) {
     QuickShapeKind.LINE -> PcIcons.ShapeLine
     QuickShapeKind.POLYLINE -> PcIcons.ShapePolyline
     QuickShapeKind.ARC -> PcIcons.ShapeArc
@@ -1507,12 +1507,12 @@ fun QuickShapeBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
         ) {
             Box(Modifier.size(29.dp, 28.dp), contentAlignment = Alignment.Center) {
                 // drawn in a 28 frame, shown as it is
-                Icon(info.kind.icon(), contentDescription = null, tint = ModeText, modifier = Modifier.requiredSize(28.dp))
+                Icon(info.kind.quickshapeIcon(), contentDescription = null, tint = ModeText, modifier = Modifier.requiredSize(28.dp))
             }
-            Text(if (vm.quickShapeEditing) "Editing" else info.kind.label(), color = ModeText, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(if (vm.quickShapeEditing) "Editing" else info.kind.quickshapeLabel(), color = ModeText, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             if (vm.quickShapeEditing && info.choices.size > 1) {
                 Spacer(Modifier.width(3.dp))
-                Text(info.kind.label(), color = Color(0xFF9A9A9A), fontSize = 15.sp, maxLines = 1)
+                Text(info.kind.quickshapeLabel(), color = Color(0xFF9A9A9A), fontSize = 15.sp, maxLines = 1)
             }
             if (info.choices.size > 1) {
                 Box(Modifier.size(33.dp, 32.dp), contentAlignment = Alignment.Center) {
@@ -1534,9 +1534,9 @@ fun QuickShapeBar(vm: CanvasViewModel, modifier: Modifier = Modifier) {
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(kind.icon(), contentDescription = null, tint = Color.White, modifier = Modifier.requiredSize(28.dp))
+                        Icon(kind.quickshapeIcon(), contentDescription = null, tint = Color.White, modifier = Modifier.requiredSize(28.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(kind.label(), color = Color.White, fontSize = 14.sp, maxLines = 1)
+                        Text(kind.quickshapeLabel(), color = Color.White, fontSize = 14.sp, maxLines = 1)
                     }
                 }
             }

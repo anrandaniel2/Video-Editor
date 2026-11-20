@@ -144,23 +144,6 @@ android {
     namespace = "io.github.artcraftandroid.filmcraft"
     compileSdk = 37
 
-    // The photo editor's interface is PhotoCraft's own Compose UI, kept in third_party/photocraft
-    // and compiled here rather than as its own module: it needs the Kotlin bindings this module
-    // already generates from filmcraft-android, and a separate module would either duplicate that
-    // generation or depend back on :app.
-    //
-    // It is the *same* UI as before — the studio, its panels, the classic editor — and it drives
-    // this crate's engine through the same command ids. A separate module made sense when the Rust
-    // library was separate; now that the engine is FilmCraft's own, one module is honest.
-    sourceSets.getByName("main") {
-        // `java` and `kotlin` both: with AGP's built-in Kotlin the Kotlin sources live in the
-        // `kotlin` source set, and pointing only `java` at a directory of .kt files compiles
-        // nothing (the references stay unresolved, which is exactly how this first failed).
-        java.srcDir("../../../../third_party/photocraft/android/app/src/main/java")
-        kotlin.srcDir("../../../../third_party/photocraft/android/app/src/main/java")
-        assets.srcDir("../../../../third_party/photocraft/android/app/src/main/assets")
-    }
-
     defaultConfig {
         applicationId = "io.github.artcraftandroid.filmcraft"
         minSdk = minApi

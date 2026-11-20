@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import io.github.artcraftandroid.filmcraft.ui.*
 import androidx.activity.compose.BackHandler
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -131,7 +130,7 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
             .padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(if (video) "Online videos" else "Online sounds", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    Text(if (video) "Online videos" else "Online sounds", modifier = Modifier.weight(1f), style = FcType.Header)
                     FcIconButton(LucideIcons.X.glyph(), "Close media browser", close, tint = Color.White)
                 }
                 OutlinedTextField(query, { query = it }, singleLine = true, label = { Text("Browse category") }, placeholder = { Text(if (video) "Nature, city, aerial…" else "Whoosh, impact, cinematic…") }, modifier = Modifier.fillMaxWidth())
@@ -141,14 +140,14 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
                     }
                 }
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("Retry catalog") } }
+                ed.onlineImportError?.let { Text(it, color = Fc.Negative) }
+                error?.let { Text(it, color = Fc.Negative); TextButton(onClick = { retry++ }) { Text("Retry catalog") } }
                 if (resolving) { Text("Loading published download options…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(results, key = { it.id }) { asset ->
                         Column(Modifier.fillMaxWidth().editorCard(24.dp).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (video && preview != asset.id) MixkitThumbnail(asset)
-                                Text(asset.title, color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text(asset.title, color = Color.White, style = FcType.Label)
                                 if (video && preview == asset.id && previewUrl.isNotBlank()) AndroidView(factory = { ctx ->
                                     VideoView(ctx).apply {
                                         setOnPreparedListener { it.isLooping = true; start() }
@@ -208,13 +207,13 @@ private fun MixkitPanelContent(ed: EditorController, video: Boolean, close: () -
             ImmersiveDialog()
             Column {
                 Text(asset.title)
-                Text(options.license, style = MaterialTheme.typography.bodySmall)
+                Text(options.license, style = FcType.BodySmall)
                 if (video) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(overlay, { overlay = it }, enabled = !resolving)
                         Text("Import as overlay")
                     }
-                    Text("Resolution", style = MaterialTheme.typography.labelLarge)
+                    Text("Resolution", style = FcType.Label)
                 }
                 options.choices.forEach { option ->
                     Row { RadioButton(choice == option, { choice = option }, enabled = !resolving); TextButton(onClick = { choice = option }, enabled = !resolving) { Text(option.label) } }

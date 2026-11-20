@@ -140,5 +140,5 @@ internal fun DrawingPanel(ed: EditorController, close: () -> Unit) {
     MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(
         primary = Color.White, onPrimary = Color.Black, secondary = Color.White,
         onSurface = Color.White, onSurfaceVariant = Color.White.copy(alpha = .75f),
-    )) { ProcraftDrawingPanel(ed, close) }
+    )) { ProcraftDrawingPanel(ed, close, photo = ed.standalonePhoto) }
 }

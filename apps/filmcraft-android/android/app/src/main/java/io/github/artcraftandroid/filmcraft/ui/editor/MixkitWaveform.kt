@@ -6,6 +6,7 @@ import android.util.LruCache
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import io.github.artcraftandroid.filmcraft.ui.FcType
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -109,7 +110,7 @@ internal fun MixkitWaveform(asset: MixkitAsset, progress: Float, modifier: Modif
             if (progress > 0f) drawLine(Color.White, Offset(progress * size.width, 0f), Offset(progress * size.width, size.height), 2.dp.toPx())
         } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.White, trackColor = Color.White.copy(alpha = .15f))
-            Text(if (loading) "Reading waveform…" else "Waveform unavailable", color = Color.White.copy(alpha = .65f), style = MaterialTheme.typography.labelSmall)
+            Text(if (loading) "Reading waveform…" else "Waveform unavailable", color = Color.White.copy(alpha = .65f), style = FcType.Caption)
         }
     }
 }

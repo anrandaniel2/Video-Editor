@@ -101,9 +101,20 @@ impl Shape {
         }
     }
 
+    /// How many handles [`Shape::handles`] lists, without making them.
+    fn handle_count(&self) -> usize {
+        match self.kind {
+            ShapeKind::Ellipse | ShapeKind::Circle => self.nodes.len().saturating_sub(1),
+            ShapeKind::Arc => self.nodes.len().min(3),
+            ShapeKind::Triangle | ShapeKind::EquilateralTriangle | ShapeKind::Quadrilateral
+            | ShapeKind::Rectangle | ShapeKind::Square => self.nodes.len() * 2,
+            _ => self.nodes.len(),
+        }
+    }
+
     /// Moves handle `index` (as [`Shape::handles`] lists them) to `to`, keeping the shape its kind.
     pub fn move_handle(&mut self, index: usize, to: Vec2) {
-        if !to.is_finite() {
+        if !to.is_finite() || index >= self.handle_count() {
             return;
         }
         match self.kind {
@@ -1480,6 +1491,104 @@ mod tests {
         // already on a step: unchanged
         let flat = Shape { kind: ShapeKind::Line, nodes: vec![Vec2::ZERO, Vec2::new(50.0, 0.0)] };
         assert_eq!(flat.turned_to_step(), flat);
+    }
+
+    #[test]
+    fn an_arcs_middle_bends_deep_and_shallow_staying_an_arc() {
+        let arc = recognise(&flat_bow())[0].clone();
+        let (start, end) = (arc.nodes[0], arc.nodes[2]);
+        // deep: the middle dragged far out along its normal from the ends' chord
+        let normal = Vec2::new(start.y - end.y, end.x - start.x).normalized_or(Vec2::ZERO);
+        for bend in [8.0f32, 40.0, 120.0, 300.0] {
+            let mut bent = arc.clone();
+            bent.move_handle(1, arc.nodes[1] + normal * bend * 2.0);
+            assert_eq!(bent.kind, ShapeKind::Arc, "bend {bend}");
+            assert!(bent.nodes.iter().all(|p| p.is_finite()), "bend {bend}");
+            assert!(bent.nodes[0].distance(start) < 1e-2 && bent.nodes[2].distance(end) < 1e-2, "bend {bend}");
+            let height = (bent.nodes[1] - start).dot(normal);
+            assert!(height.abs() >= 1.0, "bend {bend} keeps the ends' line uncrossed near the chord");
+            let near = bent.outline().iter().map(|p| p.distance(bent.nodes[1])).fold(f32::MAX, f32::min);
+            assert!(near < 1.0, "bend {bend}: the outline passes {near} from its middle");
+        }
+        // shallow: the middle dragged towards the chord, but not onto it
+        let shallow = arc.nodes[1].lerp(start.lerp(end, 0.5), 0.7);
+        let mut bent = arc.clone();
+        bent.move_handle(1, shallow);
+        assert_eq!(bent.kind, ShapeKind::Arc);
+        assert!(bent.nodes.iter().all(|p| p.is_finite()));
+        assert!(bent.nodes[0].distance(start) < 1e-2 && bent.nodes[2].distance(end) < 1e-2);
+    }
+
+    #[test]
+    fn an_arcs_middle_dragged_across_the_chord_stays_an_arc() {
+        let arc = recognise(&flat_bow())[0].clone();
+        let (start, end) = (arc.nodes[0], arc.nodes[2]);
+        let normal = Vec2::new(start.y - end.y, end.x - start.x).normalized_or(Vec2::ZERO);
+        let middle_height = (arc.nodes[1] - start).dot(normal);
+        // the middle pulled through the ends' chord to the far side: the arc flips, it does not vanish
+        let span = 2.0 * middle_height + 30.0 * middle_height.signum();
+        let mut flipped = arc.clone();
+        flipped.move_handle(1, arc.nodes[1] - normal * span);
+        assert_eq!(flipped.kind, ShapeKind::Arc);
+        assert!(flipped.nodes.iter().all(|p| p.is_finite()));
+        assert!(flipped.nodes[0].distance(start) < 1e-2 && flipped.nodes[2].distance(end) < 1e-2);
+        assert!((flipped.nodes[1] - start).dot(normal).signum() != middle_height.signum(), "the middle crossed");
+        // a target a hair off the chord is refused rather than blowing up
+        let mut untouched = arc.clone();
+        untouched.move_handle(1, start.lerp(end, 0.5) + normal * 0.5);
+        assert_eq!(untouched, arc);
+    }
+
+    #[test]
+    fn an_arcs_bend_is_reversible_in_one_step() {
+        let arc = recognise(&flat_bow())[0].clone();
+        let middle = arc.nodes[1];
+        let normal = Vec2::new(arc.nodes[0].y - arc.nodes[2].y, arc.nodes[2].x - arc.nodes[0].x).normalized_or(Vec2::ZERO);
+        let mut bent = arc.clone();
+        bent.move_handle(1, middle + normal * 60.0);
+        assert_eq!(bent.kind, ShapeKind::Arc);
+        // drag back to where it began: an affine height squash undoes itself
+        bent.move_handle(1, bent.nodes[1] - normal * 60.0);
+        for (a, b) in arc.nodes.iter().zip(&bent.nodes) {
+            assert!(a.distance(*b) < 1e-2, "{a:?} vs {b:?}");
+        }
+        assert_eq!(bent.outline().len(), arc.outline().len());
+    }
+
+    #[test]
+    fn an_arcs_middle_on_the_chord_cannot_bend_or_escape() {
+        // a degenerate arc as painted: its middle on the line between its ends
+        let centre = Vec2::new(100.0, -10_000.0);
+        let a = Vec2::new(10_050.0, 0.0);
+        let b = Vec2::new(0.0, 100.0);
+        let arc = Shape {
+            kind: ShapeKind::Arc,
+            nodes: vec![Vec2::new(49.75, 0.0), Vec2::new(100.0, 0.0005), Vec2::new(150.25, 0.0), centre, centre + a, centre + b],
+        };
+        // its middle dragged: the height is next to nothing, so nothing moves and nothing divides
+        let mut moved = arc.clone();
+        moved.move_handle(1, Vec2::new(100.0, 60.0));
+        assert_eq!(moved, arc);
+        assert!(moved.nodes.iter().all(|p| p.is_finite()));
+        // its ends dragged: still finite, still an arc
+        let mut stretched = arc.clone();
+        stretched.move_handle(0, Vec2::new(-100.0, 0.0));
+        assert_eq!(stretched.kind, ShapeKind::Arc);
+        assert!(stretched.nodes.iter().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn an_arc_handle_index_past_its_nodes_is_ignored() {
+        let arc = recognise(&flat_bow())[0].clone();
+        let before = arc.clone();
+        let mut moved = arc.clone();
+        moved.move_handle(99, Vec2::new(1.0, 2.0));
+        assert_eq!(moved, before);
+        // and one drag of one handle is one shape, not a rebuilt chain
+        let mut bent = arc.clone();
+        bent.move_handle(1, bent.nodes[1] + Vec2::new(0.0, 30.0));
+        assert_eq!(bent.kind, ShapeKind::Arc);
+        assert_ne!(bent.nodes, arc.nodes);
     }
 
     #[test]

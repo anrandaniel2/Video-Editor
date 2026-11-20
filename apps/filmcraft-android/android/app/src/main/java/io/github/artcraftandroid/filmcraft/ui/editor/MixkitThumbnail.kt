@@ -8,6 +8,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import io.github.artcraftandroid.filmcraft.ui.FcType
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,6 +81,6 @@ internal fun MixkitThumbnail(asset: MixkitAsset) {
         val image = bitmap
         if (image != null) Image(image.asImageBitmap(), asset.title, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else if (loading) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-        else Text("Preview image unavailable", style = MaterialTheme.typography.bodySmall)
+        else Text("Preview image unavailable", style = FcType.BodySmall)
     }
 }

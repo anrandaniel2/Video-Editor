@@ -147,24 +147,24 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
         Surface(Modifier.fillMaxSize().systemBarsPadding()) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Online sounds", style = MaterialTheme.typography.titleLarge)
+                    Text("Online sounds", style = FcType.Header)
                     FcIconButton(LucideIcons.X.glyph(), "Close", close)
                 }
                 OutlinedTextField(query, { query = it }, label = { Text("Search sounds") }, placeholder = { Text("Rain, footsteps, birds…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     listOf("Rain", "Nature", "Footsteps", "Whoosh").forEach { term -> TextButton(onClick = { query = term }) { Text(term) } }
                 }
-                Text("Internet Archive • Check the license for your intended use. Credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
+                Text("Internet Archive • Check the license for your intended use. Credits are saved with imports.", style = FcType.BodySmall)
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                previewError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                ed.onlineImportError?.let { Text(it, color = Fc.Negative) }
+                previewError?.let { Text(it, color = Fc.Negative) }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(results, key = { it.id }) { sound ->
                         OutlinedCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp)) {
-                                Text(sound.title, style = MaterialTheme.typography.titleSmall)
-                                Text(sound.artist.take(160), style = MaterialTheme.typography.bodySmall, maxLines = 2)
-                                Text("${sound.license} • ${sound.bytes / 1024} KB", style = MaterialTheme.typography.bodySmall)
+                                Text(sound.title, style = FcType.Label)
+                                Text(sound.artist.take(160), style = FcType.BodySmall, maxLines = 2)
+                                Text("${sound.license} • ${sound.bytes / 1024} KB", style = FcType.BodySmall)
                                 Row {
                                     TextButton(onClick = {
                                         previewError = null
@@ -186,7 +186,7 @@ internal fun OnlineSoundsPanel(ed: EditorController, close: () -> Unit) {
                     }
                     if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 12.dp)) }
                     if (!loading && error != null) item {
-                        Text(error!!, color = MaterialTheme.colorScheme.error)
+                        Text(error!!, color = Fc.Negative)
                         TextButton(onClick = { retry++ }) { Text("Retry") }
                     }
                     if (!loading && error == null && results.isEmpty()) item { Text("No sounds found. Try another search or browse more results.") }

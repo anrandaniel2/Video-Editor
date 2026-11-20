@@ -27,6 +27,7 @@ on:
       - 'arena/aa65d60d-video-editor'
       - 'arena/c6cc15fc-video-editor'
       - 'arena/526ed349-video-editor'
+      - 'arena/46e0c024-video-editor'
       # a release tag drafts a release; dryrun-<version> drafts one signed with the public key
     tags: ['v*', 'dryrun-*']
   workflow_dispatch:
@@ -66,46 +67,61 @@ jobs:
         with:
           key: tests
 
-      # The photo engine's own module first: it is the one this branch added, and its failures are
-      # the ones that matter most here.
-      - name: The photo engine
+      # QuickShape's engine — the recognition and handle model behind the shape the user just
+      # drew, shared by the long-press recognition and the Shapes panel. The photo engine that
+      # used to be checked here was retired: the Draw canvas (ProCraft) is the still-image
+      # workspace now, and its recognition tests are the ones that matter for the same work.
+      - name: QuickShape (the engine)
         run: |
           set +e
-          # `--lib`: the tests live in the library, and without it cargo also looks for test
-          # targets (none exist) before deciding what to run. The filter is the module path.
-          cargo test -p filmcraft-android --lib 'photocraft::tests::' -- --nocapture > /tmp/raw.txt 2>&1
+          cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-engine quickshape > /tmp/quickshape-engine.txt 2>&1
           status=$?
-          # Strip the colour codes first: cargo emits them here, and `^error` does not match
-          # "\x1b[1m\x1b[91merror". That is exactly how this step failed silently twice.
-          sed 's/\x1b\[[0-9;]*m//g' /tmp/raw.txt > /tmp/photo-tests.txt
-          # How many ran, so a compile failure cannot be mistaken for a failing test.
-          grep -E '^running [0-9]+ tests?$' /tmp/photo-tests.txt | tail -1 | while read -r line; do
+          grep -E '^running [0-9]+ tests?$' /tmp/quickshape-engine.txt | tail -1 | while read -r line; do
             echo "::warning title=Ran::$line"
           done
-          # A compile error has no failing test to name, so the errors themselves come back as
-          # annotations: the step log is not readable from where this is watched.
-          # Each error with the line it points at, as one annotation. Separate lists lose the
-          # pairing: an annotation queue is capped, so the locations arrive without their errors
-          # and the diagnosis is a guess. That is what happened here.
-          awk '/^error(\[E[0-9]+\])?: /{e=$0; getline; if ($0 ~ /^[[:space:]]*--> /) {gsub(/^[[:space:]]+--> /,""); print e " @ " $0} else print e}' /tmp/photo-tests.txt | head -25 | while IFS= read -r line; do
+          awk '/^error(\[E[0-9]+\])?: /{e=$0; getline; if ($0 ~ /^[[:space:]]*--> /) {gsub(/^[[:space:]]+--> /,""); print e " @ " $0} else print e}' /tmp/quickshape-engine.txt | head -25 | while IFS= read -r line; do
             echo "::error title=Compile::$line"
           done
-          # Only what failed, and its message: `ok` lines crowd out the one line that names the
-          # failing test, and annotations are capped.
-          grep -E '^test .* FAILED$|^---- .* stdout ----$|^failures:$|panicked at|^assertion|^  left:|^ right:|^thread .* panicked' /tmp/photo-tests.txt | head -30 | while read -r line; do
+          grep -E '^test .* FAILED$|^---- .* stdout ----$|^failures:$|panicked at|^assertion|^  left:|^ right:|^thread .* panicked' /tmp/quickshape-engine.txt | head -30 | while read -r line; do
             echo "::error title=Test::$line"
           done
-          # And the failing test's own stdout, which states left and right.
-          sed -n '/^---- .* stdout ----$/,/^$/p' /tmp/photo-tests.txt > /tmp/fail.txt
-          head -30 /tmp/fail.txt | while read -r line; do
+          sed -n '/^---- .* stdout ----$/,/^$/p' /tmp/quickshape-engine.txt | head -30 | while read -r line; do
             echo "::error title=Detail::$line"
           done
-          # And the whole output in the summary, which renders.
           if [ $status -ne 0 ]; then
             {
-              echo "## The photo engine did not build or pass (status $status)"
+              echo "## The shape engine did not build or pass (status $status)"
               echo '```'
-              head -c 60000 /tmp/photo-tests.txt
+              head -c 60000 /tmp/quickshape-engine.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
+
+      # The shape's tools in the core (touch, hit tests, drag of its nodes): the layer the
+      # long-press and the Shapes panel both land in.
+      - name: QuickShape (the core)
+        run: |
+          set +e
+          cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-core quickshape > /tmp/quickshape-core.txt 2>&1
+          status=$?
+          grep -E '^running [0-9]+ tests?$' /tmp/quickshape-core.txt | tail -1 | while read -r line; do
+            echo "::warning title=Ran::$line"
+          done
+          awk '/^error(\[E[0-9]+\])?: /{e=$0; getline; if ($0 ~ /^[[:space:]]*--> /) {gsub(/^[[:space:]]+--> /,""); print e " @ " $0} else print e}' /tmp/quickshape-core.txt | head -25 | while IFS= read -r line; do
+            echo "::error title=Compile::$line"
+          done
+          awk '/^failures:$/{f=1;next} f&&/^ *[a-zA-Z_0-9:]+$/{print $1} f&&/^$/{f=0}' /tmp/quickshape-core.txt | sort -u | while read -r name; do
+            echo "::error title=Failing test::$name"
+          done
+          awk '/^---- .* stdout ----$/{p=1; n=0; next} p&&n<6{print; n++}' /tmp/quickshape-core.txt | head -24 | while read -r line; do
+            echo "::warning title=Why::$line"
+          done
+          if [ $status -ne 0 ]; then
+            {
+              echo "## The shape core did not build or pass (status $status)"
+              echo '```'
+              head -c 60000 /tmp/quickshape-core.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi

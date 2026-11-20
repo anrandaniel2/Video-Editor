@@ -360,7 +360,7 @@ fun FcDialog(
                 .editorGlass(FcSize.PanelCorner)
                 .padding(24.dp),
         ) {
-            Text(title, style = FcType.DialogTitle, color = Color.White)
+            Text(title, style = FcType.DialogTitle, color = Fc.Title)
             Spacer(Modifier.height(16.dp))
             content()
             Spacer(Modifier.height(24.dp))

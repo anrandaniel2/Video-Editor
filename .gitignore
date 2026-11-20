@@ -10,14 +10,3 @@ local.properties
 /third_party/procraft/target/
 /third_party/procraft/android/app/build/
 
-# Vendored PhotoCraft build outputs
-/third_party/photocraft/target/
-/third_party/photocraft/android/*/build/
-/third_party/photocraft/android/build/
-/third_party/photocraft/android/.gradle/
-
-# The brush sheet harness writes these; they are for looking at, not keeping.
-brush_sheet.png
-brush_small.png
-strip_*.png
-half_*.png

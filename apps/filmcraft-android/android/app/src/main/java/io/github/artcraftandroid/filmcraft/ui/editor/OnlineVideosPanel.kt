@@ -47,23 +47,23 @@ internal fun OnlineVideosPanel(ed: EditorController, close: () -> Unit) {
         Surface(Modifier.fillMaxSize()) {
             Column(Modifier.padding(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Online videos", style = MaterialTheme.typography.titleLarge)
+                    Text("Online videos", style = FcType.Header)
                     FcIconButton(LucideIcons.X.glyph(), "Close", close)
                 }
                 OutlinedTextField(query, { query = it; offset = 0 }, label = { Text("Search videos") }, placeholder = { Text("Nature, ocean, city…") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row { listOf("Nature", "Ocean", "City", "Space").forEach { term -> TextButton(onClick = { query = term; offset = 0 }) { Text(term) } } }
                 Row { Checkbox(overlay, { overlay = it }); Text("Import as overlay", modifier = Modifier.padding(top = 12.dp)) }
-                Text("Internet Archive · up to 250 MB per video. Check the source license; credits are saved with imports.", style = MaterialTheme.typography.bodySmall)
+                Text("Internet Archive · up to 250 MB per video. Check the source license; credits are saved with imports.", style = FcType.BodySmall)
                 ed.busy?.let { Text(it); LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                ed.onlineImportError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                previewError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                ed.onlineImportError?.let { Text(it, color = Fc.Negative) }
+                previewError?.let { Text(it, color = Fc.Negative) }
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(results, key = { it.id }) { video ->
                         OutlinedCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp)) {
-                                Text(video.title, style = MaterialTheme.typography.titleSmall)
-                                Text(video.artist.take(160), maxLines = 2, style = MaterialTheme.typography.bodySmall)
-                                Text("${video.license} · ${video.bytes / (1024 * 1024)} MB", style = MaterialTheme.typography.bodySmall)
+                                Text(video.title, style = FcType.Label)
+                                Text(video.artist.take(160), maxLines = 2, style = FcType.BodySmall)
+                                Text("${video.license} · ${video.bytes / (1024 * 1024)} MB", style = FcType.BodySmall)
                                 if (preview == video.id) AndroidView(factory = { context -> VideoView(context).apply {
                                     setOnPreparedListener { it.isLooping = true; start() }
                                     setOnErrorListener { _, what, extra -> previewError = "Video preview failed (player $what/$extra). The server or this file’s encoding may be responsible; this does not mean your device cannot stream."; preview = null; true }
@@ -78,7 +78,7 @@ internal fun OnlineVideosPanel(ed: EditorController, close: () -> Unit) {
                         }
                     }
                     if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                    if (error != null && !loading) item { Text(error!!, color = MaterialTheme.colorScheme.error); TextButton(onClick = { retry++ }) { Text("Retry") } }
+                    if (error != null && !loading) item { Text(error!!, color = Fc.Negative); TextButton(onClick = { retry++ }) { Text("Retry") } }
                     if (!loading && error == null && results.isEmpty()) item { Text("No supported videos found. Try another search or load more results.") }
                     if (!loading && error == null && next != null) item { TextButton(onClick = { next?.let { offset = it } }) { Text("Load more videos") } }
                 }
