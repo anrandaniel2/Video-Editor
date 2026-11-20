@@ -57,6 +57,9 @@ pub struct Renderer {
     height: u32,
     rate: FrameRate,
     sample_rate: u32,
+    /// The editor's orbit camera for the 3D scene grid view; `None` renders the sequence's
+    /// own camera. Editor-only: previews render through it while set; exports never do.
+    preview_camera: std::sync::Mutex<Option<filmcraft_project::SceneCamera3D>>,
 }
 
 impl Renderer {
