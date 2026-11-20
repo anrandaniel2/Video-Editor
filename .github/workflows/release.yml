@@ -63,6 +63,15 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install
 
+      # The core's tests include the Inter faces straight out of the procraft tree's
+      # android/app/src/main/assets/fonts (the gradle build copies them from the repository's
+      # assets/fonts into res/font at build time). cargo test has no gradle, so place the same
+      # files where the tests include them, or the test build fails on the missing include.
+      - name: Inter faces where the core's tests include them
+        run: |
+          mkdir -p third_party/procraft/android/app/src/main/assets/fonts
+          cp assets/fonts/Inter-*.ttf third_party/procraft/android/app/src/main/assets/fonts/
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: tests
