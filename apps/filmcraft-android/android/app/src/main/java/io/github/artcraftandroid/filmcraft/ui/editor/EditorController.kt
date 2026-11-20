@@ -1096,6 +1096,8 @@ class EditorController(
     var sceneCamera by mutableStateOf<SceneCamera?>(null)
         private set
     /** The editor's orbit grid view; editor-only, bypassed on export. */
+    // The setter keeps its own JVM name so it does not clash with [setSceneOrbit] below.
+    @set:JvmName("setSceneOrbitBacking")
     var sceneOrbit by mutableStateOf(SceneOrbit.DEFAULT)
         private set
 
