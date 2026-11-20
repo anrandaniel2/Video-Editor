@@ -305,6 +305,28 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/dist"
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/filmcraft-android-$VERSION.apk"
 
+      # The JVM unit tests (:app has them under src/test). They ride along after the build, on its
+      # own classpath, so a failure here means a test broke or never passed — the build cache keeps
+      # the compile warm, this is only the test JVM. On failure, the failing test classes come back
+      # as annotations; the full XML reports are under app/build/test-results.
+      - name: Unit tests (Kotlin)
+        working-directory: apps/filmcraft-android/android
+        run: |
+          set +e
+          ./gradlew :app:testReleaseUnitTest > /tmp/unit-tests.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            tail -80 /tmp/unit-tests.log
+            for f in app/build/test-results/testReleaseUnitTest/*.xml; do
+              [ -f "$f" ] || continue
+              if grep -qE "<(failure|error)" "$f"; then
+                echo "::error title=Failing test class::$(basename "$f" .xml)"
+              fi
+            done
+            exit $rc
+          fi
+          grep -E "tests|completed" /tmp/unit-tests.log | tail -3 || true
+
       # v0.0.1-beta was signed with an older key (CN=LightCraft for Android). Every APK since carries
       # the lineage that hands it over to the shared artcraft-android key (APK Signature Scheme v3),
       # so installed copies update. v3 alone: the app needs Android 10 and v3 works from Android 9,
