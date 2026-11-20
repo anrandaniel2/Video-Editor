@@ -18,6 +18,14 @@ import kotlinx.coroutines.launch
 class FilmcraftApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        // The one native library holds both UniFFI components (the merge drew them into
+        // libfilmcraft_android.so; ProCraft's half has no library of its own any more). The
+        // generated Kotlin for the procraft_core component registers against the cdylib name it
+        // was built with — "procraft_core" — which no longer exists in the APK, so the first
+        // call into it died in Native.register (UnsatisfiedLinkError) the moment the New
+        // drawing dialog composed the preset screen. UniFFI's escape hatch redirects the
+        // lookup to the library that actually ships; must happen before any binding loads.
+        System.setProperty("uniffi.component.procraft_core.libraryOverride", "filmcraft_android")
         CrashReports.install(this)
     }
 
