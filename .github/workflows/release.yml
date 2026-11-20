@@ -74,8 +74,11 @@ jobs:
       - name: QuickShape (the engine)
         run: |
           set +e
-          cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-engine quickshape > /tmp/quickshape-engine.txt 2>&1
+          cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-engine quickshape > /tmp/quickshape-engine-raw.txt 2>&1
           status=$?
+          # cargo emits colour codes when writing to a file under CARGO_TERM_COLOR=always: strip
+          # them before every grep, or nothing below matches and the failure comes back silent.
+          sed 's/\x1b\[[0-9;]*m//g' /tmp/quickshape-engine-raw.txt > /tmp/quickshape-engine.txt
           grep -E '^running [0-9]+ tests?$' /tmp/quickshape-engine.txt | tail -1 | while read -r line; do
             echo "::warning title=Ran::$line"
           done
@@ -103,8 +106,11 @@ jobs:
       - name: QuickShape (the core)
         run: |
           set +e
-          cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-core quickshape > /tmp/quickshape-core.txt 2>&1
+          cargo test --manifest-path third_party/procraft/Cargo.toml -p procraft-core quickshape > /tmp/quickshape-core-raw.txt 2>&1
           status=$?
+          # cargo emits colour codes when writing to a file under CARGO_TERM_COLOR=always: strip
+          # them before every grep, or nothing below matches and the failure comes back silent.
+          sed 's/\x1b\[[0-9;]*m//g' /tmp/quickshape-core-raw.txt > /tmp/quickshape-core.txt
           grep -E '^running [0-9]+ tests?$' /tmp/quickshape-core.txt | tail -1 | while read -r line; do
             echo "::warning title=Ran::$line"
           done

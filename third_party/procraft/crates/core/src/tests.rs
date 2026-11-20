@@ -11513,7 +11513,7 @@ fn quickshape_an_arc_snaps_and_bends_by_its_middle_in_both_entry_paths() {
     let (start_x, start_y) = (info.handles[0], info.handles[1]);
     let (mid_x, mid_y) = (info.handles[2], info.handles[3]);
     let (end_x, end_y) = (info.handles[4], info.handles[5]);
-    let bend = -20.0f32;
+    let bend = -25.0f32;
     s.quickshape_step();
     let bent = s.quickshape_move_handle(1, mid_x, mid_y + bend).expect("the arc is still editable");
     assert_eq!(bent.kind, QuickShapeKind::Arc, "{bent:?}");
