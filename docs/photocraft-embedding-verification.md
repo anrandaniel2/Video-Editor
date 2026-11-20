@@ -2,7 +2,8 @@
 
 This is the record for the work branch `arena/46e0c024-video-editor`: what was done, what was
 verified, how, and exactly how to reproduce it. It is a companion to the commits, not a
-substitute for them.
+substitute for them. It now covers both bundles on the branch: the embedded-canvas work
+below, and the 3D scene bundle appended at the end.
 
 ## What the work was
 
@@ -125,3 +126,63 @@ Local reproduction notes:
   `tests::quickshape*` integration test; GPU-gated core tests may early-return on GPU-less
   runners. The visible `running 0 tests` lines in the step logs are the doc-test and
   `brush_parity` binaries matching the filter — expected, not a failure.
+
+## The 3D scene bundle (appended 2026-11-20)
+
+The branch then grew a second, self-contained bundle: the 3D scene. It is verified by the
+same CI system, on [run 44832894036](https://github.com/anrandaniel2/Video-Editor/actions/runs/44832894036)
+(head `580c124`; three fix commits after the main bundle commit `c80eba7` — a missing
+`Renderer.preview_camera` field, a Kotlin nullable-receiver/elvis pair in `GizmoGeometry`, and a
+JVM declaration clash between the orbit property's synthetic setter and `setSceneOrbit()`).
+Both jobs green; the tag-gated GitHub Release job skipped as designed.
+
+1. **A scene camera in the sequence.** `SceneCamera3D` (serde-optional — projects saved before
+   this change decode unchanged). Absent: the classic fixed camera renders exactly as before.
+   Present: the 3D layer renders through it in both the CPU rasteriser and the WGSL pipeline
+   (a view matrix in the scene uniform; classic path untouched). The engine exposes
+   `scene.camera` / `scene.setCamera` / `scene.clearCamera` (`scene.setCamera` clamps fov to
+   1..179 degrees and takes an optional merge token for journal coalescing). Exports always
+   render the sequence's camera; the editor's orbit view never reaches an export.
+2. **The orbit grid view (the "3D Scene" panel).** Editor-only: a floor grid, the world axes
+   and a movable orbit target drawn over the preview; drag empty space to orbit, two fingers
+   to dolly. The preview renders through an orbit camera handed in by the editor
+   (`Renderer::set_scene_preview_camera` + a thread-local `with_preview_camera` the render
+   reads); captures and exports bypass it by construction — poster and export paths render
+   through the sequence's own camera, not the grid view.
+3. **The fused gizmo, fused everywhere.** Move shafts and rotate rings drawn as one
+   z-sorted mesh and hit-tested together; works for object 3D layers and scene lights. Its
+   screen tangent is taken through the orbit projection when the scene panel is open. The
+   object's world position stays *defined* by the classic-camera unprojection (matching
+   `camera_translation` in the renderer), so `GizmoGeometry.move()` projects/unprojects
+   consistently and no inverse scene projection exists or is required for that math.
+4. **A mirror that is a mirror.** The studio environment is a small softbox room in both
+   shading paths; `Reflection` (0–200%, 100 is neutral) and `Emissive` (0–100%) are ordinary
+   float parameters on the object-3D effect (`env_reflection`, `emissive`) and therefore
+   keyframe. `Material.env_intensity` carries the reflection strength in the material uniform.
+5. **Panels, flat and glass.** Tool tiles are flat Draw-style buttons (accent when selected),
+   the panel header is flatter, slider rows dropped the frosted card, chips are neutral
+   rounded rows, preset tiles carry an accent ring when selected, and the tool rail's glass is
+   a tighter, narrower pane. Only `Fc` tokens with a true `Pc` reference were re-pointed;
+   nothing was renamed.
+
+Verification matrix (this bundle):
+
+| # | Deliverable | Command / step | Result |
+|---|-------------|----------------|--------|
+| 1 | Rust compiles tree-wide including the new fields (`Renderer.preview_camera`, `SceneCamera3D`) | "The whole engine" (`cargo test -p filmcraft-android`) | pass (step exit 0) |
+| 2 | Engine command surface (`scene.camera`/`setCamera`/`clearCamera`) | code review + compile | **no dedicated test exists** — the command handlers are not covered by the Rust suite; not evidence of correctness |
+| 3 | Kotlin compiles tree-wide incl. the gizmo and the scene panel | `./gradlew assembleRelease -Pfilmcraft.abis=arm64-v8a` | pass |
+| 4 | Kotlin unit tests | `./gradlew :app:testReleaseUnitTest` | pass (step exit 0) |
+| 5 | APK assembles, signs, native entry-point presence, size budget | Sign / Size / entry points / APK steps | pass — `filmcraft-android-0.0.61-beta.apk`, 34.1 MB (79.3 MB unpacked), 53 `ffi_filmcraft_android` entry points, arm64-v8a |
+| 6 | whitespace hygiene | `git diff --check` before commit | pass |
+
+Not verified, on the record:
+
+- **On-device anything.** No phone ran this: orbit feel, gizmo dragging while orbiting,
+  reflection quality on real hardware, and the scene panel's layout. What CI proves is
+  compile, unit tests, packaging and entry points.
+- **The GPU-gated Rust tests** inherit the earlier caveat (runner GPU stack dependent; some
+  early-return when no GPU is present).
+- **The WGSL studio environment and PBR fragment** were eyeballed against the CPU path for
+  parity (same studio function constants, same scene-camera branch, `env` uniform), not
+  pixel-diffed on a device.
