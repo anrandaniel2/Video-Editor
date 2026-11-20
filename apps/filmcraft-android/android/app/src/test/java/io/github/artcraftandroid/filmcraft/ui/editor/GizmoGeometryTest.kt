@@ -13,7 +13,7 @@ class GizmoGeometryTest {
         kerning=true,ligatures=true,leading=100.0,baselineShift=0.0,fauxBold=false,fauxItalic=false,
         caps=0u,underline=false,boxWidth=500.0,vertical=false,size=220.0,depth=220.0,bevel=0.0,
         x=540.0,y=960.0,z=1000.0,rotationX=0.0,rotationY=0.0,rotationZ=0.0,scale=100.0,
-        color=0xffffffffu,sideColor=0xff808080u,metalness=0.0,roughness=50.0,
+        color=0xffffffffu,sideColor=0xff808080u,metalness=0.0,roughness=50.0,envReflection=100.0,emissive=0.0,
         lightAngle=135.0,lightElevation=45.0,opacity=100.0,followTrack=false,trackId=0uL,trackDepth=240.0,
         modelPath="",modelAnim=-1,modelTime=0.0,modelPlay=true,modelLoop=true,modelSpeed=100.0,
     )

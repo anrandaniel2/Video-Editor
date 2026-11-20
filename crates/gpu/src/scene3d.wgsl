@@ -1,7 +1,7 @@
 // Perspective-correct 3D rasterization. All material sampling and scene lighting executes here.
-struct Scene { camera: vec4<f32>, size: vec4<f32>, ambient: vec4<f32> }
+struct Scene { camera: vec4<f32>, size: vec4<f32>, ambient: vec4<f32>, view: mat4x4<f32>, view_params: vec4<f32> }
 struct Light { color: vec4<f32>, direction: vec4<f32>, position: vec4<f32>, cone: vec4<f32> }
-struct Material { base: vec4<f32>, props: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32> }
+struct Material { base: vec4<f32>, props: vec4<f32>, emissive: vec4<f32>, flags: vec4<f32>, env: vec4<f32> }
 @group(0) @binding(0) var<uniform> scene: Scene;
 @group(0) @binding(1) var<storage, read> lights: array<Light>;
 @group(0) @binding(2) var<uniform> mat: Material;
@@ -67,17 +67,42 @@ fn matrix_at(i:u32) -> mat4x4<f32> { return mat4x4<f32>(deformation[i],deformati
         normal=(matrix_at(4u)*vec4<f32>(normal,0.0)).xyz;
         tangent=(matrix_at(0u)*vec4<f32>(tangent,0.0)).xyz;
     }
+    if (scene.view_params.x > 0.5) {
+        position = (scene.view * vec4<f32>(position, 1.0)).xyz;
+        let m = mat3x3<f32>(scene.view[0].xyz, scene.view[1].xyz, scene.view[2].xyz);
+        normal = safe_normal(m * normal);
+        tangent = safe_normal(m * tangent);
+    }
     var o: Varying;
-    // Right-handed editor camera looks down +Z; near plane at z=1. Infinite far plane.
-    o.clip = vec4<f32>(
-        2.0 * (scene.camera.x * position.z + scene.camera.z * position.x) / scene.size.x - position.z,
-        position.z - 2.0 * (scene.camera.y * position.z + scene.camera.z * position.y) / scene.size.y,
-        position.z - 1.0, position.z);
+    if (scene.view_params.x > 0.5) {
+        // The scene camera: z forward from the eye, infinite far plane, y down.
+        let f = scene.view_params.y;
+        o.clip = vec4<f32>(
+            2.0 * (scene.size.x * 0.5 * position.z + f * position.x) / scene.size.x - position.z,
+            position.z - 2.0 * (scene.size.y * 0.5 * position.z + f * position.y) / scene.size.y,
+            position.z - 1.0, position.z);
+    } else {
+        // Right-handed editor camera looks down +Z; near plane at z=1. Infinite far plane.
+        o.clip = vec4<f32>(
+            2.0 * (scene.camera.x * position.z + scene.camera.z * position.x) / scene.size.x - position.z,
+            position.z - 2.0 * (scene.camera.y * position.z + scene.camera.z * position.y) / scene.size.y,
+            position.z - 1.0, position.z);
+    }
     o.position=position; o.normal=normal; o.tangent=vec4<f32>(tangent,v.tangent.w); o.color=v.color;
     o.uv0=v.uv0; o.uv1=v.uv1; o.uv2=v.uv2; o.uv3=v.uv3; o.uv4=v.uv4;
     return o;
 }
 fn safe_normal(v: vec3<f32>) -> vec3<f32> { return v / max(length(v), 0.000001); }
+fn smooth_unit(t: f32) -> f32 { let s = clamp(t, 0.0, 1.0); return s * s * (3.0 - 2.0 * s); }
+// A small studio of softboxes: what a mirror reflects. y is down in this world, so up is -y.
+fn studio(d: vec3<f32>) -> vec3<f32> {
+    let s = smooth_unit(-d.y * 0.5 + 0.5);
+    var c = mix(vec3<f32>(0.045, 0.042, 0.040), vec3<f32>(0.33, 0.38, 0.46), s);
+    c += vec3<f32>(5.0, 4.7, 4.1) * pow(max(dot(d, normalize(vec3<f32>(0.55, -0.75, 0.35))), 0.0), 160.0);
+    c += vec3<f32>(2.8, 3.2, 4.2) * pow(max(dot(d, normalize(vec3<f32>(-0.70, -0.35, 0.15))), 0.0), 90.0);
+    c += vec3<f32>(3.6, 3.2, 2.5) * pow(max(dot(d, normalize(vec3<f32>(0.05, -0.15, -1.0))), 0.0), 70.0);
+    return c;
+}
 @fragment fn fs(v: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     // Sample before divergent control flow, keeping implicit derivatives well-defined.
     let tex=textureSample(base_tex,base_s,v.uv0);
@@ -158,7 +183,13 @@ fn safe_normal(v: vec3<f32>) -> vec3<f32> { return v / max(length(v), 0.000001);
     }
     var color: vec3<f32>;
     if pbr {
-        color=direct+base*(1.0-metallic)*0.22*ao*scene.ambient.xyz+f0*(0.08+0.12*(1.0-rough))*ao*scene.ambient.xyz+emit;
+        // A mirror is mostly the room it sits in: reflect the studio.
+        let rv = n * (2.0 * dot(n, view)) - view;
+        let env_r = studio(rv);
+        let env_spec = env_r * f0 * pow(1.0 - rough, 3.0) * ao * mat.env.x;
+        let irr = smooth_unit(-n.y * 0.5 + 0.5);
+        let env_diffuse = mix(vec3<f32>(0.10, 0.095, 0.09), vec3<f32>(0.52, 0.57, 0.68), irr) * base * (1.0 - metallic) * 0.55 * ao * mix(1.0, mat.env.x, 0.6);
+        color = direct + base * (1.0 - metallic) * 0.10 * ao * scene.ambient.xyz + env_diffuse + env_spec + emit;
     } else {
         color=clamp(base*(0.28*scene.ambient.xyz+0.72*direct)+specular*mat.props.x*0.9,vec3<f32>(0.0),vec3<f32>(1.0));
     }

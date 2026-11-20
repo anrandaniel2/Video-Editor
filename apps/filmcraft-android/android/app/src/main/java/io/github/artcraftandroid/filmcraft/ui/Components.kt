@@ -107,7 +107,7 @@ fun ToolTile(
     Column(
         modifier
             .size(FcSize.ToolTile)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics { selected = active },
@@ -115,21 +115,16 @@ fun ToolTile(
         verticalArrangement = Arrangement.Center,
     ) {
         Box(
-            Modifier.size(FcSize.ToolChip).clip(RoundedCornerShape(4.dp)).background(
-                when {
-                    active -> Fc.Accent.copy(alpha = .15f)
-                    else -> Color.Transparent
-                },
-            ),
+            Modifier.size(FcSize.ToolChip),
             contentAlignment = Alignment.Center,
         ) {
-            GlyphIcon(glyph, if (!enabled) Fc.Disabled else if (active) Fc.Accent else Fc.Icon)
+            GlyphIcon(glyph, if (!enabled) Fc.Disabled else if (active) Fc.Accent else Fc.Icon, size = 26.dp)
         }
-        Spacer(Modifier.height(0.5.dp))
+        Spacer(Modifier.height(1.dp))
         Text(
             label,
-            style = FcType.ToolLabel,
-            color = if (!enabled) Fc.Disabled else if (active) Fc.Accent else Fc.Body,
+            style = FcType.ToolLabel.copy(fontWeight = if (active) androidx.compose.ui.text.font.FontWeight.SemiBold else FcType.ToolLabel.fontWeight),
+            color = if (!enabled) Fc.Disabled else if (active) Fc.Accent else Fc.Secondary,
             textAlign = TextAlign.Center,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -145,7 +140,7 @@ fun PanelAction(glyph: Glyph, description: String, onClick: () -> Unit, enabled:
             .size(width = 40.dp, height = 32.dp)
             .clip(CircleShape)
             // disabled: no pill, a dim icon
-            .then(if (enabled) Modifier.editorCard(20.dp) else Modifier)
+            .then(if (enabled) Modifier.background(io.github.artcraftandroid.procraft.ui.Pc.Row) else Modifier)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics { contentDescription = description },
@@ -203,11 +198,11 @@ fun ToolPanel(
                         title.contains("light", true) -> LucideIcons.Sun.glyph()
                         else -> LucideIcons.WandSparkles.glyph()
                     }
-                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).editorCard(18.dp), contentAlignment = Alignment.Center) { GlyphIcon(toolIcon, Fc.Icon, size = 22.dp) }
+                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(io.github.artcraftandroid.procraft.ui.Pc.Row), contentAlignment = Alignment.Center) { GlyphIcon(toolIcon, Fc.Icon, size = 22.dp) }
                     Spacer(Modifier.width(12.dp))
                     Text(
                         title,
-                        style = FcType.GalleryTitle.copy(fontSize = 23.sp),
+                        style = FcType.GalleryTitle.copy(fontSize = 21.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
                         color = Fc.Title,
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
@@ -280,13 +275,13 @@ fun FcSlider(
 fun SelectChip(label: String, selected: Boolean, onClick: () -> Unit, tag: String? = null) {
     Row(
         Modifier
-            .height(40.dp)
-            .clip(CircleShape)
-            .background(if (selected) Fc.Accent else Fc.Raised)
+            .height(38.dp)
+            .clip(RoundedCornerShape(19.dp))
+            .background(if (selected) Fc.Accent else io.github.artcraftandroid.procraft.ui.Pc.Row)
             .clickable(role = Role.RadioButton, onClick = onClick)
             .then(if (tag != null) Modifier.testTag(tag) else Modifier)
             .semantics { this.selected = selected }
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selected) {
@@ -389,7 +384,7 @@ fun PresetTile(name: String, selected: Boolean, onClick: () -> Unit, tag: String
         Box(
             Modifier
                 .size(84.dp)
-                .then(if (selected) Modifier.border(2.dp, Color.White, RoundedCornerShape(16.dp)) else Modifier)
+                .then(if (selected) Modifier.border(2.5.dp, Fc.Accent, RoundedCornerShape(16.dp)) else Modifier)
                 .padding(4.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Fc.SliderOff),
@@ -411,11 +406,10 @@ fun PresetTile(name: String, selected: Boolean, onClick: () -> Unit, tag: String
     }
 }
 
-/** A labelled slider row: name and value over the slider. */
+/** A labelled slider row: name and value over the slider. Flat, like ProCraft Draw's. */
 @Composable
 fun SliderRow(label: String, value: String, onLabelClick: (() -> Unit)? = null, selected: Boolean = false, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp)
-        .editorCard(18.dp).then(if (selected) Modifier.border(1.dp, Fc.Accent, RoundedCornerShape(18.dp)) else Modifier).padding(horizontal = 4.dp, vertical = 6.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 1.dp)) {
         androidx.compose.runtime.CompositionLocalProvider(LocalSliderRow provides SliderRowInfo(label, value, onLabelClick)) { content() }
     }
 }

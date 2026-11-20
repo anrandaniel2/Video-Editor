@@ -39,7 +39,7 @@ pub use essential::{AudioType, EssentialSound};
 pub use find::{FindOp, FindQuery, FindRow, SearchBin};
 pub use graphic_design::{CharStyle, GraphicMeta, LayerExtra, Pin, PinTarget, Roll, RollMode, SourceGraphic, StyleRun};
 pub use keyframe::{Interpolation, Keyframe, Param, ParamValue};
-pub use lighting::{Light3D, LightKind, SceneLighting};
+pub use lighting::{CLASSIC_FOV, Light3D, LightKind, SceneCamera3D, SceneLighting};
 pub use mask::{Mask, MaskMode, MaskPath, MaskVertex, TrackMethod};
 pub use mixer::{AutomationMode, InputMap, MixerStrip, TrackSend};
 pub use multicam::{Camera, MergedClip, MulticamAudio, MulticamSel, MulticamSource};
@@ -379,6 +379,7 @@ impl Project {
             merged: None,
             motion_tracks: Vec::new(),
             scene_lighting: Default::default(),
+            scene_camera: None,
             split: SplitMarks::default(),
         };
         for i in 0..v {

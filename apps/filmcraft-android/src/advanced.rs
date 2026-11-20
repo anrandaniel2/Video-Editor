@@ -125,6 +125,8 @@ pub struct Object3DSettings {
     pub side_color: u32,
     pub metalness: f64,
     pub roughness: f64,
+    pub env_reflection: f64,
+    pub emissive: f64,
     pub light_angle: f64,
     pub light_elevation: f64,
     pub opacity: f64,
@@ -173,6 +175,8 @@ impl Default for Object3DSettings {
             side_color: 0xff_73_2e_1a,
             metalness: 25.0,
             roughness: 45.0,
+            env_reflection: 100.0,
+            emissive: 0.0,
             light_angle: 135.0,
             light_elevation: 45.0,
             opacity: 100.0,
@@ -207,6 +211,54 @@ pub struct ModelInfo {
     pub skins: u32,
     pub morph_targets: u32,
     pub animations: Vec<ModelAnimationInfo>,
+}
+
+/// One scene camera, as the editor reads and writes it (degrees for the angles).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SceneCamera3d {
+    /// World position in frame pixels: frame-centred, x right, y down, z away from the viewer.
+    pub position: Vec<f64>,
+    pub yaw: f64,
+    pub pitch: f64,
+    pub roll: f64,
+    /// Vertical field of view in degrees (the classic fixed camera is 53.13°).
+    pub fov: f64,
+}
+
+impl Default for SceneCamera3d {
+    fn default() -> Self {
+        Self { position: vec![0.0, 0.0, 0.0], yaw: 0.0, pitch: 0.0, roll: 0.0, fov: filmcraft_project::CLASSIC_FOV as f64 }
+    }
+}
+
+impl From<filmcraft_project::SceneCamera3D> for SceneCamera3d {
+    fn from(c: filmcraft_project::SceneCamera3D) -> Self {
+        Self {
+            position: c.position.map(|v| v as f64).to_vec(),
+            yaw: c.yaw as f64,
+            pitch: c.pitch as f64,
+            roll: c.roll as f64,
+            fov: c.fov as f64,
+        }
+    }
+}
+
+impl From<SceneCamera3d> for filmcraft_project::SceneCamera3D {
+    fn from(c: SceneCamera3d) -> Self {
+        let position: [f32; 3] = std::array::from_fn(|i| c.position.get(i).copied().unwrap_or(0.0) as f32);
+        Self {
+            position,
+            yaw: c.yaw as f32,
+            pitch: c.pitch as f32,
+            roll: c.roll as f32,
+            fov: (c.fov as f32).clamp(1.0, 179.0),
+        }
+    }
+}
+
+/// The sequence's scene camera (absent = the classic fixed camera), for the editor to show.
+pub(crate) fn scene_camera_of(s: &Session) -> Option<SceneCamera3d> {
+    s.active_sequence().and_then(|seq| seq.scene_camera.map(Into::into))
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -430,6 +482,8 @@ fn object_settings(e: &EffectInstance, t: Tick, center: (f64, f64)) -> Object3DS
         side_color: color_at(e, "side_color", t, d.side_color),
         metalness: f_at(e, "metalness", t, d.metalness),
         roughness: f_at(e, "roughness", t, d.roughness),
+        env_reflection: f_at(e, "env_reflection", t, d.env_reflection),
+        emissive: f_at(e, "emissive", t, d.emissive),
         light_angle: f_at(e, "light_angle", t, d.light_angle),
         light_elevation: f_at(e, "light_elevation", t, d.light_elevation),
         opacity: f_at(e, "opacity", t, d.opacity),
@@ -479,6 +533,8 @@ fn write_object(e: &mut EffectInstance, st: &Object3DSettings, t: Tick) {
     set_color(e, "side_color", st.side_color, t);
     set_f(e, "metalness", st.metalness.clamp(0.0, 100.0), t);
     set_f(e, "roughness", st.roughness.clamp(0.0, 100.0), t);
+    set_f(e, "env_reflection", st.env_reflection.clamp(0.0, 200.0), t);
+    set_f(e, "emissive", st.emissive.clamp(0.0, 100.0), t);
     set_f(e, "light_angle", finite(st.light_angle, 135.0), t);
     set_f(e, "light_elevation", st.light_elevation.clamp(-90.0, 90.0), t);
     set_f(e, "opacity", st.opacity.clamp(0.0, 100.0), t);
@@ -494,7 +550,7 @@ fn write_object(e: &mut EffectInstance, st: &Object3DSettings, t: Tick) {
 }
 
 const ANIMATED_PARAMS: &[&str] = &[
-    "position", "z", "rotation_x", "rotation_y", "rotation_z", "scale", "depth", "bevel", "color", "side_color", "metalness", "roughness", "light_angle", "light_elevation", "opacity", "track_depth", "model_time", "model_speed",
+    "position", "z", "rotation_x", "rotation_y", "rotation_z", "scale", "depth", "bevel", "color", "side_color", "metalness", "roughness", "env_reflection", "emissive", "light_angle", "light_elevation", "opacity", "track_depth", "model_time", "model_speed",
 ];
 
 fn object_animated(e: &EffectInstance) -> bool {

@@ -88,7 +88,7 @@ private fun ExportContent(vm: AppViewModel) {
     val t = ed.timeline
     val aspect = if (t != null && t.height.toInt() > 0) t.width.toFloat() / t.height.toFloat() else 9f / 16f
     val poster by produceState<ImageBitmap?>(null, t?.revision) {
-        value = withContext(ed.engine.thumbnails) { runCatching { ed.engine.session.renderer().frame(0, 720u, false, null).toBitmap()?.asImageBitmap() }.getOrNull() }
+        value = withContext(ed.engine.thumbnails) { runCatching { ed.engine.session.renderer().still(0, 720u, null).toBitmap()?.asImageBitmap() }.getOrNull() }
     }
     Box(Modifier.fillMaxSize().background(Fc.Layer1).testTag("screen_export")) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {

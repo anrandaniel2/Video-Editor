@@ -13,7 +13,7 @@ use filmcraft_project::{ItemId, Project};
 use filmcraft_render::{RenderOptions, SourceProvider};
 use filmcraft_time::{FrameRate, Tick};
 
-use crate::{Frame, MobileError};
+use crate::{Frame, MobileError, advanced::SceneCamera3d};
 
 /// The largest side a picture may be asked for: a 4K frame's long side.
 const MAX_SIDE: u32 = 4096;
@@ -74,6 +74,7 @@ impl Renderer {
             height: q.settings.height,
             rate: s.sequence_rate(),
             sample_rate: q.settings.sample_rate.max(8000),
+            preview_camera: std::sync::Mutex::new(None),
         })
     }
 
@@ -139,6 +140,14 @@ impl Renderer {
         self.revision
     }
 
+    /// The orbit camera the 3D scene's grid view renders from; `None` renders the sequence's
+    /// own camera. Editor-only: exports never see this.
+    pub fn set_scene_preview_camera(&self, camera: Option<SceneCamera3d>) {
+        if let Ok(mut slot) = self.preview_camera.lock() {
+            *slot = camera.map(Into::into);
+        }
+    }
+
     /// Sample rate of [`Renderer::mix`].
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -147,12 +156,25 @@ impl Renderer {
     /// The program at `time` (ticks, snapped to a frame) with its long side at most `max_side`.
     /// `draft` decodes faster at a little less quality (for playback and scrubbing).
     pub fn frame(&self, time: i64, max_side: u32, draft: bool, cancel: Option<Arc<CancelToken>>) -> Result<Frame, MobileError> {
+        self.frame_still(time, max_side, draft, cancel, false)
+    }
+
+    /// A still at `time` that never sees the editor's orbit camera: what Home posters and the
+    /// export screen show, i.e. the sequence's own 3D camera.
+    pub fn still(&self, time: i64, max_side: u32, cancel: Option<Arc<CancelToken>>) -> Result<Frame, MobileError> {
+        self.frame_still(time, max_side, false, cancel, true)
+    }
+
+    fn frame_still(&self, time: i64, max_side: u32, draft: bool, cancel: Option<Arc<CancelToken>>, for_capture: bool) -> Result<Frame, MobileError> {
         let t = self.rate.snap(Tick(time.max(0)));
         let scale = scale_for(self.width.max(self.height), max_side);
         let provider = self.provider();
+        let preview_camera = if for_capture { None } else { self.preview_camera.lock().ok().and_then(|c| *c) };
         let img = guarded(&cancel, || {
             filmcraft_media::cancel::with_draft(draft, || {
-                filmcraft_render::render_sequence(&self.project, self.seq, t, RenderOptions { scale, captions: true, ..Default::default() }, &provider)
+                filmcraft_render::with_preview_camera(preview_camera, || {
+                    filmcraft_render::render_sequence(&self.project, self.seq, t, RenderOptions { scale, captions: true, ..Default::default() }, &provider)
+                })
             })
         });
         if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {

@@ -235,7 +235,7 @@ private fun WorkspaceBar(ed: EditorController) {
         NativeAction(LucideIcons.X.glyph(), "Save and return to Projects", false) { ed.closeEditor() }
         NativeAction(LucideIcons.ChartSpline.glyph(), "Keyframes", ed.panel == Panel.Keyframes) { if (ed.selectedClip != null) ed.panel = Panel.Keyframes }
         NativeAction(LucideIcons.WandSparkles.glyph(), "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) ed.panel = Panel.Effects }
-        NativeAction(Glyphs.Object3D, "3D", ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D }
+        NativeAction(Glyphs.Object3D, "3D Scene", ed.panel == Panel.Scene) { ed.panel = Panel.Scene }
         Spacer(Modifier.weight(1f))
         NativeAction(LucideIcons.Paintbrush.glyph(), "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
         NativeAction(LucideIcons.Share2.glyph(), "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
@@ -287,6 +287,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
         if (object3d && sel != null) ed.loadObject3D(sel.id)
         if (masking && sel != null) ed.loadMasks(sel.id)
     }
+    LaunchedEffect(ed.panel) { ed.applyScenePreviewCamera() }
     BoxWithConstraints(modifier.editorBackdropSource().background(Fc.Black).testTag("editor_player_area"), contentAlignment = Alignment.Center) {
         val aspect = if (t != null && t.height.toInt() > 0) t.width.toFloat() / t.height.toFloat() else 9f / 16f
         // an empty project shows the whole monitor; otherwise the frame, fitted
@@ -300,7 +301,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                 .size(boxW, boxH)
                 .border(1.dp, Fc.Raised)
                 .pointerInput(sel?.id, movable, object3d, ed.panel, t?.width, t?.height) {
-                    if (masking || advanced || ed.panel == Panel.Lights || ed.panel is Panel.TextInput) return@pointerInput
+                    if (masking || advanced || ed.panel == Panel.Lights || ed.panel == Panel.Scene || ed.panel is Panel.TextInput) return@pointerInput
                     val frameW = t?.width?.toFloat() ?: return@pointerInput
                     val k = size.width / frameW
                     awaitEachGesture {
@@ -396,6 +397,9 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                     }
                     drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
                 }
+            }
+            if (ed.panel == Panel.Scene && t != null) {
+                SceneGridOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
             }
             if (object3d && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
                 ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())

@@ -70,6 +70,8 @@ sealed interface Panel {
     data object Opacity : Panel
     data object Mask : Panel
     data object Object3D : Panel
+    /** The 3D scene: camera, orbit grid view, objects and lights. */
+    data object Scene : Panel
     /** The scene's coloured light objects. */
     data object Lights : Panel
     data object Keyframes : Panel
@@ -312,6 +314,7 @@ class EditorController(
 
     private suspend fun newRenderer() {
         val r = runCatching { engine.command { renderer() } }.getOrNull() ?: return
+        pushOrbitCamera(r)
         renderer = r
         media.renderer = r
     }
@@ -362,7 +365,7 @@ class EditorController(
     /** The first frame, small, for the project's card on Home. */
     private suspend fun savePoster() {
         val r = renderer ?: return
-        val bmp = withContext(engine.thumbnails) { runCatching { r.frame(0, 360u, false, null).intoBitmap(null) }.getOrNull() } ?: return
+        val bmp = withContext(engine.thumbnails) { runCatching { r.still(0, 360u, null).intoBitmap(null) }.getOrNull() } ?: return
         withContext(Dispatchers.IO) { projects.savePoster(project, bmp) }
     }
 
@@ -917,6 +920,7 @@ class EditorController(
                         catch (e: Exception) { errors += e.userMessage; null }
                         errors.firstOrNull()?.let { host.tell(it) }
                         if (snapshot != null) {
+                            pushOrbitCamera(snapshot)
                             renderer = snapshot
                             media.renderer = snapshot
                             requestFrame(playhead, draft = true, interactive = true)
@@ -1085,6 +1089,61 @@ class EditorController(
 
     var object3DState by mutableStateOf<Object3DState?>(null)
         private set
+
+    // ---- 3D scene (grid view) ----
+
+    /** The sequence's scene camera; null = the classic fixed camera. */
+    var sceneCamera by mutableStateOf<SceneCamera?>(null)
+        private set
+    /** The editor's orbit grid view; editor-only, bypassed on export. */
+    var sceneOrbit by mutableStateOf(SceneOrbit.DEFAULT)
+        private set
+
+    /** Re-read the scene camera from the engine. */
+    suspend fun loadSceneCamera() {
+        sceneCamera = runCatching {
+            SceneCamera.from(engine.command { execute("scene.camera", "{}") })
+        }.getOrNull()
+    }
+
+    /** Add the scene camera; the defaults reproduce the classic look exactly. */
+    fun addSceneCamera() = setSceneCamera(SceneCamera())
+
+    /** Put `cam` in the scene (journaled). During a drag, merge keeps it one edit. */
+    fun setSceneCamera(cam: SceneCamera, merge: String? = null) {
+        stop()
+        sceneCamera = cam
+        val body = cam.toJson(merge)
+        queueLiveEdit("scene-camera") { execute("scene.setCamera", body); Unit }
+    }
+
+    fun clearSceneCamera() {
+        stop()
+        sceneCamera = null
+        scope.launch {
+            try { engine.command { execute("scene.clearCamera", "{}") } }
+            catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    /** Editor-only: point the preview's snapshot at the orbit camera (or clear it). */
+    private fun pushOrbitCamera(r: Renderer) {
+        val cam = if (panel == Panel.Scene) sceneOrbit.toCamera(sceneCamera?.fov ?: CLASSIC_FOV).toNative() else null
+        runCatching { r.setScenePreviewCamera(cam) }
+    }
+
+    /** Apply the orbit/clear to the live snapshot and re-render. Editor previews only. */
+    fun applyScenePreviewCamera(interactive: Boolean = false) {
+        val r = renderer ?: return
+        pushOrbitCamera(r)
+        requestFrame(playhead, draft = interactive, interactive = interactive)
+    }
+
+    fun setSceneOrbit(orbit: SceneOrbit) {
+        sceneOrbit = orbit
+        applyScenePreviewCamera(interactive = true)
+    }
     var backgroundState by mutableStateOf<BackgroundState?>(null)
         private set
     var motionTracks by mutableStateOf<List<MotionTrackInfo>>(emptyList())

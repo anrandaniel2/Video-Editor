@@ -173,6 +173,9 @@ pub struct Sequence {
     /// carries from its `light_angle`/`light_elevation`.
     #[serde(default, skip_serializing_if = "crate::lighting::SceneLighting::is_default")]
     pub scene_lighting: crate::lighting::SceneLighting,
+    /// The camera the sequence's 3D layers render through. Absent = the classic fixed camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_camera: Option<crate::lighting::SceneCamera3D>,
     /// Split In/Out points (Markers ▸ Mark Split): per-channel overrides of `mark_in`/`mark_out`.
     #[serde(default, skip_serializing_if = "SplitMarks::is_empty")]
     pub split: SplitMarks,

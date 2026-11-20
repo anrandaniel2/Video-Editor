@@ -43,6 +43,12 @@ pub struct Scene {
     pub opacity: f32,
     pub lights: Vec<Light>,
     pub draws: Vec<Draw>,
+    /// World-to-camera matrix for the sequence's scene camera, column-major for WGSL
+    /// (`mat4x4`): `view * vec4(p, 1)` maps world to camera space. All zeros when the classic
+    /// fixed camera is in effect.
+    pub view: [[f32; 4]; 4],
+    /// x = 1 when `view` is live; y = the focal length in pixels for this frame height.
+    pub view_params: [f32; 4],
 }
 
 type Backend = fn(&Scene) -> Option<Image>;

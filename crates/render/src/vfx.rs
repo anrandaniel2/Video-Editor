@@ -72,6 +72,10 @@ pub trait FxEnv: Sync {
     fn scene_lighting(&self) -> filmcraft_project::SceneLighting {
         Default::default()
     }
+    /// The camera the 3D scene renders through; `None` = the classic fixed camera.
+    fn scene_camera(&self) -> Option<filmcraft_project::SceneCamera3D> {
+        None
+    }
 }
 
 /// The environment of a track item being rendered by [`crate::item_layer`].
@@ -180,6 +184,10 @@ impl FxEnv for ItemEnv<'_> {
     }
     fn scene_lighting(&self) -> filmcraft_project::SceneLighting {
         self.seq.scene_lighting.clone()
+    }
+    fn scene_camera(&self) -> Option<filmcraft_project::SceneCamera3D> {
+        // the editor's grid/orbit preview camera wins over the sequence's own camera
+        crate::preview_camera().or(self.seq.scene_camera)
     }
     fn clip_key(&self) -> u64 {
         let mut h = 0xcbf2_9ce4_8422_2325u64;

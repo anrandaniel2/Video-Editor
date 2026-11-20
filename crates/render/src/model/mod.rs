@@ -126,6 +126,8 @@ pub struct Material {
     pub alpha_cutoff: f32,
     pub double_sided: bool,
     pub unlit: bool,
+    /// Multiplier for the indirect studio environment (1 = neutral).
+    pub env_intensity: f32,
 }
 
 impl Default for Material {
@@ -147,6 +149,7 @@ impl Default for Material {
             alpha_cutoff: 0.5,
             double_sided: false,
             unlit: false,
+            env_intensity: 1.0,
         }
     }
 }

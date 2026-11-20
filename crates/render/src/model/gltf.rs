@@ -480,6 +480,7 @@ fn read_material(m: &Value, textures: usize) -> Result<Material> {
         alpha_cutoff: num(m, "alphaCutoff", 0.5).max(0.0) as f32,
         double_sided: obj(m, "doubleSided").as_bool().unwrap_or(false),
         unlit: ext.get("KHR_materials_unlit").is_some(),
+        env_intensity: 1.0,
     })
 }
 

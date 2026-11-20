@@ -108,16 +108,20 @@ impl Renderer {
         let vertex=self.buffer("3D vertices",&bytes(packed),wgpu::BufferUsages::VERTEX);
         let alpha=match m.alpha_mode {AlphaMode::Opaque=>0.0,AlphaMode::Mask=>1.0,AlphaMode::Blend=>2.0};
         let flags=|b:bool| if b {1.0} else {0.0};
-        let scene_buffer=self.buffer("3D camera",&bytes([
+        let mut scene_uniform=vec![
             scene.camera[0],scene.camera[1],scene.camera[2],scene.opacity,
             scene.width as f32,scene.height as f32,m.alpha_cutoff,0.0,
             scene.ambient[0],scene.ambient[1],scene.ambient[2],scene.lights.len() as f32,
-        ]),wgpu::BufferUsages::UNIFORM);
+        ];
+        for column in &scene.view { scene_uniform.extend_from_slice(column); }
+        scene_uniform.extend_from_slice(&scene.view_params);
+        let scene_buffer=self.buffer("3D camera",&bytes(scene_uniform),wgpu::BufferUsages::UNIFORM);
         let material=self.buffer("3D material",&bytes([
             m.base_color[0],m.base_color[1],m.base_color[2],m.base_color[3],
             m.metallic,m.roughness,m.normal_scale,m.occlusion_strength,
             m.emissive[0],m.emissive[1],m.emissive[2],flags(m.normal_texture.is_some()),
             alpha,flags(m.double_sided),flags(m.unlit),flags(draw.pbr),
+            m.env_intensity,0.0,0.0,0.0,
         ]),wgpu::BufferUsages::UNIFORM);
         let mut views=Vec::new(); let mut samplers=Vec::new();
         for (i,r) in refs.iter().enumerate() {

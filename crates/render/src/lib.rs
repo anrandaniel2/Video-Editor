@@ -49,6 +49,25 @@ use filmcraft_time::{Tick, TimeDisplay, format_time};
 pub use blend::Blend;
 pub use image::Image;
 
+thread_local! {
+    static PREVIEW_CAMERA: std::cell::RefCell<Option<filmcraft_project::SceneCamera3D>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run [`render_sequence`] (or any render) with the editor's orbit camera in effect. Nested
+/// calls compose: the innermost camera wins and the outer state is restored on return.
+pub fn with_preview_camera<R>(camera: Option<filmcraft_project::SceneCamera3D>, f: impl FnOnce() -> R) -> R {
+    PREVIEW_CAMERA.with(|c| {
+        let prev = c.replace(camera);
+        let r = f();
+        c.replace(prev);
+        r
+    })
+}
+
+pub(crate) fn preview_camera() -> Option<filmcraft_project::SceneCamera3D> {
+    PREVIEW_CAMERA.with(|c| *c.borrow())
+}
+
 /// Resolves project items to media sources (the engine owns the media pool).
 pub trait SourceProvider: Sync {
     fn source(&self, item: ItemId) -> Option<SharedSource>;

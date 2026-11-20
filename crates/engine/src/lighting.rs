@@ -19,6 +19,20 @@ fn light_from(v: &Value, cmd: &str) -> Result<filmcraft_project::Light3D> {
     serde_json::from_value(v.clone()).map_err(|e| bad(cmd, format!("bad light: {e}")))
 }
 
+fn scene_camera_json(s: &Session) -> Result<Value> {
+    let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
+    Ok(match &seq.scene_camera {
+        Some(c) => json!({
+            "position": c.position,
+            "yaw": c.yaw,
+            "pitch": c.pitch,
+            "roll": c.roll,
+            "fov": c.fov,
+        }),
+        None => Value::Null,
+    })
+}
+
 fn lighting_json(s: &Session) -> Result<Value> {
     let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
     let l = &seq.scene_lighting;
@@ -91,6 +105,54 @@ pub fn commands() -> Vec<CommandSpec> {
                     Ok(())
                 })?;
                 lighting_json(s)
+            },
+        ),
+        CommandSpec {
+            id: "scene.camera",
+            label: "Scene Camera",
+            menu: &[],
+            shortcut: None,
+            params: "{}",
+            enabled: has_seq,
+            run: |s, _| scene_camera_json(s),
+            journal: false,
+        },
+        set_spec(
+            "scene.setCamera",
+            "Set Scene Camera",
+            r#"{"position":[x,y,z] f64, "yaw":f64, "pitch":f64, "roll":f64, "fov":f64, "merge":str?}"#,
+            |s, p| {
+                let pos = p
+                    .get("position")
+                    .and_then(|v| v.as_array().cloned())
+                    .map(|a| std::array::from_fn::<_, 3, _>(|i| a.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32))
+                    .unwrap_or([0.0; 3]);
+                let pick = |k: &str, d: f64| p.get(k).and_then(|v| v.as_f64()).unwrap_or(d);
+                let cam = filmcraft_project::SceneCamera3D {
+                    position: pos,
+                    yaw: pick("yaw", 0.0) as f32,
+                    pitch: pick("pitch", 0.0) as f32,
+                    roll: pick("roll", 0.0) as f32,
+                    fov: (pick("fov", filmcraft_project::CLASSIC_FOV as f64) as f32).clamp(1.0, 179.0),
+                };
+                let merge = p.get("merge").and_then(|v| v.as_str()).map(str::to_string);
+                s.edit_sequence_as("Set Scene Camera", merge.as_deref(), |seq, _ctx, _st| {
+                    seq.scene_camera = Some(cam);
+                    Ok(())
+                })?;
+                scene_camera_json(s)
+            },
+        ),
+        set_spec(
+            "scene.clearCamera",
+            "Remove Scene Camera",
+            r#"{}"#,
+            |s, _p| {
+                s.edit_sequence_as("Remove Scene Camera", None, |seq, _ctx, _st| {
+                    seq.scene_camera = None;
+                    Ok(())
+                })?;
+                Ok(json!({ "cleared": true }))
             },
         ),
         set_spec(

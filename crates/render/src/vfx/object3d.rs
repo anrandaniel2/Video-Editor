@@ -55,6 +55,40 @@ impl V3 {
     }
 }
 
+/// The scene camera's view transform (world to camera space), for the CPU reference path.
+/// Row-major rotation; the camera sits at the origin in view space looking down +Z.
+#[derive(Clone, Copy)]
+struct ViewXform {
+    vr: [[f32; 3]; 3],
+    eye: [f32; 3],
+    /// Focal length in pixels for this frame height.
+    focal: f32,
+    /// World-to-camera as WGSL's mat4x4 wants it (column-major): `view * vec4(p, 1)`.
+    matrix: [[f32; 4]; 4],
+}
+
+impl ViewXform {
+    fn from(cam: &filmcraft_project::SceneCamera3D, height: f32) -> Self {
+        Self { vr: cam.view_rotation(), eye: cam.position, focal: cam.focal(height), matrix: cam.view_matrix() }
+    }
+    fn apply(&self, v: V3) -> V3 {
+        let m = &self.vr;
+        V3::new(
+            m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
+            m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z,
+            m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z,
+        )
+    }
+    /// A point in the world, as the camera sees it.
+    fn point(&self, v: V3) -> V3 {
+        self.apply(v.sub(V3::new(self.eye[0], self.eye[1], self.eye[2])))
+    }
+    /// A direction in the world, as the camera sees it.
+    fn dir(&self, v: V3) -> V3 {
+        self.apply(v)
+    }
+}
+
 struct Params {
     mesh: u32,
     text: String,
@@ -84,6 +118,10 @@ struct Params {
     side: [f32; 4],
     metal: f32,
     rough: f32,
+    /// Studio-environment reflection strength (1 = neutral).
+    env_reflection: f32,
+    /// Emissive level: the surface adds its own base colour, times this.
+    emissive: f32,
     /// The scene's prepared lights (one classic directional light when the scene has none).
     lights: Vec<LitLight>,
     /// Ambient shadow fill (colour × level), linear; (1,1,1) is the classic look.
@@ -95,6 +133,8 @@ struct Params {
     model_loop: bool,
     model_speed: f32,
     model_play: bool,
+    /// The scene camera to render through (None = the classic fixed camera).
+    view: Option<ViewXform>,
 }
 
 fn rotate(v: V3, r: V3) -> V3 {
@@ -157,6 +197,31 @@ fn aim(angle: f32, elevation: f32) -> V3 {
     V3::new(la.cos() * le.cos(), la.sin() * le.cos(), -le.sin()).norm()
 }
 
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn smooth(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// A small studio of softboxes: what a mirror reflects. Linear RGB; y is down in this world,
+/// so the "up" hemisphere is `-y`. The key is a large warm box high and to the right, a cool
+/// fill opposite, a rim behind, over a bright sky-over-dark-floor gradient.
+fn studio_env(d: V3) -> [f32; 3] {
+    let t = (-d.y * 0.5 + 0.5).clamp(0.0, 1.0);
+    let s = t * t * (3.0 - 2.0 * t);
+    let mut c = [lerp(0.045, 0.33, s), lerp(0.042, 0.38, s), lerp(0.040, 0.46, s)];
+    let key = d.dot(V3::new(0.55, -0.75, 0.35).norm()).max(0.0).powf(160.0);
+    let fill = d.dot(V3::new(-0.70, -0.35, 0.15).norm()).max(0.0).powf(90.0);
+    let rim = d.dot(V3::new(0.05, -0.15, -1.0).norm()).max(0.0).powf(70.0);
+    for i in 0..3 {
+        c[i] += [5.0, 4.7, 4.1][i] * key + [2.8, 3.2, 4.2][i] * fill + [3.6, 3.2, 2.5][i] * rim;
+    }
+    c
+}
+
 fn camera_translation(screen:(f32,f32),width:f32,height:f32,z:f32)->V3 {
     let focal=height.max(1.0);
     V3::new((screen.0-width*0.5)*z/focal,(screen.1-height*0.5)*z/focal,z)
@@ -181,6 +246,8 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
             rz += s.rotation;
         }
     }
+    let view_cam = cx.env.and_then(|env| env.scene_camera());
+    let view = view_cam.map(|c| ViewXform::from(&c, img.h as f32));
     let la = fv(e, "light_angle", cx);
     let le = fv(e, "light_elevation", cx);
     // The scene's lights: placeable, coloured light objects. With none configured the classic
@@ -227,6 +294,14 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
             });
         }
     }
+    if let Some(v) = &view {
+        for l in &mut lights {
+            // A light's place is a point in the world: subtract the eye, then rotate. Its aim is a
+            // direction: only rotate.
+            l.pos = v.point(l.pos);
+            l.toward = v.dir(l.toward);
+        }
+    }
     Params {
         mesh: chv(e, "mesh"),
         text: tv(e, "text"),
@@ -256,6 +331,8 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
         side: cv(e, "color", cx),
         metal: (fv(e, "metalness", cx) / 100.0).clamp(0.0, 1.0),
         rough: (fv(e, "roughness", cx) / 100.0).clamp(0.0, 1.0),
+        env_reflection: (fv(e, "env_reflection", cx) / 100.0).clamp(0.0, 2.0),
+        emissive: (fv(e, "emissive", cx) / 100.0).clamp(0.0, 1.0),
         lights,
         ambient,
         opacity: (fv(e, "opacity", cx) / 100.0).clamp(0.0, 1.0),
@@ -265,6 +342,17 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
         model_loop: bv(e, "model_loop"),
         model_speed: fv(e, "model_speed", cx) / 100.0,
         model_play: bv(e, "model_play"),
+        view,
+    }
+}
+
+/// The camera space tuple for the CPU rasteriser: frame-centred principal point, focal from
+/// the scene camera (the classic frame height when there is none).
+fn cam_of(p: &Params, width: f32, height: f32) -> (f32, f32, f32) {
+    match &p.view {
+        // the view transform already moved the vertices into camera space
+        Some(v) => (width * 0.5, height * 0.5, v.focal),
+        None => (p.pos.0, p.pos.1, height.max(1.0)),
     }
 }
 
@@ -426,9 +514,14 @@ fn shade(n: V3, wp: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
             spec[k] += l.color[k] * s;
         }
     }
+    // A mirror is mostly the room it sits in: reflect the studio for rough metals.
+    let rv = n.mul(2.0 * n.dot(view)).sub(view);
+    let env = studio_env(rv);
+    let f0 = [0.04 + (base[0] - 0.04) * p.metal, 0.04 + (base[1] - 0.04) * p.metal, 0.04 + (base[2] - 0.04) * p.metal];
+    let envf = (1.0 - p.rough).powi(3);
     let mut c = [0.0; 3];
     for k in 0..3 {
-        c[k] = (base[k] * (0.28 * p.ambient[k] + 0.72 * diff[k]) + spec[k] * p.metal * 0.9).clamp(0.0, 1.0) * alpha;
+        c[k] = (base[k] * (0.28 * p.ambient[k] + 0.72 * diff[k]) + spec[k] * p.metal * 0.9 + env[k] * f0[k] * envf * p.env_reflection + base[k] * p.emissive).clamp(0.0, 1.0) * alpha;
     }
     [c[0], c[1], c[2], alpha]
 }
@@ -805,7 +898,16 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f3
     let base = lin(p.color);
     let side = lin(p.side);
     // Glyphs are centred on the origin; `cam` carries the position (see `apply`).
-    let to_v = |x: f32, y: f32, z: f32| rotate(V3::new(x, y, z), p.rot).add(p.translation);
+    let view = p.view;
+    let place = |v: V3| {
+        let v = rotate(v, p.rot).add(p.translation);
+        view.map(|x| x.point(v)).unwrap_or(v)
+    };
+    let dir = |v: V3| {
+        let v = rotate(v, p.rot);
+        view.map(|x| x.dir(v)).unwrap_or(v)
+    };
+    let to_v = |x: f32, y: f32, z: f32| place(V3::new(x, y, z));
     let proj_ct = |ct: &[(f32, f32)], z: f32| -> Vec<(f32, f32)> {
         ct.iter().filter_map(|&(x, y)| project(to_v(x, y, z), cx, cy, f).map(|(sx, sy, _)| (sx, sy))).collect()
     };
@@ -817,7 +919,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f3
             .flat_map(|c| c.iter().filter_map(move |&(x, y)| project(to_v(x, y, z), cx, cy, f)))
             .collect();
         if let Some(plane) = face_plane(&flat) {
-            fill_face(buf, &pc, plane, shade(rotate(n, p.rot), to_v(0.0, 0.0, z), p, col, a));
+            fill_face(buf, &pc, plane, shade(dir(n), to_v(0.0, 0.0, z), p, col, a));
         }
     }
     // Walls and chamfer.
@@ -827,7 +929,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f3
             let j = (i + 1) % ct.len();
             let (x0, y0) = ct[i];
             let (x1, y1) = ct[j];
-            let n = rotate(V3::new(y1 - y0, x0 - x1, 0.0).norm(), p.rot);
+            let n = dir(V3::new(y1 - y0, x0 - x1, 0.0).norm());
             let z_top = -depth + bevel;
             quad(
                 buf,
@@ -841,7 +943,7 @@ fn draw_text(buf: &mut Buf, p: &Params, cam: (f32, f32, f32), cs: &[Vec<(f32, f3
             if bevel > 0.25 && ins.len() == ct.len() {
                 let (bx0, by0) = ins[i];
                 let (bx1, by1) = ins[j];
-                let bn = rotate(V3::new(y1 - y0, x0 - x1, -(x1 - x0).hypot(y1 - y0) * 0.7).norm(), p.rot);
+                let bn = dir(V3::new(y1 - y0, x0 - x1, -(x1 - x0).hypot(y1 - y0) * 0.7).norm());
                 quad(
                     buf,
                     [to_v(x0, y0, z_top), to_v(x1, y1, z_top), to_v(bx1, by1, -depth), to_v(bx0, by0, -depth)],
@@ -911,7 +1013,7 @@ fn sample_map(model: &crate::model::Model, r: Option<crate::model::TextureRef>, 
 /// specular environment.
 fn shade_pbr(n: V3, view: V3, wp: V3, p: &Params, base: [f32; 3], metallic: f32, roughness: f32, ao: f32, emissive: [f32; 3], alpha: f32, unlit: bool) -> [f32; 4] {
     if unlit {
-        return [(base[0] + emissive[0]) * alpha, (base[1] + emissive[1]) * alpha, (base[2] + emissive[2]) * alpha, alpha];
+        return [(base[0] + emissive[0] + base[0] * p.emissive) * alpha, (base[1] + emissive[1] + base[1] * p.emissive) * alpha, (base[2] + emissive[2] + base[2] * p.emissive) * alpha, alpha];
     }
     let n = n.norm();
     let v = view.norm();
@@ -944,11 +1046,19 @@ fn shade_pbr(n: V3, view: V3, wp: V3, p: &Params, base: [f32; 3], metallic: f32,
             direct[i] += (kd * base[i] / std::f32::consts::PI + spec) * nl * 3.0 * w * l.color[i];
         }
     }
+    // A mirror is mostly the room it sits in: reflect the studio. The sharpest reflection
+    // sits at rough 0, falling off with the cube of 1-rough; diffuse irradiance is the
+    // gradient half of the same room.
+    let rv = n.mul(2.0 * n.dot(v)).sub(v);
+    let env_r = studio_env(rv);
+    let env_spec = std::array::from_fn::<_, 3, _>(|i| env_r[i] * f0[i] * (1.0 - rough).powi(3) * ao * p.env_reflection);
+    let irr = smooth(-n.y * 0.5 + 0.5);
+    let env_diffuse = [lerp(0.10, 0.52, irr), lerp(0.095, 0.57, irr), lerp(0.09, 0.68, irr)];
     let mut c = [0.0f32; 3];
     for i in 0..3 {
-        let ambient_diffuse = base[i] * (1.0 - metallic) * 0.22 * ao * p.ambient[i];
-        let ambient_spec = f0[i] * (0.08 + 0.12 * (1.0 - rough)) * ao * p.ambient[i];
-        c[i] = ((direct[i] + ambient_diffuse + ambient_spec + emissive[i]).max(0.0)) * alpha;
+        let ambient_diffuse = base[i] * (1.0 - metallic) * 0.10 * ao * p.ambient[i];
+        let env_diffuse = env_diffuse[i] * base[i] * (1.0 - metallic) * 0.55 * ao * (0.4 + 0.6 * p.env_reflection);
+        c[i] = ((direct[i] + ambient_diffuse + env_diffuse + env_spec[i] + emissive[i] + base[i] * p.emissive).max(0.0)) * alpha;
     }
     [c[0], c[1], c[2], alpha]
 }
@@ -1038,11 +1148,20 @@ fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam:
     let off = p.translation;
     // glTF is right-handed Y-up, +Z toward the viewer. The object renderer looks down +Z with
     // Y down, so rotate 180° about X: (x, y, z) -> (x, -y, -z), preserving winding.
+    let view = p.view;
     let place = |v: crate::model::Vertex| {
         let local = V3::new((v.pos[0] - center[0]) * fit, -(v.pos[1] - center[1]) * fit, -(v.pos[2] - center[2]) * fit);
         let n = V3::new(v.normal[0], -v.normal[1], -v.normal[2]);
         let t = V3::new(v.tangent[0], -v.tangent[1], -v.tangent[2]);
-        ModelVert { p: rotate(local, p.rot).add(off), n: rotate(n, p.rot), tangent: rotate(t, p.rot), tangent_w: v.tangent[3], uv: v.uv, color: v.color }
+        let mut mp = rotate(local, p.rot).add(off);
+        let mut mn = rotate(n, p.rot);
+        let mut mt = rotate(t, p.rot);
+        if let Some(x) = view {
+            mp = x.point(mp);
+            mn = x.dir(mn);
+            mt = x.dir(mt);
+        }
+        ModelVert { p: mp, n: mn, tangent: mt, tangent_w: v.tangent[3], uv: v.uv, color: v.color }
     };
     let mut prepared: Vec<(&crate::model::Primitive, Vec<ModelVert>)> = Vec::new();
     let (mut bx0, mut by0, mut bx1, mut by1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -1116,13 +1235,23 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     }
     // Fixed principal point; position moves vertices in camera space, so the visible sides
     // change off-axis. Convert the screen-space anchor to world coordinates at object depth.
-    let cam = (p.pos.0, p.pos.1, (img.h as f32).max(1.0));
+    // A scene camera moves everything into its own view space instead (see `cam_of`).
+    let cam = cam_of(&p, img.w as f32, img.h as f32);
     let off = p.translation;
     if p.mesh == 7 {
         draw_model(img, e, &p, cx, cam);
         return;
     }
-    let place = |v: Vert| Vert { p: rotate(v.p, p.rot).add(off), n: rotate(v.n, p.rot) };
+    let view = p.view;
+    let place = |v: Vert| {
+        let mut vp = rotate(v.p, p.rot).add(off);
+        let mut vn = rotate(v.n, p.rot);
+        if let Some(x) = view {
+            vp = x.point(vp);
+            vn = x.dir(vn);
+        }
+        Vert { p: vp, n: vn }
+    };
     if p.mesh == 6 {
         let cs = text_contours(&p);
         if cs.is_empty() {
@@ -1132,7 +1261,12 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         let pts: Vec<V3> = cs
             .iter()
             .flat_map(|c| c.iter())
-            .flat_map(|&(x, y)| [rotate(V3::new(x, y, 0.0), p.rot).add(off), rotate(V3::new(x, y, -depth), p.rot).add(off)])
+            .flat_map(|&(x, y)| {
+                [V3::new(x, y, 0.0), V3::new(x, y, -depth)].map(|v| {
+                    let v = rotate(v, p.rot).add(off);
+                    p.view.map(|x| x.point(v)).unwrap_or(v)
+                })
+            })
             .collect();
         let Some(b) = bounds(&pts, cam) else { return };
         let Some(mut buf) = Buf::new(img, b) else { return };

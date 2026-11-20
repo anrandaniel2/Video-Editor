@@ -835,6 +835,8 @@ fn build_effects() -> Vec<EffectDef> {
                 col("side_color", "Side Color", [0.45, 0.18, 0.10, 1.0]),
                 fs("metalness", "Metalness", 25.0, (0.0, 100.0), (0.0, 100.0), "%", 1),
                 fs("roughness", "Roughness", 45.0, (0.0, 100.0), (0.0, 100.0), "%", 1),
+                fs("env_reflection", "Reflection", 100.0, (0.0, 200.0), (0.0, 200.0), "%", 0),
+                fs("emissive", "Emissive", 0.0, (0.0, 100.0), (0.0, 100.0), "%", 0),
                 ang("light_angle", "Light Angle", 135.0),
                 fs("light_elevation", "Light Elevation", 45.0, (-90.0, 90.0), (0.0, 90.0), "°", 1),
                 fs("opacity", "Opacity", 100.0, (0.0, 100.0), (0.0, 100.0), "%", 1),

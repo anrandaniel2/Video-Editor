@@ -15,7 +15,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import io.github.artcraftandroid.filmcraft.core.Object3DSettings
 import io.github.artcraftandroid.filmcraft.core.Placement
-import io.github.artcraftandroid.filmcraft.ui.SelectChip
 import java.util.UUID
 import kotlin.math.*
 
@@ -29,18 +28,17 @@ private val axisColors=listOf(Color(0xFFFF6575),Color(0xFF6FE295),Color(0xFF669F
 fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement?,modifier:Modifier=Modifier) {
     val clip=ed.selectedClip ?: return
     val state=ed.object3DState?.takeIf {it.clip==clip.id && it.hasObject} ?: return
-    var mode by remember(clip.id) {mutableStateOf(GizmoMode.Move)}
-    var active by remember(clip.id) {mutableStateOf(-1)}
+    var active by remember(clip.id) {mutableStateOf<GizmoHit?>(null)}
     val settings by rememberUpdatedState(state.settings)
     val transform by rememberUpdatedState(placement)
     Box(modifier.testTag("object3d_gizmo")) {
-        Canvas(Modifier.fillMaxSize().pointerInput(clip.id,mode,fw,fh) {
-            fun geometry(s:Object3DSettings)=GizmoGeometry(s,transform,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble())
+        Canvas(Modifier.fillMaxSize().pointerInput(clip.id,fw,fh) {
+            fun geometry(s:Object3DSettings)=GizmoGeometry(s,transform,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble(),viewFor(ed,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble()))
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false)
                 var current=settings
                 val initial=geometry(current)
-                active=initial.hit(down.position,mode,16.dp.toPx())
+                active=initial.hitGizmo(down.position,16.dp.toPx())
                 var previous=down.position
                 var total=androidx.compose.ui.geometry.Offset.Zero
                 var count=1
@@ -53,11 +51,16 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                     val fingers=event.changes.count {it.pressed}
                     if(fingers==0)break
                     if(fingers!=count) {
-                        count=fingers;multi=multi || fingers>=2;active=-1;pinch=1f
+                        count=fingers;multi=multi || fingers>=2;active=null;pinch=1f
                         event.changes.firstOrNull {it.pressed}?.let {previous=it.position}
                         continue
                     }
                     if(fingers>=2) {
+                        if (ed.panel == Panel.Scene) {
+                            // the scene overlay owns two fingers (orbit dolly)
+                            multi = true; active = null
+                            continue
+                        }
                         pinch*=event.calculateZoom()
                         if(abs(pinch-1f)>0.015f || changed) {
                             current=current.copy(scale=(current.scale*pinch).coerceIn(0.1,400.0))
@@ -66,28 +69,29 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                         event.changes.forEach {it.consume()}
                         continue
                     }
-                    if(multi || active<0)continue
+                    if(multi || active==null)continue
+                    val hit=active!!
                     val point=event.changes.firstOrNull {it.pressed}?.position ?: continue
                     val delta=point-previous;total+=delta
                     if(!changed && total.getDistance()<viewConfiguration.touchSlop) {previous=point;continue}
                     val drag=if(!changed)total else delta
-                    current=when(mode) {
-                        GizmoMode.Move -> initial.move(current,active,drag)
-                        GizmoMode.Rotate -> rotateGizmoLocal(current,active,geometry(current).rotationDelta(active,point-drag,drag))
+                    current=when(hit.kind) {
+                        GizmoMode.Move -> initial.move(current,hit.axis,drag)
+                        GizmoMode.Rotate -> rotateGizmoLocal(current,hit.axis,geometry(current).rotationDelta(hit.axis,point-drag,drag))
                     }
                     previous=point
                     ed.setObject(current,token);changed=true
                     event.changes.forEach {it.consume()}
                 }
-                active=-1
+                active=null
             }
         }) {
             if (size.width <= 0f || size.height <= 0f || fw <= 0f || fh <= 0f) return@Canvas
-            val geometry=GizmoGeometry(settings,placement,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble())
-            for(face in geometry.faces(mode)) {
+            val geometry=GizmoGeometry(settings,placement,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble(),viewFor(ed,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble()))
+            for((kind,face) in geometry.fusedFaces()) {
                 val base=axisColors[face.axis]
-                val brightness=if(face.axis==active)1f else face.brightness.takeIf { it.isFinite() }?.coerceIn(0f,1f) ?: 0.4f
-                val color=Color(base.red*brightness,base.green*brightness,base.blue*brightness,if(mode==GizmoMode.Rotate && face.behind)0.4f else 1f)
+                val brightness=if(active?.kind==kind && active?.axis==face.axis)1f else face.brightness.takeIf { it.isFinite() }?.coerceIn(0f,1f) ?: 0.4f
+                val color=Color(base.red*brightness,base.green*brightness,base.blue*brightness,if(kind==GizmoMode.Rotate && face.behind)0.4f else 1f)
                 val path=Path().apply {
                     moveTo(face.points[0].screen.x,face.points[0].screen.y)
                     face.points.drop(1).forEach {lineTo(it.screen.x,it.screen.y)}
@@ -95,9 +99,6 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                 }
                 drawPath(path,color)
             }
-        }
-        Row(Modifier.align(Alignment.TopStart).padding(6.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
-            GizmoMode.entries.forEach {m->SelectChip(m.name,mode==m,{mode=m},tag="gizmo_${m.name.lowercase()}")}
         }
         Row(Modifier.align(Alignment.BottomStart).padding(6.dp),horizontalArrangement=Arrangement.spacedBy(5.dp)) {
             listOf("X","Y","Z").forEachIndexed {i,label->androidx.compose.material3.Text(label,color=axisColors[i],modifier=Modifier.padding(3.dp))}

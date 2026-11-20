@@ -8,14 +8,18 @@ fn vertex(v: Vert) -> Vertex {
 }
 
 pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
+    let (view, view_params) = match &p.view {
+        Some(v) => (v.matrix, [1.0, v.focal, 0.0, 0.0]),
+        None => ([[0.0; 4]; 4], [0.0; 4]),
+    };
     let mut scene = Scene {
         width: img.w, height: img.h,
-        camera: [p.pos.0, p.pos.1, img.h.max(1) as f32],
+        camera: [img.w as f32 * 0.5, img.h as f32 * 0.5, img.h.max(1) as f32],
         ambient: p.ambient, opacity: p.opacity,
         lights: p.lights.iter().map(|l| Light {
             kind: l.kind, color: l.color, direction: xyz(l.toward), position: xyz(l.pos),
             range: l.range, cos_outer: l.cos_outer, cos_inner: l.cos_inner,
-        }).collect(), draws: Vec::new(),
+        }).collect(), draws: Vec::new(), view, view_params,
     };
     let off = p.translation;
     let place = vertex;
@@ -33,6 +37,8 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
     let material = |col: [f32; 4]| crate::model::Material {
         base_color: { let c = lin(col); [c[0], c[1], c[2], col[3]] },
         metallic: p.metal, roughness: p.rough, double_sided: true,
+        emissive: { let c = lin(col); [c[0] * p.emissive, c[1] * p.emissive, c[2] * p.emissive] },
+        env_intensity: p.env_reflection,
         ..Default::default()
     };
     if p.mesh == 7 {
@@ -83,7 +89,11 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
             }).collect();
             let mut material = model.material(prim.material).clone();
             let tint = lin(p.color);
-            for i in 0..3 { material.base_color[i] *= tint[i]; }
+            for i in 0..3 {
+                material.base_color[i] *= tint[i];
+                material.emissive[i] += material.base_color[i] * p.emissive;
+            }
+            material.env_intensity = p.env_reflection;
             scene.draws.push(Draw { vertices, material, model: Some(model.clone()), pbr: true, deformation });
         }
     } else if p.mesh == 6 {
@@ -126,14 +136,14 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
                 }
             }
         }
-        scene.draws.push(Draw { vertices: face_vertices, material: material(p.color), model: None, pbr: false, deformation:primitive_deformation() });
-        scene.draws.push(Draw { vertices: side_vertices, material: material(p.side), model: None, pbr: false, deformation:primitive_deformation() });
+        scene.draws.push(Draw { vertices: face_vertices, material: material(p.color), model: None, pbr: true, deformation:primitive_deformation() });
+        scene.draws.push(Draw { vertices: side_vertices, material: material(p.side), model: None, pbr: true, deformation:primitive_deformation() });
     } else {
         let k=p.size*p.scale*0.5;
         let dz=if p.mesh==5 {0.0} else if p.depth>0.0 {p.depth*p.scale*0.5} else {k};
         let radius=k*scene.camera[2]/p.z.max(1.0);
         let vertices=mesh_tris(p.mesh,k,dz,radius).into_iter().flat_map(|t| t.map(place)).collect();
-        scene.draws.push(Draw { vertices, material:material(p.color), model:None, pbr:false, deformation:primitive_deformation() });
+        scene.draws.push(Draw { vertices, material:material(p.color), model:None, pbr:true, deformation:primitive_deformation() });
     }
     Some(scene)
 }

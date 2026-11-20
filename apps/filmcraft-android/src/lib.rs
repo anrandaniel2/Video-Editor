@@ -50,7 +50,7 @@ pub mod samples;
 pub mod speech;
 pub mod text;
 
-use advanced::{BackgroundSettings, BackgroundState, ModelAnimationInfo, ModelInfo, MotionTrackInfo, NormPoint, Object3DMesh, Object3DSettings, Object3DState, TrackOptions};
+use advanced::{BackgroundSettings, BackgroundState, ModelAnimationInfo, ModelInfo, MotionTrackInfo, NormPoint, Object3DMesh, Object3DSettings, Object3DState, SceneCamera3d, TrackOptions};
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use masks::{MaskPoint, MaskSettings, MaskShape, MaskState};
 use model::TimelineInfo;
@@ -734,6 +734,11 @@ impl MobileSession {
     /// Validate a model file and list its animations (used by the import/animation UI).
     pub fn model_info(&self, path: String) -> Result<ModelInfo, MobileError> {
         advanced::model_info(&path)
+    }
+
+    /// The sequence's scene camera (absent = the classic fixed camera the editor adds first).
+    pub fn scene_camera(&self) -> Option<SceneCamera3d> {
+        advanced::scene_camera_of(&self.lock())
     }
 
     /// The selected clip's 3D object settings at the playhead.
