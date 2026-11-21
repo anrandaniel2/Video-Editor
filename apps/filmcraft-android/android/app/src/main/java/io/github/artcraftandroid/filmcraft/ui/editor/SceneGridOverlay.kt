@@ -9,23 +9,25 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import kotlin.math.*
 
+private val axisColors = listOf(Color(0xFFFF6575), Color(0xFF6FE295), Color(0xFF669FFF))
 private const val GRID_HALF = 2000.0
 private const val GRID_STEP = 100.0
 private const val GRID_MAJOR = 500.0
 private const val GRID_CENTER_Z = 700.0
-private val CAMERA = Color(0xFFFFC947)
 
 /**
- * The 3D scene workspace's viewport: a floor grid, the world axes, and the scene camera
- * drawn as a frustum you can see and grab. Drag empty space to orbit the camera around the
- * scene; pinch with two fingers to dolly; drag the frustum to move the render camera.
- * The grid plane sits at the target's height. Editor-only overlay; exports never see it.
+ * The scene editor's 3D space: a floor grid through the orbit target's height, the world
+ * axes, and the orbit-target point (a dot with the fused move gizmo). Drag empty space to
+ * orbit the camera around it, pinch to dolly, drag the dot's shafts to move it. The camera
+ * never moves unless the user touches the screen. Editor-only overlay; hit-testing uses the
+ * same projection as the render.
  */
 @Composable
 internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifier: Modifier = Modifier) {
@@ -35,10 +37,9 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
         val fov = camera?.fov ?: CLASSIC_FOV
         return ViewProjection(GizmoVec(o.target[0], o.target[1], o.target[2]), o.yaw, o.pitch, 0.0, fov, fw.toDouble(), fh.toDouble(), w, h, o.distance)
     }
-    fun camRight(c: SceneCamera) = GizmoVec(1.0, 0.0, 0.0).rotate(c.pitch, c.yaw, c.roll)
-    fun camDown(c: SceneCamera) = GizmoVec(0.0, 1.0, 0.0).rotate(c.pitch, c.yaw, c.roll)
-    fun camForward(c: SceneCamera) = GizmoVec(0.0, 0.0, 1.0).rotate(c.pitch, c.yaw, c.roll)
-    fun camEye(c: SceneCamera) = GizmoVec(c.position[0], c.position[1], c.position[2])
+
+    fun targetGeometry(o: SceneOrbit, w: Double, h: Double, px: Double): GizmoGeometry =
+        GizmoGeometry(GizmoPose(o.target[0], o.target[1], o.target[2]), null, fw.toDouble(), fh.toDouble(), w, h, px, projection(o, w, h), poseIsWorld = true)
 
     Box(modifier.fillMaxSize().testTag("scene_grid")) {
         Canvas(Modifier.fillMaxSize().pointerInput(fw, fh) {
@@ -46,59 +47,13 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
                 val down = awaitFirstDown(requireUnconsumed = false)
                 if (down.isConsumed) return@awaitEachGesture // an object's handle got it first
                 val w = size.width.toDouble(); val h = size.height.toDouble()
+                val px = minOf(62.dp.toPx(), minOf(size.width, size.height) * 0.28f).toDouble()
                 val startOrbit = orbit
-                val startCam = camera
-                val proj = projection(startOrbit, w, h)
-                val camPos0 = startCam?.let { camEye(it) }
-
-                // ---- grabbing the render camera? ----
-                var camGrab = false
-                if (startCam != null && camPos0 != null) {
-                    val eye = camPos0
-                    val fwd = camForward(startCam); val rgt = camRight(startCam); val dwn = camDown(startCam)
-                    val fovRad = Math.toRadians(startCam.fov)
-                    val near = fw.toDouble() * 0.13
-                    val hh = tan(fovRad / 2.0) * near
-                    val hw = hh * (fw.toDouble() / fh.toDouble())
-                    val corners = listOf(
-                        eye + fwd * near - rgt * hw - dwn * hh,
-                        eye + fwd * near + rgt * hw - dwn * hh,
-                        eye + fwd * near + rgt * hw + dwn * hh,
-                        eye + fwd * near - rgt * hw + dwn * hh,
-                    )
-                    val segments = mutableListOf<Pair<GizmoVec, GizmoVec>>()
-                    for (c in corners) segments += eye to c
-                    for (i in 0..3) segments += corners[i] to corners[(i + 1) % 4]
-                    // the body box behind the eye
-                    val bc = eye - fwd * (near * 0.18)
-                    val ex = near * 0.16; val ey = near * 0.12; val ez = near * 0.09
-                    fun bodyCorner(sz: Int, sy: Int, s: Int) = bc + fwd * (sz * ez) + rgt * (s * ex) + dwn * (sy * ey)
-                    val faceNear = listOf(bodyCorner(1, -1, -1), bodyCorner(1, -1, 1), bodyCorner(1, 1, 1), bodyCorner(1, 1, -1))
-                    val faceFar = listOf(bodyCorner(-1, -1, -1), bodyCorner(-1, -1, 1), bodyCorner(-1, 1, 1), bodyCorner(-1, 1, -1))
-                    for (face in listOf(faceNear, faceFar)) for (i in 0..3) segments += face[i] to face[(i + 1) % 4]
-                    for (i in 0..3) segments += faceNear[i] to faceFar[i]
-                    camGrab = segments.any { (a, b) ->
-                        val pa = proj.project(a)?.screen; val pb = proj.project(b)?.screen
-                        pa != null && pb != null && segmentDistance(down.position, pa, pb) < 16.dp.toPx()
-                    }
-                }
-
-                if (camGrab && startCam != null && camPos0 != null) {
+                val geo = targetGeometry(startOrbit, w, h, px)
+                val handle = geo.hitGizmo(down.position, 16.dp.toPx(), setOf(GizmoMode.Move))
+                if (handle != null) {
                     ed.stop()
                     down.consume()
-                    val rgt = GizmoVec(1.0, 0.0, 0.0).rotate(startOrbit.pitch, startOrbit.yaw, 0.0)
-                    val dwn = GizmoVec(0.0, 1.0, 0.0).rotate(startOrbit.pitch, startOrbit.yaw, 0.0)
-                    fun tangentOf(axis: GizmoVec, at: GizmoVec): Offset {
-                        val p = proj.project(at)?.screen ?: return Offset.Zero
-                        val q = proj.project(at + axis * 120.0)?.screen ?: return Offset.Zero
-                        return Offset((q.x - p.x) / 120.0f, (q.y - p.y) / 120.0f)
-                    }
-
-                    fun amountOf(drag: Offset, t: Offset): Double {
-                        val len = t.x * t.x + t.y * t.y
-                        return if (len > 0.0001f) ((drag.x * t.x + drag.y * t.y) / len).toDouble() else 0.0
-                    }
-                    var pos = camPos0!!
                     var previous = down.position
                     var total = Offset.Zero
                     var changed = false
@@ -109,11 +64,14 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
                         if (!change.pressed) { change.consume(); break }
                         val delta = change.position - previous; previous = change.position; total += delta
                         if (!changed && total.getDistance() < viewConfiguration.touchSlop) continue
+                        val tangent = geo.tangent(handle.axis)
+                        val len = tangent.x * tangent.x + tangent.y * tangent.y
                         val drag = if (changed) delta else total
-                        val tangentRgt = tangentOf(rgt, pos); val tangentDwn = tangentOf(dwn, pos)
-                        val moveR = amountOf(drag, tangentRgt); val moveD = amountOf(drag, tangentDwn)
-                        pos = pos + rgt * moveR + dwn * moveD
-                        ed.setSceneCamera(startCam.copy(position = listOf(pos.x, pos.y, pos.z)), "scene-camera-drag")
+                        val amount = if (len > 0.0001f) ((drag.x * tangent.x + drag.y * tangent.y) / len).toDouble() else -drag.y * geo.radius / 64.0
+                        val p = orbit.target.toMutableList()
+                        p[handle.axis] += amount
+                        if (handle.axis == 2) p[2] = p[2].coerceAtLeast(1.0)
+                        ed.setSceneOrbit(orbit.copy(target = p))
                         changed = true
                         change.consume()
                     }
@@ -133,7 +91,7 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
                             multi = true
                             val zoom = event.calculateZoom()
                             if (zoom != 1f) {
-                                val next = (orbit.distance / zoom).coerceIn(150.0, 4200.0)
+                                val next = (orbit.distance / zoom).coerceIn(300.0, 4200.0)
                                 ed.setSceneOrbit(orbit.copy(distance = next))
                             }
                             event.changes.forEach { it.consume() }
@@ -159,7 +117,8 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
             if (size.width <= 0f || size.height <= 0f || fw <= 0f || fh <= 0f) return@Canvas
             val o = orbit
             val proj = projection(o, size.width.toDouble(), size.height.toDouble())
-            val baseY = o.target[1]
+            val target = GizmoVec(o.target[0], o.target[1], o.target[2])
+            val baseY = target.y
 
             // ---- floor grid ----
             val steps = (GRID_HALF * 2 / GRID_STEP).toInt()
@@ -182,60 +141,36 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
                     drawLine(Color.White.copy(alpha = alphaZ), a, b, strokeWidth = if (isMajorZ) 2f else 1f)
                 }
             }
-            // world axes: x (red) and z (blue) through the origin, at the grid plane
+            // world axes: x (red) and z (blue) through the origin, y (green) vertical through the target
             line(GizmoVec(-GRID_HALF, baseY, 0.0), GizmoVec(GRID_HALF, baseY, 0.0))?.let { (a, b) ->
                 drawLine(Color(0xFFFF6575).copy(alpha = 0.55f), a, b, strokeWidth = 3f)
             }
             line(GizmoVec(0.0, baseY, GRID_CENTER_Z - GRID_HALF), GizmoVec(0.0, baseY, GRID_CENTER_Z + GRID_HALF))?.let { (a, b) ->
                 drawLine(Color(0xFF669FFF).copy(alpha = 0.55f), a, b, strokeWidth = 3f)
             }
+            line(GizmoVec(target.x, baseY - 1200.0, target.z), GizmoVec(target.x, baseY + 1200.0, target.z))?.let { (a, b) ->
+                drawLine(Color(0xFF6FE295).copy(alpha = 0.35f), a, b, strokeWidth = 2f)
+            }
 
-            // ---- the scene camera: a frustum you can see and grab ----
-            val cam = camera
-            if (cam != null) {
-                val eye = camEye(cam)
-                val fwd = camForward(cam); val rgt = camRight(cam); val dwn = camDown(cam)
-                val fovRad = Math.toRadians(cam.fov)
-                val near = fw.toDouble() * 0.13
-                val hh = tan(fovRad / 2.0) * near
-                val hw = hh * (fw.toDouble() / fh.toDouble())
-                val corners = listOf(
-                    eye + fwd * near - rgt * hw - dwn * hh,
-                    eye + fwd * near + rgt * hw - dwn * hh,
-                    eye + fwd * near + rgt * hw + dwn * hh,
-                    eye + fwd * near - rgt * hw + dwn * hh,
-                )
-                val pts = corners.map { proj.project(it)?.screen }
-                val apex = proj.project(eye)?.screen
-                apex?.let { a ->
-                    for (p in pts) p?.let { b -> drawLine(CAMERA.copy(alpha = 0.6f), a, b, strokeWidth = 2f) }
+            // ---- orbit target: shafts + dot ----
+            val px = minOf(62.dp.toPx(), minOf(size.width, size.height) * 0.28f).toDouble()
+            val geo = targetGeometry(o, size.width.toDouble(), size.height.toDouble(), px)
+            for ((kind, face) in geo.fusedFaces()) {
+                if (kind != GizmoMode.Move) continue
+                val base = axisColors[face.axis]
+                val brightness = face.brightness.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0.4f
+                val color = Color(base.red * brightness, base.green * brightness, base.blue * brightness, 1f)
+                val path = Path().apply {
+                    moveTo(face.points[0].screen.x, face.points[0].screen.y)
+                    face.points.drop(1).forEach { lineTo(it.screen.x, it.screen.y) }
+                    close()
                 }
-                for (i in 0..3) {
-                    val a = pts[i] ?: continue; val b = pts[(i + 1) % 4] ?: continue
-                    drawLine(CAMERA, a, b, strokeWidth = 3f)
-                }
-                // body: a small box just behind the eye
-                val bc = eye - fwd * (near * 0.18)
-                val ex = near * 0.16; val ey = near * 0.12; val ez = near * 0.09
-                fun bodyCorner(sz: Int, sy: Int, s: Int) = bc + fwd * (sz * ez) + rgt * (s * ex) + dwn * (sy * ey)
-                val faceNear = listOf(bodyCorner(1, -1, -1), bodyCorner(1, -1, 1), bodyCorner(1, 1, 1), bodyCorner(1, 1, -1)).map { proj.project(it)?.screen }
-                val faceFar = listOf(bodyCorner(-1, -1, -1), bodyCorner(-1, -1, 1), bodyCorner(-1, 1, 1), bodyCorner(-1, 1, -1)).map { proj.project(it)?.screen }
-                val boxAlpha = CAMERA.copy(alpha = 0.85f)
-                for (face in listOf(faceNear, faceFar)) {
-                    for (i in 0..3) {
-                        val a = face[i] ?: continue; val b = face[(i + 1) % 4] ?: continue
-                        drawLine(boxAlpha, a, b, strokeWidth = 2f)
-                    }
-                }
-                for (i in 0..3) {
-                    val a = faceNear[i] ?: continue; val b = faceFar[i] ?: continue
-                    drawLine(boxAlpha, a, b, strokeWidth = 2f)
-                }
-                // apex pivot dot
-                apex?.let { c ->
-                    drawCircle(Color.Black.copy(alpha = 0.8f), 7.dp.toPx(), c)
-                    drawCircle(CAMERA, 7.dp.toPx(), c, style = Stroke(2.dp.toPx()))
-                }
+                drawPath(path, color)
+            }
+            proj.project(target)?.let { (screen, _) ->
+                drawCircle(Color.Black.copy(alpha = 0.75f), 9.dp.toPx(), screen)
+                drawCircle(Color.White, 9.dp.toPx(), screen, style = Stroke(2.dp.toPx()))
+                drawCircle(Color.White, 3.dp.toPx(), screen)
             }
         }
     }

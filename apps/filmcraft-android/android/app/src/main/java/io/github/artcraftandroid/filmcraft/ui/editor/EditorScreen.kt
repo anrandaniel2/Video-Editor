@@ -143,7 +143,6 @@ fun EditorScreen(ed: EditorController) {
             // A single composition slot survives switching between portrait and landscape layouts.
             // Putting Draw inside each layout destroyed its VM and created a new artwork on rotation.
             if (ed.panel == Panel.Drawing) DrawingPanel(ed) { ed.panel = null }
-            if (ed.panel == Panel.Scene) SceneWorkspace(ed) { ed.panel = null }
             ed.busy?.let { BusyOverlay(it) }
         }
     }
@@ -164,7 +163,7 @@ private fun BusyOverlay(text: String) {
 @Composable
 private fun EditorWorkspace(ed: EditorController) {
     val panel = ed.panel.takeUnless {
-        it == Panel.Drawing || it == Panel.OnlineVideos || it == Panel.OnlineSounds || it is Panel.TextInput || it == Panel.Scene
+        it == Panel.Drawing || it == Panel.OnlineVideos || it == Panel.OnlineSounds || it is Panel.TextInput
     }
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         val wide = maxWidth >= 700.dp && maxWidth > maxHeight
@@ -398,6 +397,9 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                     }
                     drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
                 }
+            }
+            if (ed.panel == Panel.Scene && t != null) {
+                SceneGridOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
             }
             if (object3d && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
                 ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
