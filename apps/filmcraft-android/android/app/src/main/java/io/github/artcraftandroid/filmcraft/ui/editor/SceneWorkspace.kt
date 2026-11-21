@@ -51,7 +51,7 @@ internal fun SceneWorkspace(ed: EditorController, close: () -> Unit) {
     }
     LaunchedEffect(Unit) {
         ed.loadSceneCamera()
-        if (ed.sceneCamera == null) ed.addSceneCamera() // the render camera is there by default
+        if (ed.sceneCamera == null && !ed.sceneCameraRemoved) ed.addSceneCamera() // the render camera is there by default, unless the user took it away
         ed.loadLights()
         ed.applyScenePreviewCamera()
     }

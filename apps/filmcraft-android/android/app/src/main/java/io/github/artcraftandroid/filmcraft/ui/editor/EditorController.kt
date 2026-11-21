@@ -1095,6 +1095,10 @@ class EditorController(
     /** The sequence's scene camera; null = the classic fixed camera. */
     var sceneCamera by mutableStateOf<SceneCamera?>(null)
         private set
+    /** The user explicitly removed the camera this session — the scene workspace must not
+     *  silently put it back every time it opens. */
+    var sceneCameraRemoved by mutableStateOf(false)
+        private set
     /** The editor's orbit grid view; editor-only, bypassed on export. */
     // The setter keeps its own JVM name so it does not clash with [setSceneOrbit] below.
     @set:JvmName("setSceneOrbitBacking")
@@ -1118,6 +1122,7 @@ class EditorController(
     /** Put `cam` in the scene (journaled). During a drag, merge keeps it one edit. */
     fun setSceneCamera(cam: SceneCamera, merge: String? = null) {
         stop()
+        sceneCameraRemoved = false
         sceneCamera = cam
         val body = cam.toJson(merge)
         queueLiveEdit("scene-camera") { execute("scene.setCamera", body); Unit }
@@ -1125,6 +1130,7 @@ class EditorController(
 
     fun clearSceneCamera() {
         stop()
+        sceneCameraRemoved = true
         sceneCamera = null
         scope.launch {
             try { engine.command { execute("scene.clearCamera", "{}") } }
