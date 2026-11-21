@@ -21,8 +21,9 @@ internal fun viewFor(ed: EditorController, fw: Double, fh: Double, w: Double, h:
 /** The vertical field of view in degrees whose focal equals the frame height (classic camera). */
 internal const val CLASSIC_FOV: Double = 53.130_102
 
-/** Default orbit distance from the orbit-target point, in world units. */
-internal const val DEFAULT_ORBIT_DISTANCE: Double = 1700.0
+/** Default orbit distance from the orbit-target point, in world units. 700 puts the target at the
+ * classic camera's size on screen — the scene opens at the same scale the editor was showing. */
+internal const val DEFAULT_ORBIT_DISTANCE: Double = 700.0
 
 /**
  * The camera a sequence's 3D layers render through. `null` in the editor means the classic

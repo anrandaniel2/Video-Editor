@@ -60,6 +60,9 @@ pub struct Renderer {
     /// The editor's orbit camera for the 3D scene grid view; `None` renders the sequence's
     /// own camera. Editor-only: previews render through it while set; exports never do.
     preview_camera: std::sync::Mutex<Option<filmcraft_project::SceneCamera3D>>,
+    /// The 3D scene workspace: render only tracks participating in the 3D world (video and
+    /// adjustment layers skipped). Editor-only; exports never do.
+    solo_3d: std::sync::Mutex<bool>,
 }
 
 impl Renderer {
@@ -78,6 +81,7 @@ impl Renderer {
             rate: s.sequence_rate(),
             sample_rate: q.settings.sample_rate.max(8000),
             preview_camera: std::sync::Mutex::new(None),
+            solo_3d: std::sync::Mutex::new(false),
         })
     }
 
@@ -151,6 +155,14 @@ impl Renderer {
         }
     }
 
+    /// The 3D scene workspace renders only its own world (tracks with a 3D-affected clip at
+    /// the playhead); the video underneath is skipped. Editor-only: exports never see this.
+    pub fn set_scene_solo_3d(&self, enabled: bool) {
+        if let Ok(mut slot) = self.solo_3d.lock() {
+            *slot = enabled;
+        }
+    }
+
     /// Sample rate of [`Renderer::mix`].
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -173,10 +185,11 @@ impl Renderer {
         let scale = scale_for(self.width.max(self.height), max_side);
         let provider = self.provider();
         let preview_camera = if for_capture { None } else { self.preview_camera.lock().ok().and_then(|c| *c) };
+        let solo_3d = !for_capture && self.solo_3d.lock().map(|s| *s).unwrap_or(false);
         let img = guarded(&cancel, || {
             filmcraft_media::cancel::with_draft(draft, || {
                 filmcraft_render::with_preview_camera(preview_camera, || {
-                    filmcraft_render::render_sequence(&self.project, self.seq, t, RenderOptions { scale, captions: true, ..Default::default() }, &provider)
+                    filmcraft_render::render_sequence(&self.project, self.seq, t, RenderOptions { scale, captions: true, solo_3d, ..Default::default() }, &provider)
                 })
             })
         });

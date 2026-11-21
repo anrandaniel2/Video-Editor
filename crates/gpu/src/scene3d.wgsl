@@ -183,12 +183,16 @@ fn studio(d: vec3<f32>) -> vec3<f32> {
     }
     var color: vec3<f32>;
     if pbr {
-        // A mirror is mostly the room it sits in: reflect the studio.
+        // A mirror is mostly the room it sits in: reflect the studio. Roughness mixes
+        // between the room's average and the sharp softboxes (split-sum approximation).
         let rv = n * (2.0 * dot(n, view)) - view;
         let env_r = studio(rv);
-        let env_spec = env_r * f0 * pow(1.0 - rough, 3.0) * ao * mat.env.x;
         let irr = smooth_unit(-n.y * 0.5 + 0.5);
-        let env_diffuse = mix(vec3<f32>(0.10, 0.095, 0.09), vec3<f32>(0.52, 0.57, 0.68), irr) * base * (1.0 - metallic) * 0.55 * ao * mix(1.0, mat.env.x, 0.6);
+        let room = mix(vec3<f32>(0.10, 0.095, 0.09), vec3<f32>(0.52, 0.57, 0.68), irr);
+        let blur = (1.0 - rough) * (1.0 - rough);
+        let schlick = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - nv, 5.0);
+        let env_spec = (room * 0.45 + env_r * blur) * schlick * ao * mat.env.x;
+        let env_diffuse = room * base * (1.0 - metallic) * 0.55 * ao * mix(1.0, mat.env.x, 0.6);
         color = direct + base * (1.0 - metallic) * 0.10 * ao * scene.ambient.xyz + env_diffuse + env_spec + emit;
     } else {
         color=clamp(base*(0.28*scene.ambient.xyz+0.72*direct)+specular*mat.props.x*0.9,vec3<f32>(0.0),vec3<f32>(1.0));

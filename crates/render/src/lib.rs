@@ -98,11 +98,17 @@ pub struct RenderOptions {
     /// Return the image in the sequence's working space (HDR exports, scopes) instead of
     /// converting it for an SDR monitor. Only matters for HDR / wide-gamut sequences.
     pub working_output: bool,
+    /// Editor-only: render only the tracks whose item at `t` participates in the 3D scene
+    /// (an enabled clip carrying an enabled `object_3d` effect), so the 3D workspace shows
+    /// its world on black instead of the video underneath. A transition covering `t` whose
+    /// clips include a 3D one renders as usual. Exports, captures and thumbnails never set
+    /// this — it is a viewport convenience, not a correctness boundary.
+    pub solo_3d: bool,
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        Self { scale: 1.0, effects: true, depth: 0, captions: false, working_output: false }
+        Self { scale: 1.0, effects: true, depth: 0, captions: false, working_output: false, solo_3d: false }
     }
 }
 
@@ -212,6 +218,9 @@ pub(crate) fn render_seq_tracks(project: &Project, seq: &Sequence, t: Tick, opts
         if only.is_some_and(|o| o != ti) || (!track.enabled && only.is_none()) {
             continue;
         }
+        if opts.solo_3d && !track_has_3d(track, t) {
+            continue;
+        }
         // transition covering t?
         if let Some(tr) = track.transitions.iter().find(|tr| tr.range().contains(t)) {
             let a = tr.from.and_then(|id| track.item(id)).filter(|i| i.enabled);
@@ -294,6 +303,24 @@ pub(crate) fn render_seq_tracks(project: &Project, seq: &Sequence, t: Tick, opts
         }
     }
     canvas
+}
+
+/// Whether the track contributes to the 3D scene's world at `t`: an enabled clip carrying an
+/// enabled `object_3d` effect. A transition covering `t` counts if either of its clips does.
+fn track_has_3d(track: &filmcraft_project::Track, t: Tick) -> bool {
+    fn has_3d(i: &TrackItem) -> bool {
+        i.enabled && i.effects.iter().any(|e| e.enabled && e.effect == "object_3d")
+    }
+    if track.item_at(t).is_some_and(has_3d) {
+        return true;
+    }
+    track
+        .transitions
+        .iter()
+        .find(|tr| tr.range().contains(t))
+        .is_some_and(|tr| {
+            [tr.from, tr.to].into_iter().flatten().any(|id| track.item(id).is_some_and(has_3d))
+        })
 }
 
 fn is_adjustment(project: &Project, item: &TrackItem) -> bool {

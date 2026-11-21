@@ -1100,6 +1100,10 @@ class EditorController(
     @set:JvmName("setSceneOrbitBacking")
     var sceneOrbit by mutableStateOf(SceneOrbit.DEFAULT)
         private set
+    /** In the scene workspace, render the video underneath too (off by default: the scene
+     *  shows its own world on black). Editor-only; exports never see it. */
+    var sceneShowVideo by mutableStateOf(false)
+        private set
 
     /** Re-read the scene camera from the engine. */
     suspend fun loadSceneCamera() {
@@ -1131,8 +1135,28 @@ class EditorController(
 
     /** Editor-only: point the preview's snapshot at the orbit camera (or clear it). */
     private fun pushOrbitCamera(r: Renderer) {
-        val cam = if (panel == Panel.Scene) sceneOrbit.toCamera(sceneCamera?.fov ?: CLASSIC_FOV).toNative() else null
+        val inScene = panel == Panel.Scene
+        val cam = if (inScene) sceneOrbit.toCamera(sceneCamera?.fov ?: CLASSIC_FOV).toNative() else null
         runCatching { r.setScenePreviewCamera(cam) }
+        runCatching { r.setSceneSolo3d(inScene && !sceneShowVideo) }
+    }
+
+    /** Show/hide the video underneath the scene view. Editor-only. */
+    fun toggleSceneShowVideo() {
+        sceneShowVideo = !sceneShowVideo
+        applyScenePreviewCamera()
+    }
+
+    /** Add the 3D object without leaving the scene workspace. */
+    fun addObjectInScene(mesh: Object3DMesh) {
+        stop()
+        scope.launch {
+            try {
+                val id = engine.command { addObject3d(mesh) }
+                refresh()
+                loadObject3D(id)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+        }
     }
 
     /** Apply the orbit/clear to the live snapshot and re-render. Editor previews only. */

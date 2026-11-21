@@ -1046,14 +1046,18 @@ fn shade_pbr(n: V3, view: V3, wp: V3, p: &Params, base: [f32; 3], metallic: f32,
             direct[i] += (kd * base[i] / std::f32::consts::PI + spec) * nl * 3.0 * w * l.color[i];
         }
     }
-    // A mirror is mostly the room it sits in: reflect the studio. The sharpest reflection
-    // sits at rough 0, falling off with the cube of 1-rough; diffuse irradiance is the
-    // gradient half of the same room.
+    // A mirror is mostly the room it sits in: reflect the studio. Roughness mixes between
+    // the room's average and the sharp softboxes (the split-sum approximation), weighted by
+    // a Fresnel that respects metallic — mid-rough metals keep a broad sheen instead of
+    // falling off a cliff.
     let rv = n.mul(2.0 * n.dot(v)).sub(v);
     let env_r = studio_env(rv);
-    let env_spec = std::array::from_fn::<_, 3, _>(|i| env_r[i] * f0[i] * (1.0 - rough).powi(3) * ao * p.env_reflection);
     let irr = smooth(-n.y * 0.5 + 0.5);
-    let env_diffuse = [lerp(0.10, 0.52, irr), lerp(0.095, 0.57, irr), lerp(0.09, 0.68, irr)];
+    let room = [lerp(0.10, 0.52, irr), lerp(0.095, 0.57, irr), lerp(0.09, 0.68, irr)];
+    let blur = (1.0 - rough) * (1.0 - rough);
+    let schlick = std::array::from_fn::<_, 3, _>(|i| f0[i] + (1.0 - f0[i]) * (1.0 - nv).powi(5));
+    let env_spec = std::array::from_fn::<_, 3, _>(|i| (room[i] * 0.45 + env_r[i] * blur) * schlick[i] * ao * p.env_reflection);
+    let env_diffuse = room;
     let mut c = [0.0f32; 3];
     for i in 0..3 {
         let ambient_diffuse = base[i] * (1.0 - metallic) * 0.10 * ao * p.ambient[i];
