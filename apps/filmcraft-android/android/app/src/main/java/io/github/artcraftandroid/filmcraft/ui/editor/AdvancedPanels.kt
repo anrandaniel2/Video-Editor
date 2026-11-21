@@ -323,95 +323,6 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     }
 }
 
-/** The 3D scene: the render camera, the orbit grid view, and quick access to objects and lights. */
-@Composable
-fun ScenePanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
-    val cam = ed.sceneCamera
-    val orbit = ed.sceneOrbit
-    LaunchedEffect(Unit) { ed.loadSceneCamera(); ed.loadLights() }
-    fun cameraChange(next: SceneCamera, k: String?) = ed.setSceneCamera(next, k)
-    ToolPanel(
-        "3D Scene", close, modifier, tag = "scene_panel",
-        actions = {
-            PanelAction(LucideIcons.RotateCcw.glyph(), "Reset view", { ed.setSceneOrbit(SceneOrbit.DEFAULT) }, tag = "scene_reset_view")
-        },
-    ) {
-        // ---- scene camera ----
-        Text("Scene camera", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
-        if (cam == null) {
-            Text(
-                "No camera: the scene renders through the classic fixed camera. Add one to shoot the scene from anywhere — it becomes the render camera (the grid view never exports).",
-                style = FcType.Caption, color = Fc.Detail,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp),
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SelectChip("Add camera", false, { ed.addSceneCamera() }, tag = "scene_add_camera")
-            }
-        } else {
-            Text(
-                "The added camera is the render camera; exports render through it.",
-                style = FcType.Caption, color = Fc.Detail,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp),
-            )
-            AdvancedSlider("Camera X", cam.position[0], -2000.0, 2000.0, 1.0, "scene_cam_x") { v, k -> cameraChange(cam.copy(position = listOf(v, cam.position[1], cam.position[2])), k) }
-            AdvancedSlider("Camera Y", cam.position[1], -2000.0, 2000.0, 1.0, "scene_cam_y") { v, k -> cameraChange(cam.copy(position = listOf(cam.position[0], v, cam.position[2])), k) }
-            AdvancedSlider("Camera Z", cam.position[2], 0.0, 6000.0, 5.0, "scene_cam_z") { v, k -> cameraChange(cam.copy(position = listOf(cam.position[0], cam.position[1], v)), k) }
-            AdvancedSlider("Yaw", cam.yaw, -180.0, 180.0, 1.0, "scene_cam_yaw") { v, k -> cameraChange(cam.copy(yaw = v), k) }
-            AdvancedSlider("Pitch", cam.pitch, -180.0, 180.0, 1.0, "scene_cam_pitch") { v, k -> cameraChange(cam.copy(pitch = v), k) }
-            AdvancedSlider("Roll", cam.roll, -180.0, 180.0, 1.0, "scene_cam_roll") { v, k -> cameraChange(cam.copy(roll = v), k) }
-            AdvancedSlider("Field of view", cam.fov, 10.0, 120.0, 1.0, "scene_cam_fov") { v, k -> cameraChange(cam.copy(fov = v), k) }
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SelectChip("Remove camera", false, { ed.clearSceneCamera() }, tag = "scene_remove_camera")
-            }
-        }
-        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
-
-        // ---- grid view (orbit) ----
-        Text("Grid view", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
-        Text(
-            "Editing the scene shows the grid. Drag the preview to orbit around the dot; pinch to dolly. Drag the dot's shafts to move the orbit target.",
-            style = FcType.Caption, color = Fc.Detail,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp),
-        )
-        AdvancedSlider("Target X", orbit.target[0], -2000.0, 2000.0, 5.0, "scene_target_x") { v, _ -> ed.setSceneOrbit(orbit.copy(target = listOf(v, orbit.target[1], orbit.target[2]))) }
-        AdvancedSlider("Target Y", orbit.target[1], -2000.0, 2000.0, 5.0, "scene_target_y") { v, _ -> ed.setSceneOrbit(orbit.copy(target = listOf(orbit.target[0], v, orbit.target[2]))) }
-        AdvancedSlider("Target Z", orbit.target[2], 1.0, 3000.0, 10.0, "scene_target_z") { v, _ -> ed.setSceneOrbit(orbit.copy(target = listOf(orbit.target[0], orbit.target[1], v))) }
-        AdvancedSlider("Yaw", orbit.yaw, -180.0, 180.0, 1.0, "scene_orbit_yaw") { v, _ -> ed.setSceneOrbit(orbit.copy(yaw = v)) }
-        AdvancedSlider("Pitch", orbit.pitch, -85.0, 85.0, 1.0, "scene_orbit_pitch") { v, _ -> ed.setSceneOrbit(orbit.copy(pitch = v)) }
-        AdvancedSlider("Distance", orbit.distance, 300.0, 4200.0, 10.0, "scene_orbit_distance") { v, _ -> ed.setSceneOrbit(orbit.copy(distance = v)) }
-        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
-
-        // ---- objects ----
-        Text("3D objects", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
-        Text(
-            "Objects and text are added as 3D layers on the timeline and keep the fused transform gizmo.",
-            style = FcType.Caption, color = Fc.Detail,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 4.dp),
-        )
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SelectChip("Add 3D object", false, { ed.addObject(Object3DMesh.CUBE) }, tag = "scene_add_object")
-        }
-        HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
-
-        // ---- lights ----
-        Text("Lights", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
-        val n = ed.sceneLights.lights.size
-        Text(
-            if (n == 0) "No lights yet: 3D objects use their classic light." else if (n == 1) "1 light in the scene." else "$n lights in the scene.",
-            style = FcType.Caption, color = Fc.Detail,
-            modifier = Modifier.padding(horizontal = FcSize.PanelPadding, vertical = 2.dp),
-        )
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SelectChip("+ Directional", false, { ed.addLight("directional") { ed.selectedLightId = it } }, tag = "scene_add_directional")
-            SelectChip("+ Point", false, { ed.addLight("point") { ed.selectedLightId = it } }, tag = "scene_add_point")
-            SelectChip("+ Spot", false, { ed.addLight("spot") { ed.selectedLightId = it } }, tag = "scene_add_spot")
-            SelectChip("Lights →", ed.panel == Panel.Lights, { ed.panel = Panel.Lights }, tag = "scene_open_lights")
-        }
-        Spacer(Modifier.height(12.dp))
-    }
-}
-
 /**
  * A labelled dropdown. Long lists (the phone can have hundreds of fonts) get a search field and
  * scroll; the current value stays visible on the closed row. Shared by the 3D panel and the
@@ -632,7 +543,7 @@ fun BackgroundPanel(ed: EditorController, close: () -> Unit, modifier: Modifier 
 }
 
 @Composable
-private fun AdvancedSlider(
+internal fun AdvancedSlider(
     label: String, value: Double, min: Double, max: Double, step: Double, tag: String,
     onChange: (Double, String?) -> Unit,
 ) {

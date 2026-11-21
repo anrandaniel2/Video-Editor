@@ -9,25 +9,24 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import kotlin.math.*
 
-private val axisColors = listOf(Color(0xFFFF6575), Color(0xFF6FE295), Color(0xFF669FFF))
 private const val GRID_HALF = 2000.0
 private const val GRID_STEP = 100.0
 private const val GRID_MAJOR = 500.0
 private const val GRID_CENTER_Z = 700.0
+private val CAMERA = Color(0xFFFFC947)
 
 /**
- * The scene editor's 3D space: a floor grid through the orbit target's height, the world
- * axes, and the orbit-target point (a dot with the fused move gizmo). Drag empty space to
- * orbit the camera around it, pinch to dolly, drag the dot's shafts to move it. The camera
- * never moves unless the user touches the screen. Editor-only overlay; hit-testing uses the
- * same projection as the render.
+ * The scene editor's 3D space: a floor grid through the orbit target's height and the world
+ * axes. Drag empty space to orbit the view around the scene; pinch with two fingers to dolly.
+ * The render camera, when the scene has one, is drawn as a frustum with a body box so it can
+ * be seen — the camera object is shaped like a camera, and nothing on screen needs explaining.
+ * Editor-only overlay; the orbit view never reaches an export.
  */
 @Composable
 internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifier: Modifier = Modifier) {
@@ -38,87 +37,52 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
         return ViewProjection(GizmoVec(o.target[0], o.target[1], o.target[2]), o.yaw, o.pitch, 0.0, fov, fw.toDouble(), fh.toDouble(), w, h, o.distance)
     }
 
-    fun targetGeometry(o: SceneOrbit, w: Double, h: Double, px: Double): GizmoGeometry =
-        GizmoGeometry(GizmoPose(o.target[0], o.target[1], o.target[2]), null, fw.toDouble(), fh.toDouble(), w, h, px, projection(o, w, h), poseIsWorld = true)
-
     Box(modifier.fillMaxSize().testTag("scene_grid")) {
         Canvas(Modifier.fillMaxSize().pointerInput(fw, fh) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 if (down.isConsumed) return@awaitEachGesture // an object's handle got it first
-                val w = size.width.toDouble(); val h = size.height.toDouble()
-                val px = minOf(62.dp.toPx(), minOf(size.width, size.height) * 0.28f).toDouble()
                 val startOrbit = orbit
-                val geo = targetGeometry(startOrbit, w, h, px)
-                val handle = geo.hitGizmo(down.position, 16.dp.toPx(), setOf(GizmoMode.Move))
-                if (handle != null) {
-                    ed.stop()
-                    down.consume()
-                    var previous = down.position
-                    var total = Offset.Zero
-                    var changed = false
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        if (event.changes.count { it.pressed } > 1) break
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) { change.consume(); break }
-                        val delta = change.position - previous; previous = change.position; total += delta
-                        if (!changed && total.getDistance() < viewConfiguration.touchSlop) continue
-                        val tangent = geo.tangent(handle.axis)
-                        val len = tangent.x * tangent.x + tangent.y * tangent.y
-                        val drag = if (changed) delta else total
-                        val amount = if (len > 0.0001f) ((drag.x * tangent.x + drag.y * tangent.y) / len).toDouble() else -drag.y * geo.radius / 64.0
-                        val p = orbit.target.toMutableList()
-                        p[handle.axis] += amount
-                        if (handle.axis == 2) p[2] = p[2].coerceAtLeast(1.0)
-                        ed.setSceneOrbit(orbit.copy(target = p))
-                        changed = true
-                        change.consume()
-                    }
-                    ed.applyScenePreviewCamera()
-                } else {
-                    // empty space: orbit the camera; two fingers dolly toward/away
-                    down.consume()
-                    var previous = down.position
-                    var multi = false
-                    var totalDx = 0f
-                    var totalDy = 0f
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val fingers = event.changes.count { it.pressed }
-                        if (fingers == 0) break
-                        if (fingers >= 2) {
-                            multi = true
-                            val zoom = event.calculateZoom()
-                            if (zoom != 1f) {
-                                val next = (orbit.distance / zoom).coerceIn(300.0, 4200.0)
-                                ed.setSceneOrbit(orbit.copy(distance = next))
-                            }
-                            event.changes.forEach { it.consume() }
-                            event.changes.firstOrNull { it.pressed }?.let { previous = it.position }
-                            continue
+                // empty space: orbit the view; two fingers dolly toward/away
+                down.consume()
+                var previous = down.position
+                var multi = false
+                var totalDx = 0f
+                var totalDy = 0f
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val fingers = event.changes.count { it.pressed }
+                    if (fingers == 0) break
+                    if (fingers >= 2) {
+                        multi = true
+                        val zoom = event.calculateZoom()
+                        if (zoom != 1f) {
+                            val next = (orbit.distance / zoom).coerceIn(300.0, 4200.0)
+                            ed.setSceneOrbit(orbit.copy(distance = next))
                         }
-                        if (multi) continue
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) { change.consume(); break }
-                        val delta = change.position - previous
-                        previous = change.position
-                        totalDx += delta.x; totalDy += delta.y
-                        ed.setSceneOrbit(orbit.copy(
-                            yaw = startOrbit.yaw + totalDx * 0.35,
-                            pitch = (startOrbit.pitch - totalDy * 0.35).coerceIn(-85.0, 85.0),
-                        ))
-                        change.consume()
+                        event.changes.forEach { it.consume() }
+                        event.changes.firstOrNull { it.pressed }?.let { previous = it.position }
+                        continue
                     }
-                    ed.applyScenePreviewCamera()
+                    if (multi) continue
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) { change.consume(); break }
+                    val delta = change.position - previous
+                    previous = change.position
+                    totalDx += delta.x; totalDy += delta.y
+                    ed.setSceneOrbit(orbit.copy(
+                        yaw = startOrbit.yaw + totalDx * 0.35,
+                        pitch = (startOrbit.pitch - totalDy * 0.35).coerceIn(-85.0, 85.0),
+                    ))
+                    change.consume()
                 }
+                ed.applyScenePreviewCamera()
             }
         }) {
             if (size.width <= 0f || size.height <= 0f || fw <= 0f || fh <= 0f) return@Canvas
             val o = orbit
             val proj = projection(o, size.width.toDouble(), size.height.toDouble())
-            val target = GizmoVec(o.target[0], o.target[1], o.target[2])
-            val baseY = target.y
+            val baseY = o.target[1]
 
             // ---- floor grid ----
             val steps = (GRID_HALF * 2 / GRID_STEP).toInt()
@@ -141,36 +105,55 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
                     drawLine(Color.White.copy(alpha = alphaZ), a, b, strokeWidth = if (isMajorZ) 2f else 1f)
                 }
             }
-            // world axes: x (red) and z (blue) through the origin, y (green) vertical through the target
+            // world axes: x (red) and z (blue) through the origin
             line(GizmoVec(-GRID_HALF, baseY, 0.0), GizmoVec(GRID_HALF, baseY, 0.0))?.let { (a, b) ->
                 drawLine(Color(0xFFFF6575).copy(alpha = 0.55f), a, b, strokeWidth = 3f)
             }
             line(GizmoVec(0.0, baseY, GRID_CENTER_Z - GRID_HALF), GizmoVec(0.0, baseY, GRID_CENTER_Z + GRID_HALF))?.let { (a, b) ->
                 drawLine(Color(0xFF669FFF).copy(alpha = 0.55f), a, b, strokeWidth = 3f)
             }
-            line(GizmoVec(target.x, baseY - 1200.0, target.z), GizmoVec(target.x, baseY + 1200.0, target.z))?.let { (a, b) ->
-                drawLine(Color(0xFF6FE295).copy(alpha = 0.35f), a, b, strokeWidth = 2f)
-            }
 
-            // ---- orbit target: shafts + dot ----
-            val px = minOf(62.dp.toPx(), minOf(size.width, size.height) * 0.28f).toDouble()
-            val geo = targetGeometry(o, size.width.toDouble(), size.height.toDouble(), px)
-            for ((kind, face) in geo.fusedFaces()) {
-                if (kind != GizmoMode.Move) continue
-                val base = axisColors[face.axis]
-                val brightness = face.brightness.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0.4f
-                val color = Color(base.red * brightness, base.green * brightness, base.blue * brightness, 1f)
-                val path = Path().apply {
-                    moveTo(face.points[0].screen.x, face.points[0].screen.y)
-                    face.points.drop(1).forEach { lineTo(it.screen.x, it.screen.y) }
-                    close()
+            // ---- the render camera, as an object: a frustum with a body box ----
+            val cam = camera
+            if (cam != null) {
+                val eye = GizmoVec(cam.position[0], cam.position[1], cam.position[2])
+                val fwd = GizmoVec(0.0, 0.0, 1.0).rotate(cam.pitch, cam.yaw, cam.roll)
+                val rgt = GizmoVec(1.0, 0.0, 0.0).rotate(cam.pitch, cam.yaw, cam.roll)
+                val dwn = GizmoVec(0.0, 1.0, 0.0).rotate(cam.pitch, cam.yaw, cam.roll)
+                val near = fw.toDouble() * 0.13
+                val halfH = tan(Math.toRadians(cam.fov) / 2.0) * near
+                val halfW = halfH * (fw.toDouble() / fh.toDouble())
+                val corners = listOf(
+                    eye + fwd * near - rgt * halfW - dwn * halfH,
+                    eye + fwd * near + rgt * halfW - dwn * halfH,
+                    eye + fwd * near + rgt * halfW + dwn * halfH,
+                    eye + fwd * near - rgt * halfW + dwn * halfH,
+                )
+                fun frustumLine(a: GizmoVec, b: GizmoVec, width: Float, color: Color) {
+                    val pa = proj.project(a)?.screen; val pb = proj.project(b)?.screen
+                    if (pa != null && pb != null) drawLine(color, pa, pb, strokeWidth = width)
                 }
-                drawPath(path, color)
-            }
-            proj.project(target)?.let { (screen, _) ->
-                drawCircle(Color.Black.copy(alpha = 0.75f), 9.dp.toPx(), screen)
-                drawCircle(Color.White, 9.dp.toPx(), screen, style = Stroke(2.dp.toPx()))
-                drawCircle(Color.White, 3.dp.toPx(), screen)
+                // lens lines from the eye to the near plane
+                for (c in corners) frustumLine(eye, c, 2f, CAMERA.copy(alpha = 0.6f))
+                // the near rectangle
+                for (i in 0..3) frustumLine(corners[i], corners[(i + 1) % 4], 3f, CAMERA)
+                // the body: a small box just behind the eye
+                val bc = eye - fwd * (near * 0.18)
+                val ex = near * 0.16; val ey = near * 0.12; val ez = near * 0.09
+                fun bodyCorner(sz: Int, sy: Int, s: Int) = bc + fwd * (sz * ez) + rgt * (s * ex) + dwn * (sy * ey)
+                val faceNear = listOf(bodyCorner(1, -1, -1), bodyCorner(1, -1, 1), bodyCorner(1, 1, 1), bodyCorner(1, 1, -1))
+                val faceFar = listOf(bodyCorner(-1, -1, -1), bodyCorner(-1, -1, 1), bodyCorner(-1, 1, 1), bodyCorner(-1, 1, -1))
+                val bodyColor = CAMERA.copy(alpha = 0.85f)
+                for (i in 0..3) {
+                    frustumLine(faceNear[i], faceNear[(i + 1) % 4], 2f, bodyColor)
+                    frustumLine(faceFar[i], faceFar[(i + 1) % 4], 2f, bodyColor)
+                    frustumLine(faceNear[i], faceFar[i], 2f, bodyColor)
+                }
+                // a dot at the pivot: the body apex, not an orbit marker
+                proj.project(eye)?.screen?.let { apex ->
+                    drawCircle(Color.Black.copy(alpha = 0.85f), 7.dp.toPx(), apex)
+                    drawCircle(CAMERA, 7.dp.toPx(), apex, style = Stroke(2.dp.toPx()))
+                }
             }
         }
     }

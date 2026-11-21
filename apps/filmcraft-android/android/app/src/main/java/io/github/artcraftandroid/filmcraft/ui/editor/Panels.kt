@@ -84,7 +84,6 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Opacity -> clip?.let { OpacityPanel(ed, it, close, modifier) }
         Panel.Mask -> clip?.let { MaskPanel(ed, close, modifier) }
         Panel.Object3D -> Object3DPanel(ed, close, modifier)
-        Panel.Scene -> ScenePanel(ed, close, modifier)
         Panel.Lights -> LightsPanel(ed, close, modifier)
         Panel.Keyframes -> KeyframesPanel(ed, close, modifier)
         Panel.Tracking -> clip?.let { TrackingPanel(ed, close, modifier) }
@@ -97,6 +96,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Voiceover -> VoiceoverPanel(ed, close, modifier)
         Panel.Captions -> CaptionsPanel(ed, close, modifier)
         is Panel.Speech -> SpeechPanel(ed, panel, close, modifier)
+        Panel.Scene -> {} // the scene is served by the scene bar, not a floating panel
         is Panel.TextInput -> {}
     }
     LaunchedEffect(panel, clip?.id) {
@@ -106,7 +106,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         if (panel != Panel.Background && panel != Panel.Tracking) ed.resetAdvancedTools()
     }
     // a panel whose clip went away closes
-    val standalone = panel == Panel.OnlineVideos || panel == Panel.Lights || panel == Panel.OnlineSounds || panel == Panel.Drawing || panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D || panel == Panel.Scene
+    val standalone = panel == Panel.OnlineVideos || panel == Panel.Lights || panel == Panel.OnlineSounds || panel == Panel.Drawing || panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D
     if (clip == null && !standalone) {
         LaunchedEffect(Unit) { ed.panel = null }
     }

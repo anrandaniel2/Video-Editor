@@ -163,7 +163,7 @@ private fun BusyOverlay(text: String) {
 @Composable
 private fun EditorWorkspace(ed: EditorController) {
     val panel = ed.panel.takeUnless {
-        it == Panel.Drawing || it == Panel.OnlineVideos || it == Panel.OnlineSounds || it is Panel.TextInput
+        it == Panel.Drawing || it == Panel.OnlineVideos || it == Panel.OnlineSounds || it is Panel.TextInput || it == Panel.Scene
     }
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         val wide = maxWidth >= 700.dp && maxWidth > maxHeight
@@ -189,6 +189,7 @@ private fun EditorWorkspace(ed: EditorController) {
                     Timeline(ed, Modifier.fillMaxWidth().weight(1f - split))
                 }
             }
+            if (ed.panel == Panel.Scene) SceneBar(ed)
             val input = ed.panel as? Panel.TextInput
             if (input != null) TextInputStrip(ed, input) else EditorToolbar(ed)
         }
@@ -235,7 +236,7 @@ private fun WorkspaceBar(ed: EditorController) {
         NativeAction(LucideIcons.X.glyph(), "Save and return to Projects", false) { ed.closeEditor() }
         NativeAction(LucideIcons.ChartSpline.glyph(), "Keyframes", ed.panel == Panel.Keyframes) { if (ed.selectedClip != null) ed.panel = Panel.Keyframes }
         NativeAction(LucideIcons.WandSparkles.glyph(), "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) ed.panel = Panel.Effects }
-        NativeAction(Glyphs.Object3D, "3D Scene", ed.panel == Panel.Scene) { ed.panel = Panel.Scene }
+        NativeAction(Glyphs.Object3D, "3D Scene", ed.panel == Panel.Scene) { ed.panel = if (ed.panel == Panel.Scene) null else Panel.Scene }
         Spacer(Modifier.weight(1f))
         NativeAction(LucideIcons.Paintbrush.glyph(), "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
         NativeAction(LucideIcons.Share2.glyph(), "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
