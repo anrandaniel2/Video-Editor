@@ -98,7 +98,7 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
                         val len = t.x * t.x + t.y * t.y
                         return if (len > 0.0001f) ((drag.x * t.x + drag.y * t.y) / len).toDouble() else 0.0
                     }
-                    var pos = camPos0
+                    var pos = camPos0!!
                     var previous = down.position
                     var total = Offset.Zero
                     var changed = false
@@ -110,7 +110,9 @@ internal fun SceneGridOverlay(ed: EditorController, fw: Float, fh: Float, modifi
                         val delta = change.position - previous; previous = change.position; total += delta
                         if (!changed && total.getDistance() < viewConfiguration.touchSlop) continue
                         val drag = if (changed) delta else total
-                        pos = pos + rgt * amountOf(drag, tangentOf(rgt, pos)) + dwn * amountOf(drag, tangentOf(dwn, pos))
+                        val tangentRgt = tangentOf(rgt, pos); val tangentDwn = tangentOf(dwn, pos)
+                        val moveR = amountOf(drag, tangentRgt); val moveD = amountOf(drag, tangentDwn)
+                        pos = pos + rgt * moveR + dwn * moveD
                         ed.setSceneCamera(startCam.copy(position = listOf(pos.x, pos.y, pos.z)), "scene-camera-drag")
                         changed = true
                         change.consume()

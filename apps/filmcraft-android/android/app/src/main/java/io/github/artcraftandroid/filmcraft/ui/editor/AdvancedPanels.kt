@@ -543,7 +543,7 @@ fun BackgroundPanel(ed: EditorController, close: () -> Unit, modifier: Modifier 
 }
 
 @Composable
-private fun AdvancedSlider(
+internal fun AdvancedSlider(
     label: String, value: Double, min: Double, max: Double, step: Double, tag: String,
     onChange: (Double, String?) -> Unit,
 ) {

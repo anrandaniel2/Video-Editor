@@ -96,6 +96,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Voiceover -> VoiceoverPanel(ed, close, modifier)
         Panel.Captions -> CaptionsPanel(ed, close, modifier)
         is Panel.Speech -> SpeechPanel(ed, panel, close, modifier)
+        Panel.Scene -> {} // the 3D scene is a full-screen workspace, reached from the toolbar
         is Panel.TextInput -> {}
     }
     LaunchedEffect(panel, clip?.id) {
