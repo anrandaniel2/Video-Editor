@@ -67,6 +67,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -189,9 +190,8 @@ private fun EditorWorkspace(ed: EditorController) {
                     Timeline(ed, Modifier.fillMaxWidth().weight(1f - split))
                 }
             }
-            if (ed.panel == Panel.Scene) SceneBar(ed)
             val input = ed.panel as? Panel.TextInput
-            if (input != null) TextInputStrip(ed, input) else EditorToolbar(ed)
+            if (input != null) TextInputStrip(ed, input) else if (ed.panel == Panel.Scene) SceneBar(ed) else EditorToolbar(ed)
         }
         if (panel != null) {
             Box(Modifier.align(Alignment.BottomEnd).padding(end = if (wide) 12.dp else 0.dp, bottom = FcSize.ToolTile + 20.dp)
@@ -300,6 +300,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
         Box(
             Modifier
                 .size(boxW, boxH)
+                .clipToBounds()
                 .border(1.dp, Fc.Raised)
                 .pointerInput(sel?.id, movable, object3d, ed.panel, t?.width, t?.height) {
                     if (masking || advanced || ed.panel == Panel.Lights || ed.panel == Panel.Scene || ed.panel is Panel.TextInput) return@pointerInput
@@ -402,7 +403,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
             if (ed.panel == Panel.Scene && t != null) {
                 SceneGridOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
             }
-            if (object3d && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
+            if (object3d && ed.panel != Panel.Scene && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
                 ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
             }
             if (ed.panel == Panel.Lights && t != null) {
