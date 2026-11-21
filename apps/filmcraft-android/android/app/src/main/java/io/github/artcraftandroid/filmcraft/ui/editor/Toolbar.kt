@@ -65,7 +65,7 @@ fun EditorToolbar(ed: EditorController, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modifier: Modifier) {
+internal fun ToolRow(tools: List<Tool>, back: (() -> Unit)?, deep: Boolean, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier.fillMaxWidth().padding(horizontal = 12.dp).height(FcSize.ToolTile + 12.dp), contentAlignment = Alignment.Center) {
         val backWidth = if (back != null) 44.dp else 0.dp
         val wanted = FcSize.ToolTile * tools.size + backWidth + 24.dp
