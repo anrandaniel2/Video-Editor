@@ -186,3 +186,57 @@ Not verified, on the record:
 - **The WGSL studio environment and PBR fragment** were eyeballed against the CPU path for
   parity (same studio function constants, same scene-camera branch, `env` uniform), not
   pixel-diffed on a device.
+
+## The 3D scene rework (appended 2026-11-20, later)
+
+The six complaints against the scene bundle were addressed in one pass. Verified by the same
+CI system, on [run 44851213538](https://github.com/anrandaniel2/Video-Editor/actions/runs/44851213538)
+(head `ea0e0ef`; two fix commits after the main commit `0999d78` — a nested-sequence
+`RenderOptions` literal missing `solo_3d`, Kotlin visibility/exhaustiveness/nullability errors
+in the scene UI, and a session flag so an explicit camera removal is not undone on the next
+open). Both jobs green; the tag-gated GitHub Release job skipped as designed.
+
+1. **The 3D scene is a full-screen workspace, not a floating popup** (`SceneWorkspace.kt`):
+   the Draw pattern — black viewport with the frame fitted (the editor's `previewSide` now
+   tracks the fitted frame), a top bar (close, undo/redo, reset view, a Video toggle chip) and
+   a bottom bar with one-tap add for every mesh kind, the three light kinds, a Lights
+   shortcut and a Camera toggle that expands a render-camera strip (X/Y/Z, yaw, pitch, focal
+   field-of-view, Remove camera). The video underneath is **not rendered at all** unless the
+   Video chip is on — `RenderOptions::solo_3d` renders only tracks whose clip carries an
+   enabled `object_3d` effect at that time (transitions count via both clips; nested sequences
+   never solo — they render with `working_output: true`), applied in `frame_still` only and
+   never on capture/export paths. The full-screen surface is opaque, so no video or editor
+   chrome shows through or over the scene.
+2. **The orbit-target dot is gone.** The rewritten `SceneGridOverlay.kt` draws a floor grid,
+   the world axes, and the scene camera as a grabbable frustum with a body box and an apex
+   pivot dot (the grab handle, not a target marker). Dragging the frustum moves the render
+   camera on the view's tangent plane (the tangent is re-evaluated at each position); empty
+   space orbits; two fingers dolly toward/away (floor 150 units).
+3. **Opening the scene no longer shrinks everything.** The orbit opens at
+   `DEFAULT_ORBIT_DISTANCE = 700` — the default object z, where the classic camera (focal =
+   frame height ⇔ `CLASSIC_FOV`) and the orbit preview agree on size. A pure orbit never
+   changes scale by construction (distance is constant during a drag); the whole-frame Picture
+   is drawn 1:1 in the fitted viewport with no scale transform.
+4. **Roughness and metalness are real.** Both shading paths (CPU rasteriser and WGSL) use a
+   split-sum environment response — the studio room's irradiance at the rough end, the
+   softboxes smeared by roughness at the sharp end, weighted by a metallic-aware Schlick
+   Fresnel — and the Surface tab shows a live `MaterialOrb` preview beside the sliders (metals
+   tint the reflection and lose diffuse; roughness spreads the highlight).
+5. **The render camera exists by default** (auto-added on first open of the workspace, fov =
+   `CLASSIC_FOV`, position = the classic camera; journaled so it is undoable) **and is visible
+   as an object** — the frustum above, plus the Camera strip. (Exception: if the user removed
+   it this session, it stays removed.)
+6. **The scene panel is deleted**; the toolbar entry opens the workspace. `Panel.Scene` is
+   kept only as the workspace's state token. `ScenePanel` no longer exists.
+
+Not verified, on the record:
+
+- **On-device anything.** Still no phone: workspace layout, frustum grabbing while orbiting,
+  solo-render output (only-3D tracks on black) and the live material orb are compile- and
+  review-verified only. The solo path has no unit test pinning which tracks vanish.
+- **The WGSL studio environment and split-sum terms** remain visual parity by review with the
+  CPU path, not a device pixel-diff.
+- **`draw_variant()` renders without `solo_3d`** — variant/still thumbnails may include the
+  video under the scene; the capture/export path deliberately never solos.
+- **CPU/WGSL object3d changes** compile in CI; the Rust suite passes but has no PBR-output
+  assertions.
