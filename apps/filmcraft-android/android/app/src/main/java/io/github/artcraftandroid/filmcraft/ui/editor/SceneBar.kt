@@ -41,8 +41,8 @@ internal fun SceneBar(ed: EditorController) {
             add(Tool("scene_bar_add_${mesh.name.lowercase()}", "+ $label", Glyphs.Object3D) { ed.addObjectInScene(mesh) })
         }
         add(Tool("scene_bar_add_directional", "+ Directional", LucideIcons.Sun.glyph()) { ed.addLight("directional") })
-        add(Tool("scene_bar_add_point", "+ Point", LucideIcons.Circle.glyph()) { ed.addLight("point") })
-        add(Tool("scene_bar_add_spot", "+ Spot", LucideIcons.Flashlight.glyph()) { ed.addLight("spot") })
+        add(Tool("scene_bar_add_point", "+ Point", LucideIcons.Sun.glyph()) { ed.addLight("point") })
+        add(Tool("scene_bar_add_spot", "+ Spot", LucideIcons.Sun.glyph()) { ed.addLight("spot") })
         add(Tool("scene_open_lights", "Lights", LucideIcons.Sun.glyph()) { ed.panel = Panel.Lights })
         add(Tool("scene_camera_toggle", "Camera", Glyphs.Object3D, active = cameraStrip) { cameraStrip = !cameraStrip })
         add(Tool("scene_show_video", if (ed.sceneShowVideo) "Hide video" else "Show video", LucideIcons.Film.glyph(), active = ed.sceneShowVideo) { ed.toggleSceneShowVideo() })
