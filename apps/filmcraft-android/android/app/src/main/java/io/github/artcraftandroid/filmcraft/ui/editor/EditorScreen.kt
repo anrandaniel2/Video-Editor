@@ -402,11 +402,12 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
             }
             if (ed.panel == Panel.Scene && t != null) {
                 SceneGridOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
+                CameraGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
             }
             if (object3d && ed.panel != Panel.Scene && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
                 ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
             }
-            if (ed.panel == Panel.Lights && t != null) {
+            if ((ed.panel == Panel.Lights || ed.panel == Panel.Scene) && t != null) {
                 LightGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat())
             }
             val maskState = ed.maskState

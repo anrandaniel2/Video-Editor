@@ -80,9 +80,61 @@ internal fun LightGizmoOverlay(ed: EditorController, fw: Float, fh: Float) {
             lights.forEach { light ->
                 val geo = geometry(light, size.width.toDouble(), size.height.toDouble(), pixels)
                 val centre = geo.centre; val selected = light.id == ed.selectedLightId
-                drawCircle(Color.Black.copy(alpha = .8f), 12.dp.toPx(), centre)
-                drawCircle(Color.White, 10.dp.toPx(), centre, style = Stroke(2.dp.toPx()))
-                drawCircle(Color(light.color[0], light.color[1], light.color[2], if (light.enabled) 1f else .35f), 7.dp.toPx(), centre)
+                val tint = Color(light.color[0], light.color[1], light.color[2], if (light.enabled) .78f else .3f)
+                val origin = GizmoVec(light.position[0] - fw.toDouble() / 2.0, light.position[1] - fh.toDouble() / 2.0, light.position[2])
+                fun screen(p: GizmoVec) = viewFor(ed, fw.toDouble(), fh.toDouble(), size.width.toDouble(), size.height.toDouble())?.project(p)?.screen
+                    ?: run {
+                        if (p.z <= 1.0) null else Offset(((fw.toDouble() / 2 + fh.toDouble() * p.x / p.z) * size.width / fw).toFloat(), ((fh.toDouble() / 2 + fh.toDouble() * p.y / p.z) * size.height / fh).toFloat())
+                    }
+                if (light.kind == "point") {
+                    val r = (light.range.takeIf { it > 0.0 } ?: 180.0).coerceIn(30.0, 2000.0)
+                    val bases = listOf(GizmoVec(1.0,0.0,0.0) to GizmoVec(0.0,1.0,0.0), GizmoVec(1.0,0.0,0.0) to GizmoVec(0.0,0.0,1.0), GizmoVec(0.0,1.0,0.0) to GizmoVec(0.0,0.0,1.0))
+                    for ((u, v) in bases) {
+                        var prev: Offset? = null
+                        for (i in 0..32) {
+                            val a = i * 2.0 * Math.PI / 32.0
+                            val next = screen(origin + u * (cos(a) * r) + v * (sin(a) * r))
+                            if (prev != null && next != null) drawLine(tint.copy(alpha = .6f), prev!!, next, strokeWidth = 1.5f)
+                            prev = next
+                        }
+                    }
+                } else {
+                    val angle = Math.toRadians(light.angle)
+                    val elev = Math.toRadians(light.elevation)
+                    val axis = GizmoVec(cos(angle) * cos(elev), sin(angle) * cos(elev), -sin(elev)).unit()
+                    val length = (light.range.takeIf { it > 0.0 } ?: 600.0).coerceIn(80.0, 3000.0)
+                    val halfAngle = Math.toRadians(if (light.kind == "spot") light.cone.coerceIn(1.0, 89.0) else 8.0)
+                    val radius = tan(halfAngle) * length
+                    val reference = if (abs(axis.y) < .9) GizmoVec(0.0,1.0,0.0) else GizmoVec(1.0,0.0,0.0)
+                    val u = axis.cross(reference).unit(); val v = axis.cross(u).unit()
+                    var prev: Offset? = null
+                    for (i in 0..32) {
+                        val a = i * 2.0 * Math.PI / 32.0
+                        val ring = origin + axis * length + u * (cos(a) * radius) + v * (sin(a) * radius)
+                        val next = screen(ring)
+                        if (prev != null && next != null) drawLine(tint.copy(alpha = .65f), prev!!, next, strokeWidth = 1.5f)
+                        prev = next
+                    }
+                    for (i in 0 until 8) {
+                        val a = i * 2.0 * Math.PI / 8.0
+                        val edge = origin + axis * length + u * (cos(a) * radius) + v * (sin(a) * radius)
+                        val p0 = screen(origin); val p1 = screen(edge)
+                        if (p0 != null && p1 != null) drawLine(tint.copy(alpha = .48f), p0, p1, strokeWidth = 1.25f)
+                    }
+                }
+                // A tiny 3D wireframe body marks the source; unlike the old flat dot, the beam/range
+                // volume is the primary light affordance and updates live with range/cone settings.
+                val bodyR = 10.0
+                val body = listOf(GizmoVec(1.0,0.0,0.0) to GizmoVec(0.0,1.0,0.0), GizmoVec(1.0,0.0,0.0) to GizmoVec(0.0,0.0,1.0), GizmoVec(0.0,1.0,0.0) to GizmoVec(0.0,0.0,1.0))
+                body.forEach { (u, v) ->
+                    var prev: Offset? = null
+                    for (i in 0..16) {
+                        val a = i * 2.0 * Math.PI / 16.0
+                        val next = screen(origin + u * (cos(a) * bodyR) + v * (sin(a) * bodyR))
+                        if (prev != null && next != null) drawLine(tint, prev!!, next, strokeWidth = 2f)
+                        prev = next
+                    }
+                }
                 if (selected) for ((kind, face) in geo.fusedFaces()) {
                     val base = colors[face.axis]; val brightness = if (active?.kind == kind && active?.axis == face.axis) 1f else face.brightness
                     val color = Color(base.red * brightness, base.green * brightness, base.blue * brightness, if (kind == GizmoMode.Rotate && face.behind) .4f else 1f)
