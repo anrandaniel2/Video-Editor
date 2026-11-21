@@ -187,56 +187,54 @@ Not verified, on the record:
   parity (same studio function constants, same scene-camera branch, `env` uniform), not
   pixel-diffed on a device.
 
-## The 3D scene rework (appended 2026-11-20, later)
+## The 3D scene rework (appended 2026-11-20, superseded)
 
-The six complaints against the scene bundle were addressed in one pass. Verified by the same
-CI system, on [run 44851213538](https://github.com/anrandaniel2/Video-Editor/actions/runs/44851213538)
-(head `ea0e0ef`; two fix commits after the main commit `0999d78` — a nested-sequence
-`RenderOptions` literal missing `solo_3d`, Kotlin visibility/exhaustiveness/nullability errors
-in the scene UI, and a session flag so an explicit camera removal is not undone on the next
-open). Both jobs green; the tag-gated GitHub Release job skipped as designed.
+The first pass took the scene full-screen and is on the branch history for reference: it was
+wrong, and it broke the editor's drag interactions. It was reverted in `e2efb27`
+("Revert the scene workspace..."). What replaced it is
+[run 44861393832](https://github.com/anrandaniel2/Video-Editor/actions/runs/44861393832)
+(head `2ec910d`), fully green (Rust tests + APK; the tag-gated GitHub Release job skipped as
+designed).
 
-1. **The 3D scene is a full-screen workspace, not a floating popup** (`SceneWorkspace.kt`):
-   the Draw pattern — black viewport with the frame fitted (the editor's `previewSide` now
-   tracks the fitted frame), a top bar (close, undo/redo, reset view, a Video toggle chip) and
-   a bottom bar with one-tap add for every mesh kind, the three light kinds, a Lights
-   shortcut and a Camera toggle that expands a render-camera strip (X/Y/Z, yaw, pitch, focal
-   field-of-view, Remove camera). The video underneath is **not rendered at all** unless the
-   Video chip is on — `RenderOptions::solo_3d` renders only tracks whose clip carries an
-   enabled `object_3d` effect at that time (transitions count via both clips; nested sequences
-   never solo — they render with `working_output: true`), applied in `frame_still` only and
-   never on capture/export paths. The full-screen surface is opaque, so no video or editor
-   chrome shows through or over the scene.
-2. **The orbit-target dot is gone.** The rewritten `SceneGridOverlay.kt` draws a floor grid,
-   the world axes, and the scene camera as a grabbable frustum with a body box and an apex
-   pivot dot (the grab handle, not a target marker). Dragging the frustum moves the render
-   camera on the view's tangent plane (the tangent is re-evaluated at each position); empty
-   space orbits; two fingers dolly toward/away (floor 150 units).
-3. **Opening the scene no longer shrinks everything.** The orbit opens at
-   `DEFAULT_ORBIT_DISTANCE = 700` — the default object z, where the classic camera (focal =
-   frame height ⇔ `CLASSIC_FOV`) and the orbit preview agree on size. A pure orbit never
-   changes scale by construction (distance is constant during a drag); the whole-frame Picture
-   is drawn 1:1 in the fitted viewport with no scale transform.
-4. **Roughness and metalness are real.** Both shading paths (CPU rasteriser and WGSL) use a
-   split-sum environment response — the studio room's irradiance at the rough end, the
-   softboxes smeared by roughness at the sharp end, weighted by a metallic-aware Schlick
-   Fresnel — and the Surface tab shows a live `MaterialOrb` preview beside the sliders (metals
-   tint the reflection and lose diffuse; roughness spreads the highlight).
-5. **The render camera exists by default** (auto-added on first open of the workspace, fov =
-   `CLASSIC_FOV`, position = the classic camera; journaled so it is undoable) **and is visible
-   as an object** — the frustum above, plus the Camera strip. (Exception: if the user removed
-   it this session, it stays removed.)
-6. **The scene panel is deleted**; the toolbar entry opens the workspace. `Panel.Scene` is
-   kept only as the workspace's state token. `ScenePanel` no longer exists.
+**The shape of it now.** The 3D Scene toolbar tool (`editor_tool_3d`, also the top workspace
+bar's button — both toggle) raises a **scene bar** docked directly above the bottom toolbar.
+The monitor, timeline, transport and toolbar stay exactly where they are. The bar carries,
+one scrollable row: close, one chip per mesh (`+ Cube`, ...), `+ Directional` / `+ Point` /
+`+ Spot`, `Lights` (the full light panel), `Camera` (expands the render-camera strip:
+X/Y/Z, yaw, pitch, roll, field of view, Add/Remove), `Video` (toggle the video back in) and
+Reset view. Nothing is a floating inspector and nothing takes over the screen; `Panel.Scene`
+never reaches the floating-panel slot.
+
+**What did not change in the revert.** The split-sum environment response (CPU + WGSL PBR),
+the live MaterialOrb next to the roughness/metalness sliders, `DEFAULT_ORBIT_DISTANCE = 700`
+(the distance where the orbit view matches the classic camera for default-depth objects),
+`solo_3d` (editor previews render only 3D tracks; captures/exports never do) and the
+session-scoped camera-removal flag.
+
+**The scene camera.** Present by default: the bar auto-adds it the first time it rises unless
+the user removed it this session (`sceneCameraRemoved`). Its defaults reproduce the classic
+view exactly; it is journaled, so undo works. In the viewport it is drawn as a frustum with a
+body box — a camera object shaped like a camera. Exports render through it; the orbit grid
+view never does.
+
+**The orbit-target dot.** Gone, and not replaced with an explanation-only dot: the grid
+overlay draws the floor grid, the world axes and the render camera's frustum — everything on
+screen is either a world feature or a camera object. Drag empty space to orbit; pinch to dolly.
+There is no orbit-target editing surface any more (the target stays at its default and Reset
+view restores it).
+
+**The video under the scene.** Off by default: opening the scene renders only 3D tracks
+(`RenderOptions::solo_3d`; `frame_still` applies it only when not capturing). The bar's Video
+chip brings the video back in.
 
 Not verified, on the record:
 
-- **On-device anything.** Still no phone: workspace layout, frustum grabbing while orbiting,
-  solo-render output (only-3D tracks on black) and the live material orb are compile- and
-  review-verified only. The solo path has no unit test pinning which tracks vanish.
-- **The WGSL studio environment and split-sum terms** remain visual parity by review with the
-  CPU path, not a device pixel-diff.
-- **`draw_variant()` renders without `solo_3d`** — variant/still thumbnails may include the
-  video under the scene; the capture/export path deliberately never solos.
-- **CPU/WGSL object3d changes** compile in CI; the Rust suite passes but has no PBR-output
-  assertions.
+- **On-device anything.** Still no phone: the bar's layout, the orbit drag, solo rendering on
+  a device and the camera frustum drawing are compile- and review-verified only, and the drag
+  behaviour in particular changed only by removal of the target-handle branch — it has not
+  been tap-tested.
+- **`solo_3d` has no dedicated test** pinning which tracks vanish; the Rust suite passing is
+  not evidence of it.
+- **WGSL split-sum parity** remains review-only, not a device pixel-diff.
+- **`draw_variant()` renders without `solo_3d`** (variant/still thumbnails may include the
+  video under the scene) — deliberate; capture/export paths never solo.
