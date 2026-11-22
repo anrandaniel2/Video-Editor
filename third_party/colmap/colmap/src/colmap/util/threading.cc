@@ -1,0 +1,313 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "colmap/util/threading.h"
+
+#include "colmap/util/cancellation.h"
+#include "colmap/util/logging.h"
+
+#include <utility>
+
+namespace colmap {
+
+Thread::Thread()
+    : started_(false),
+      stopped_(false),
+      paused_(false),
+      pausing_(false),
+      finished_(false),
+      setup_(false),
+      setup_valid_(false) {
+  RegisterCallback(STARTED_CALLBACK);
+  RegisterCallback(FINISHED_CALLBACK);
+}
+
+void Thread::Start() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  THROW_CHECK(!started_ || finished_);
+  if (thread_.joinable()) {
+    thread_.join();
+  }
+  error_ = nullptr;
+  timer_.Restart();
+  thread_ = std::thread(&Thread::RunFunc, this);
+  started_ = true;
+  stopped_ = false;
+  paused_ = false;
+  pausing_ = false;
+  finished_ = false;
+  setup_ = false;
+  setup_valid_ = false;
+}
+
+void Thread::Stop() {
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    stopped_ = true;
+  }
+  Resume();
+}
+
+void Thread::Pause() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  paused_ = true;
+}
+
+void Thread::Resume() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (paused_) {
+    paused_ = false;
+    pause_condition_.notify_all();
+  }
+}
+
+void Thread::Wait() {
+  if (thread_.joinable()) {
+    thread_.join();
+  }
+  if (error_) {
+    std::rethrow_exception(std::exchange(error_, nullptr));
+  }
+}
+
+bool Thread::IsStarted() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return started_;
+}
+
+bool Thread::IsStopped() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return stopped_ || ScopedSignalHandler::IsInterruptRequested();
+}
+
+bool Thread::IsPaused() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return paused_;
+}
+
+bool Thread::IsRunning() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return started_ && !pausing_ && !finished_;
+}
+
+bool Thread::IsFinished() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return finished_;
+}
+
+void Thread::AddCallback(const int id, std::function<void()> func) {
+  THROW_CHECK(func);
+  THROW_CHECK_GT(callbacks_.count(id), 0) << "Callback not registered";
+  callbacks_.at(id).push_back(std::move(func));
+}
+
+void Thread::RegisterCallback(const int id) {
+  callbacks_.emplace(id, std::list<std::function<void()>>());
+}
+
+void Thread::Callback(const int id) const {
+  THROW_CHECK_GT(callbacks_.count(id), 0) << "Callback not registered";
+  for (const auto& callback : callbacks_.at(id)) {
+    callback();
+  }
+}
+
+std::thread::id Thread::GetThreadId() const {
+  return std::this_thread::get_id();
+}
+
+void Thread::SignalValidSetup() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  THROW_CHECK(!setup_);
+  setup_ = true;
+  setup_valid_ = true;
+  setup_condition_.notify_all();
+}
+
+void Thread::SignalInvalidSetup() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  THROW_CHECK(!setup_);
+  setup_ = true;
+  setup_valid_ = false;
+  setup_condition_.notify_all();
+}
+
+const class Timer& Thread::GetTimer() const { return timer_; }
+
+void Thread::BlockIfPaused() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (paused_) {
+    pausing_ = true;
+    timer_.Pause();
+    pause_condition_.wait(lock);
+    pausing_ = false;
+    timer_.Resume();
+  }
+}
+
+bool Thread::CheckValidSetup() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (!setup_) {
+    setup_condition_.wait(lock);
+  }
+  return setup_valid_;
+}
+
+void Thread::RunFunc() {
+  Callback(STARTED_CALLBACK);
+  try {
+    Run();
+  } catch (...) {
+    // Rethrown by Wait in the calling thread, instead of terminating.
+    try {
+      throw;
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Thread failed: " << e.what();
+    } catch (...) {
+      LOG(ERROR) << "Thread failed with an unknown exception.";
+    }
+    std::unique_lock<std::mutex> lock(mutex_);
+    error_ = std::current_exception();
+    // Unblock CheckValidSetup if the thread failed before signaling its setup.
+    if (!setup_) {
+      setup_ = true;
+      setup_valid_ = false;
+      setup_condition_.notify_all();
+    }
+  }
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    finished_ = true;
+    timer_.Pause();
+  }
+  Callback(FINISHED_CALLBACK);
+}
+
+ThreadPool::ThreadPool(const int num_threads)
+    : stopped_(false), num_active_workers_(0) {
+  const int num_effective_threads = GetEffectiveNumThreads(num_threads);
+  for (int index = 0; index < num_effective_threads; ++index) {
+    std::function<void(void)> worker =
+        std::bind(&ThreadPool::WorkerFunc, this, index);
+    workers_.emplace_back(worker);
+  }
+}
+
+ThreadPool::~ThreadPool() {
+  // Destructors should not throw, so we catch and log fatal instead.
+  try {
+    Stop();
+  } catch (const AggregateException& e) {
+    LOG(FATAL) << "Uncaught exceptions in thread pool destructor: "
+               << e.exceptions().size() << " exception(s) not handled";
+  } catch (...) {
+    LOG(FATAL) << "Uncaught exception in thread pool destructor";
+  }
+}
+
+void ThreadPool::Stop() {
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    if (stopped_) {
+      return;
+    }
+
+    CheckFinishedTasks();
+
+    stopped_ = true;
+
+    // Clear the queues.
+    tasks_ = {};
+    finished_task_checkers_ = {};
+  }
+
+  task_condition_.notify_all();
+
+  for (auto& worker : workers_) {
+    worker.join();
+  }
+
+  finished_condition_.notify_all();
+}
+
+void ThreadPool::Wait() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (!tasks_.empty() || num_active_workers_ > 0) {
+    finished_condition_.wait(
+        lock, [this]() { return tasks_.empty() && num_active_workers_ == 0; });
+  }
+
+  CheckFinishedTasks();
+}
+
+void ThreadPool::CheckFinishedTasks() {
+  std::vector<std::exception_ptr> exceptions;
+  while (!finished_task_checkers_.empty()) {
+    auto checker = std::move(finished_task_checkers_.back());
+    finished_task_checkers_.pop_back();
+    try {
+      checker();
+    } catch (...) {
+      exceptions.push_back(std::current_exception());
+    }
+  }
+  if (!exceptions.empty()) {
+    throw AggregateException(std::move(exceptions));
+  }
+}
+
+void ThreadPool::WorkerFunc(const int index) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    thread_id_to_index_.emplace(GetThreadId(), index);
+  }
+
+  while (true) {
+    std::function<std::function<void()>()> task;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      task_condition_.wait(lock,
+                           [this] { return stopped_ || !tasks_.empty(); });
+      if (stopped_ && tasks_.empty()) {
+        return;
+      }
+      task = std::move(tasks_.front());
+      tasks_.pop();
+      num_active_workers_ += 1;
+    }
+
+    std::function<void()> finished_task_checker = task();
+
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      num_active_workers_ -= 1;
+      finished_task_checkers_.push_back(std::move(finished_task_checker));
+    }
+
+    finished_condition_.notify_all();
+  }
+}
+
+std::thread::id ThreadPool::GetThreadId() const {
+  return std::this_thread::get_id();
+}
+
+int ThreadPool::GetThreadIndex() {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return thread_id_to_index_.at(GetThreadId());
+}
+
+int GetEffectiveNumThreads(const int num_threads) {
+  int num_effective_threads = num_threads;
+  if (num_threads <= 0) {
+    num_effective_threads = std::thread::hardware_concurrency();
+  }
+
+  if (num_effective_threads <= 0) {
+    num_effective_threads = 1;
+  }
+
+  return num_effective_threads;
+}
+
+}  // namespace colmap

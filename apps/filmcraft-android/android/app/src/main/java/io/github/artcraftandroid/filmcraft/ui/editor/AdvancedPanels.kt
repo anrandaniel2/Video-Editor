@@ -568,7 +568,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             Spacer(Modifier.height(6.dp))
         }
         Text(
-            "Solves real 3D camera motion and scene landmarks so 3D objects and lights lock naturally into handheld or moving-camera footage.",
+            "Solves sparse 3D camera motion with COLMAP (sampled at ≤ 3 fps and smoothly interpolated) and routes the trajectory directly to the 3D Scene Camera.",
             style = FcType.Caption, color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
         )

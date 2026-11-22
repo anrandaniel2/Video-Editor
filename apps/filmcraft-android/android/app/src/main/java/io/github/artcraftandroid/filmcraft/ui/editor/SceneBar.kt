@@ -69,55 +69,53 @@ internal fun SceneBar(ed: EditorController) {
         ToolRow(tools, back = { ed.panel = null }, deep = false, modifier = Modifier.fillMaxWidth())
 
         if (cameraStrip) {
-            val cam = ed.sceneCamera
+            val cam = ed.sceneCamera ?: ed.activeRenderCamera
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 264.dp).background(Fc.Panel)
                     .verticalScroll(rememberScrollState()),
             ) {
                 if (ed.matchmoveActive) {
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 10.dp),
+                        Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            "Match-Move is driving the render camera.",
+                            "COLMAP Match-Move routed to Scene Camera.",
                             style = FcType.Caption, color = Fc.Secondary, modifier = Modifier.weight(1f),
                         )
                         SelectChip("Align", false, { cameraStrip = false; ed.panel = Panel.MatchMove }, tag = "scene_open_matchmove")
-                        SelectChip("Manual", false, {
-                            ed.matchmoveState?.let { ed.setMatchMove(it.copy(enabled = false)) }
-                        }, tag = "scene_disable_matchmove")
                     }
-                } else {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(if (cam?.animated == true) "Render camera · ◆" else "Render camera", style = FcType.Label, color = Fc.Title)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (cam != null) {
-                                SelectChip("Keyframes", cam.animated, {
-                                    cameraStrip = false
-                                    ed.openPanelFromScene(Panel.Keyframes, "camera")
-                                }, tag = "scene_camera_keyframes")
-                                SelectChip("Remove camera", false, { ed.clearSceneCamera() }, tag = "scene_remove_camera")
-                            } else {
-                                SelectChip("Add camera", false, { ed.addSceneCamera() }, tag = "scene_add_camera")
-                            }
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(if (cam?.animated == true || ed.matchmoveActive) "Render camera · ◆" else "Render camera", style = FcType.Label, color = Fc.Title)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (cam != null) {
+                            SelectChip("Keyframes", cam.animated || ed.matchmoveActive, {
+                                cameraStrip = false
+                                ed.openPanelFromScene(Panel.Keyframes, "camera")
+                            }, tag = "scene_camera_keyframes")
+                            SelectChip("Remove camera", false, {
+                                if (ed.matchmoveActive) ed.clearMatchMove() else ed.clearSceneCamera()
+                            }, tag = "scene_remove_camera")
+                        } else {
+                            SelectChip("Add camera", false, { ed.addSceneCamera() }, tag = "scene_add_camera")
                         }
                     }
-                    if (cam != null) {
-                        fun change(next: SceneCamera, k: String?) = ed.setSceneCamera(next, k)
-                        AdvancedSlider("Camera X", cam.position[0], -2000.0, 2000.0, 1.0, "scene_cam_x") { v, k -> change(cam.copy(position = listOf(v, cam.position[1], cam.position[2])), k) }
-                        AdvancedSlider("Camera Y", cam.position[1], -2000.0, 2000.0, 1.0, "scene_cam_y") { v, k -> change(cam.copy(position = listOf(cam.position[0], v, cam.position[2])), k) }
-                        AdvancedSlider("Camera Z", cam.position[2], 0.0, 6000.0, 5.0, "scene_cam_z") { v, k -> change(cam.copy(position = listOf(cam.position[0], cam.position[1], v)), k) }
-                        AdvancedSlider("Yaw", cam.yaw, -180.0, 180.0, 1.0, "scene_cam_yaw") { v, k -> change(cam.copy(yaw = v), k) }
-                        AdvancedSlider("Pitch", cam.pitch, -180.0, 180.0, 1.0, "scene_cam_pitch") { v, k -> change(cam.copy(pitch = v), k) }
-                        AdvancedSlider("Roll", cam.roll, -180.0, 180.0, 1.0, "scene_cam_roll") { v, k -> change(cam.copy(roll = v), k) }
-                        AdvancedSlider("Field of view", cam.fov, 10.0, 120.0, 1.0, "scene_cam_fov") { v, k -> change(cam.copy(fov = v), k) }
-                    }
+                }
+                if (cam != null) {
+                    fun change(next: SceneCamera, k: String?) = ed.setSceneCamera(next, k)
+                    AdvancedSlider("Camera X", cam.position[0], -2000.0, 2000.0, 1.0, "scene_cam_x") { v, k -> change(cam.copy(position = listOf(v, cam.position[1], cam.position[2])), k) }
+                    AdvancedSlider("Camera Y", cam.position[1], -2000.0, 2000.0, 1.0, "scene_cam_y") { v, k -> change(cam.copy(position = listOf(cam.position[0], v, cam.position[2])), k) }
+                    AdvancedSlider("Camera Z", cam.position[2], -3000.0, 6000.0, 5.0, "scene_cam_z") { v, k -> change(cam.copy(position = listOf(cam.position[0], cam.position[1], v)), k) }
+                    AdvancedSlider("Yaw", cam.yaw, -180.0, 180.0, 1.0, "scene_cam_yaw") { v, k -> change(cam.copy(yaw = v), k) }
+                    AdvancedSlider("Pitch", cam.pitch, -180.0, 180.0, 1.0, "scene_cam_pitch") { v, k -> change(cam.copy(pitch = v), k) }
+                    AdvancedSlider("Roll", cam.roll, -180.0, 180.0, 1.0, "scene_cam_roll") { v, k -> change(cam.copy(roll = v), k) }
+                    AdvancedSlider("Field of view", cam.fov, 10.0, 120.0, 1.0, "scene_cam_fov") { v, k -> change(cam.copy(fov = v), k) }
                 }
                 Spacer(Modifier.height(8.dp))
             }

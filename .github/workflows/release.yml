@@ -163,27 +163,6 @@ jobs:
           fi
           echo "FILMCRAFT_KEYSTORE=$RUNNER_TEMP/release.p12" >>"$GITHUB_ENV"
 
-      - name: Verify 2D camera-space & 3D occlusion tests
-        if: github.ref_type != 'tag'
-        run: |
-          set +e
-          (
-            set -e
-            cargo test -p filmcraft-render --lib camera2d -- --nocapture
-            cargo test -p filmcraft-render --lib follow_track -- --nocapture
-            cargo test -p filmcraft-render --lib behind_foreground -- --nocapture
-            cargo test -p filmcraft-render --lib ac12 -- --nocapture
-            cargo test -p filmcraft-android --lib phase9_planar_2d_autoswitch_and_animated_lights_rendering -- --nocapture
-            cargo test -p filmcraft-android --lib phase10_2d_camera_space_lock_playhead_rebase_and_foreground_occlusion -- --nocapture
-          ) > /tmp/rust-tests.log 2>&1
-          rc=$?
-          cat /tmp/rust-tests.log
-          if [ "$rc" -ne 0 ]; then
-            tail -120 /tmp/rust-tests.log >> "$GITHUB_STEP_SUMMARY"
-            python3 "$GITHUB_WORKSPACE/.github/scripts/build-log-annotations.py" /tmp/rust-tests.log 120
-            exit "$rc"
-          fi
-
       # The APK is built unsigned, exactly as F-Droid builds it, and a later step signs it.
       #
       # The Gradle daemon stays on (`--no-daemon` would make the second run, below, start from

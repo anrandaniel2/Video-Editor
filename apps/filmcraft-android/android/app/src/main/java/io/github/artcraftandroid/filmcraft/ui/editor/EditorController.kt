@@ -1232,22 +1232,8 @@ class EditorController(
         applyScenePreviewCamera()
     }
 
-    /** If the sequence was auto-switched to 2D camera tracking (and 3D Match-Move is off),
-     * bind newly added 3D objects to that 2D camera track and enable foreground occlusion.
-     */
-    private suspend fun autoAttach2dTrackIfActive(objectId: ULong) {
-        if (matchmoveActive) return
-        val tracks = runCatching { engine.command { motionTracks() } }.getOrDefault(emptyList())
-        val auto2d = tracks.lastOrNull { it.name.startsWith("2D Track ") } ?: return
-        val st = runCatching { engine.command { object3dState(objectId) } }.getOrNull() ?: return
-        if (!st.hasObject) return
-        val updated = st.settings.copy(
-            followTrack = true,
-            trackId = auto2d.id,
-            behindForeground = true,
-        )
-        runCatching { engine.command { setObject3d(objectId, updated, null) } }
-    }
+    /** 3D objects stay stationary in world space; camera motion is routed to the Scene Camera. */
+    private suspend fun autoAttach2dTrackIfActive(@Suppress("UNUSED_PARAMETER") objectId: ULong) = Unit
 
     /** Add the 3D object without leaving the scene workspace. */
     fun addObjectInScene(mesh: Object3DMesh) {
@@ -1654,6 +1640,10 @@ class EditorController(
         cameraSolves = solves
         matchmoveState = state
         matchmoveSceneData = scene
+        loadSceneCamera()
+        if (sceneCamera != null) {
+            sceneCameraRemoved = false
+        }
     }
 
     fun solveCamera(

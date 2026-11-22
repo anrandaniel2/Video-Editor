@@ -79,9 +79,11 @@ fn matchmove_json(s: &Session) -> Result<Value> {
 fn set_matchmove_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let solve = p.get("solve").and_then(Value::as_u64).unwrap_or(0);
     let merge = p.get("merge").and_then(Value::as_str).map(str::to_string);
+    let ph = s.playhead();
     if solve == 0 {
         s.edit_sequence_as("Clear Match-Move", merge.as_deref(), |seq, _ctx, _st| {
             seq.matchmove = None;
+            seq.route_matchmove_to_scene_camera(ph);
             Ok(())
         })?;
         return Ok(Value::Null);
@@ -113,6 +115,7 @@ fn set_matchmove_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             roll_trim: roll_trim.unwrap_or(base.roll_trim).clamp(-180.0, 180.0),
             offset: [off[0].clamp(-100_000.0, 100_000.0), off[1].clamp(-100_000.0, 100_000.0), off[2].clamp(-100_000.0, 100_000.0)],
         });
+        seq.route_matchmove_to_scene_camera(ph);
         Ok(())
     })?;
     matchmove_json(s)
@@ -120,10 +123,12 @@ fn set_matchmove_cmd(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn delete_camera_solve_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("scene.deleteCameraSolve", "id is required"))?;
+    let ph = s.playhead();
     s.edit_sequence_as("Delete Camera Solve", None, |seq, _ctx, _st| {
         seq.camera_solves.retain(|cs| cs.id != id);
         if seq.matchmove.is_some_and(|m| m.solve == id) {
             seq.matchmove = None;
+            seq.route_matchmove_to_scene_camera(ph);
         }
         Ok(())
     })?;
@@ -363,8 +368,10 @@ pub fn commands() -> Vec<CommandSpec> {
             set_matchmove_cmd,
         ),
         set_spec("scene.clearMatchmove", "Clear Camera Match-Move", r#"{}"#, |s, _p| {
+            let ph = s.playhead();
             s.edit_sequence_as("Clear Match-Move", None, |seq, _ctx, _st| {
                 seq.matchmove = None;
+                seq.route_matchmove_to_scene_camera(ph);
                 Ok(())
             })?;
             Ok(json!({ "cleared": true }))
@@ -385,6 +392,7 @@ pub fn commands() -> Vec<CommandSpec> {
 }
 
 fn level_matchmove_cmd(s: &mut Session, _p: &Value) -> Result<Value> {
+    let ph = s.playhead();
     let normal = {
         let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
         let mm = seq.matchmove.ok_or_else(|| bad("scene.levelMatchmove", "no match-move solve is selected"))?;
@@ -395,6 +403,7 @@ fn level_matchmove_cmd(s: &mut Session, _p: &Value) -> Result<Value> {
         if let Some(mm) = seq.matchmove.as_mut() {
             let _ = mm.level_to_normal(normal);
         }
+        seq.route_matchmove_to_scene_camera(ph);
         Ok(())
     })?;
     matchmove_json(s)
@@ -403,12 +412,12 @@ fn level_matchmove_cmd(s: &mut Session, _p: &Value) -> Result<Value> {
 fn bake_matchmove_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let at = p.get("time").and_then(Value::as_i64).map(filmcraft_time::Tick).unwrap_or_else(|| s.playhead());
     let disable = p.get("disableMatchmove").and_then(Value::as_bool).unwrap_or(true);
-    let cam = {
+    {
         let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
-        seq.matchmove_camera_at(at).ok_or_else(|| bad("scene.bakeMatchmoveFrame", "no active match-move camera at the playhead"))?
-    };
+        seq.matchmove_camera_at(at).ok_or_else(|| bad("scene.bakeMatchmoveFrame", "no active match-move camera at the playhead"))?;
+    }
     s.edit_sequence_as("Bake Match-Move Camera", None, |seq, _ctx, _st| {
-        seq.scene_camera = Some(cam);
+        seq.route_matchmove_to_scene_camera(at);
         if disable && let Some(mm) = seq.matchmove.as_mut() {
             mm.enabled = false;
         }

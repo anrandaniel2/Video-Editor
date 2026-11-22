@@ -110,6 +110,44 @@ impl SolvedFrame {
             confidence: l(a.confidence, b.confidence),
         }
     }
+
+    /// C1-continuous 4-point cubic interpolation between `p1` (`t = 0`) and `p2` (`t = 1`) using
+    /// neighbors `p0` and `p3`: Catmull-Rom spline for eye position & FOV, and Shoemake's
+    /// spherical cubic quaternion spline (SQUAD) on `SO(3)` for orientation. Designed for smooth
+    /// playback across sparse `<= 3 fps` COLMAP / GLOMAP keyframes.
+    pub fn catmull_rom(p0: Self, p1: Self, p2: Self, p3: Self, t: f32) -> Self {
+        if !t.is_finite() || t <= 0.0 {
+            return p1;
+        }
+        if t >= 1.0 {
+            return p2;
+        }
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let cr = |a: f32, b: f32, c: f32, d: f32| -> f32 {
+            0.5 * ((2.0 * b) + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (-a + 3.0 * b - 3.0 * c + d) * t3)
+        };
+        let position = [
+            cr(p0.position[0], p1.position[0], p2.position[0], p3.position[0]),
+            cr(p0.position[1], p1.position[1], p2.position[1], p3.position[1]),
+            cr(p0.position[2], p1.position[2], p2.position[2], p3.position[2]),
+        ];
+        let q_of = |f: Self| quat_from_mat3(SceneCamera3D { position: [0.0; 3], yaw: f.yaw, pitch: f.pitch, roll: f.roll, fov: CLASSIC_FOV }.view_rotation());
+        let q = quat_squad(q_of(p0), q_of(p1), q_of(p2), q_of(p3), t);
+        let (pitch, yaw, roll) = euler_from_view_rotation(mat3_from_quat(q));
+        let dt = (p2.time.0 as f64 - p1.time.0 as f64) * f64::from(t);
+        let l = |x: f32, y: f32| x + (y - x) * t;
+        Self {
+            time: Tick(p1.time.0.saturating_add(dt.round() as i64)),
+            position,
+            yaw,
+            pitch,
+            roll,
+            fov: cr(p0.fov, p1.fov, p2.fov, p3.fov).clamp(5.0, 170.0),
+            rms_px: l(p1.rms_px, p2.rms_px),
+            confidence: l(p1.confidence, p2.confidence).clamp(0.0, 1.0),
+        }
+    }
 }
 
 /// One sparse 3D feature landmark reconstructed during bundle adjustment, in normalised solve units.
@@ -159,7 +197,8 @@ impl CameraSolve {
     /// Confidence threshold below which a frame is treated as lost track.
     pub const LOST_CONFIDENCE: f32 = 0.25;
 
-    /// Sample at clip-relative time `t`, clamping outside the solved range.
+    /// Sample at clip-relative time `t`, clamping outside the solved range and interpolating
+    /// smoothly with Catmull-Rom + quaternion SQUAD across sparse (`<= 3 fps`) keyframes.
     pub fn sample_at(&self, t: Tick) -> Option<SolvedFrame> {
         let f = &self.frames;
         if f.is_empty() {
@@ -173,15 +212,17 @@ impl CameraSolve {
             return Some(f[last]);
         }
         let i = f.partition_point(|k| k.time <= t).saturating_sub(1);
-        let a = f[i];
-        let b = f.get(i + 1).copied().unwrap_or(a);
-        let span = b.time.0.saturating_sub(a.time.0).max(1) as f32;
-        let alpha = ((t.0.saturating_sub(a.time.0)) as f32 / span).clamp(0.0, 1.0);
-        Some(SolvedFrame::lerp(a, b, alpha))
+        let p1 = f[i];
+        let p2 = f.get(i + 1).copied().unwrap_or(p1);
+        let p0 = if i > 0 { f[i - 1] } else { p1 };
+        let p3 = f.get(i + 2).copied().unwrap_or(p2);
+        let span = p2.time.0.saturating_sub(p1.time.0).max(1) as f32;
+        let alpha = ((t.0.saturating_sub(p1.time.0)) as f32 / span).clamp(0.0, 1.0);
+        Some(SolvedFrame::catmull_rom(p0, p1, p2, p3, alpha))
     }
 
     /// Sample at clip-relative time `t`, holding the last confident pose (`confidence >= 0.25`)
-    /// across any lost frames.
+    /// across any lost frames and smoothly interpolating via Catmull-Rom + SQUAD across confident ones.
     pub fn confident_sample_at(&self, t: Tick) -> Option<SolvedFrame> {
         let f = &self.frames;
         if f.is_empty() {
@@ -198,14 +239,16 @@ impl CameraSolve {
             return Some(hold(last));
         }
         let i = f.partition_point(|k| k.time <= t).saturating_sub(1);
-        let a = f[i];
-        let b = f.get(i + 1).copied().unwrap_or(a);
-        if !a.is_confident() || !b.is_confident() {
+        let p1 = f[i];
+        let p2 = f.get(i + 1).copied().unwrap_or(p1);
+        if !p1.is_confident() || !p2.is_confident() {
             return Some(hold(i));
         }
-        let span = b.time.0.saturating_sub(a.time.0).max(1) as f32;
-        let alpha = ((t.0.saturating_sub(a.time.0)) as f32 / span).clamp(0.0, 1.0);
-        Some(SolvedFrame::lerp(a, b, alpha))
+        let p0 = if i > 0 && f[i - 1].is_confident() { f[i - 1] } else { p1 };
+        let p3 = f.get(i + 2).copied().filter(|s| s.is_confident()).unwrap_or(p2);
+        let span = p2.time.0.saturating_sub(p1.time.0).max(1) as f32;
+        let alpha = ((t.0.saturating_sub(p1.time.0)) as f32 / span).clamp(0.0, 1.0);
+        Some(SolvedFrame::catmull_rom(p0, p1, p2, p3, alpha))
     }
 
     /// Median per-frame reprojection RMS error in working pixels (`0.0` when empty).
@@ -509,6 +552,68 @@ fn quat_slerp(a: [f32; 4], mut b: [f32; 4], t: f32) -> [f32; 4] {
     let wa = ((1.0 - t) * theta).sin() / sin_theta;
     let wb = (t * theta).sin() / sin_theta;
     quat_normalize([a[0] * wa + b[0] * wb, a[1] * wa + b[1] * wb, a[2] * wa + b[2] * wb, a[3] * wa + b[3] * wb])
+}
+
+fn quat_hemisphere(ref_q: [f32; 4], q: [f32; 4]) -> [f32; 4] {
+    if ref_q[0] * q[0] + ref_q[1] * q[1] + ref_q[2] * q[2] + ref_q[3] * q[3] < 0.0 {
+        [-q[0], -q[1], -q[2], -q[3]]
+    } else {
+        q
+    }
+}
+
+fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
+
+fn quat_conj(q: [f32; 4]) -> [f32; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
+}
+
+fn quat_log(q: [f32; 4]) -> [f32; 3] {
+    let v_len = (q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if v_len <= 1e-7 {
+        [q[1], q[2], q[3]]
+    } else {
+        let theta = v_len.atan2(q[0]);
+        let s = theta / v_len;
+        [q[1] * s, q[2] * s, q[3] * s]
+    }
+}
+
+fn quat_exp(v: [f32; 3]) -> [f32; 4] {
+    let theta = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if theta <= 1e-7 {
+        quat_normalize([1.0, v[0], v[1], v[2]])
+    } else {
+        let (st, ct) = theta.sin_cos();
+        let s = st / theta;
+        quat_normalize([ct, v[0] * s, v[1] * s, v[2] * s])
+    }
+}
+
+fn quat_squad_tangent(q_prev: [f32; 4], q_curr: [f32; 4], q_next: [f32; 4]) -> [f32; 4] {
+    let inv = quat_conj(q_curr);
+    let l1 = quat_log(quat_hemisphere([1.0, 0.0, 0.0, 0.0], quat_mul(inv, q_next)));
+    let l2 = quat_log(quat_hemisphere([1.0, 0.0, 0.0, 0.0], quat_mul(inv, q_prev)));
+    let step = quat_exp([-0.25 * (l1[0] + l2[0]), -0.25 * (l1[1] + l2[1]), -0.25 * (l1[2] + l2[2])]);
+    quat_normalize(quat_mul(q_curr, step))
+}
+
+fn quat_squad(q0_in: [f32; 4], q1: [f32; 4], q2_in: [f32; 4], q3_in: [f32; 4], t: f32) -> [f32; 4] {
+    let q0 = quat_hemisphere(q1, q0_in);
+    let q2 = quat_hemisphere(q1, q2_in);
+    let q3 = quat_hemisphere(q2, q3_in);
+    let s1 = quat_squad_tangent(q0, q1, q2);
+    let s2 = quat_squad_tangent(q1, q2, q3);
+    let slerp_q = quat_slerp(q1, q2, t);
+    let slerp_s = quat_slerp(s1, s2, t);
+    quat_slerp(slerp_q, slerp_s, 2.0 * t * (1.0 - t))
 }
 
 fn mat3_from_quat(q: [f32; 4]) -> [[f32; 3]; 3] {

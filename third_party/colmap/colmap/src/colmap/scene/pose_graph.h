@@ -1,0 +1,237 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+#pragma once
+
+#include "colmap/geometry/rigid3.h"
+#include "colmap/scene/correspondence_graph.h"
+#include "colmap/scene/reconstruction.h"
+#include "colmap/util/hash_containers.h"
+#include "colmap/util/types.h"
+
+#include <optional>
+#include <vector>
+
+namespace colmap {
+
+class PoseGraph {
+ public:
+  // Minimal relative pose data for pose graph edge.
+  struct Edge {
+    Edge() = default;
+
+    explicit Edge(const Rigid3d& cam2_from_cam1)
+        : cam2_from_cam1(cam2_from_cam1) {}
+
+    // Relative pose from image 1 to image 2.
+    Rigid3d cam2_from_cam1;
+
+    // Optional 3x3 marginal rotation covariance of cam2_from_cam1 in
+    // camera 1's local tangent frame (right perturbation R21 * Exp(delta)).
+    std::optional<Eigen::Matrix3f> cam2_from_cam1_rotation_cov;
+
+    // Number of two-view matches used to compute the relative pose.
+    int num_matches = 0;
+
+    // Whether fixed rig calibration is available for initialization.
+    bool prior = false;
+
+    // Whether this edge has a valid measured relative pose.
+    bool valid = true;
+
+    // Invert the geometry to match swapped image order.
+    void Invert() {
+      if (cam2_from_cam1_rotation_cov.has_value()) {
+        const Eigen::Matrix3d cam2_from_cam1_rot =
+            cam2_from_cam1.rotation().toRotationMatrix();
+        const Eigen::Matrix3d cov =
+            cam2_from_cam1_rot * cam2_from_cam1_rotation_cov->cast<double>() *
+            cam2_from_cam1_rot.transpose();
+        cam2_from_cam1_rotation_cov =
+            (0.5 * (cov + cov.transpose())).cast<float>();
+      }
+      cam2_from_cam1 = Inverse(cam2_from_cam1);
+    }
+  };
+
+  PoseGraph() = default;
+  ~PoseGraph() = default;
+
+  // Edge accessors.
+  inline NodeHashMap<image_pair_t, Edge>& Edges();
+  inline const NodeHashMap<image_pair_t, Edge>& Edges() const;
+  inline size_t NumEdges() const;
+  inline bool Empty() const;
+  inline void Clear();
+
+  // Load edges from the correspondence graph.
+  void Load(const CorrespondenceGraph& corr_graph);
+
+  // Add fixed rig connections as prior edges for active images.
+  // Existing edges retain their measured poses and validity; new edges are not
+  // valid measurements. Call after adding measured edges, since AddEdge rejects
+  // duplicates.
+  void AddRigEdges(const Reconstruction& reconstruction,
+                   const FlatHashSet<image_t>& active_image_ids,
+                   bool refine_sensor_from_rig = true);
+
+  // Edge operations.
+  inline Edge& AddEdge(image_t image_id1, image_t image_id2, Edge edge);
+  inline bool HasEdge(image_t image_id1, image_t image_id2) const;
+  // Returns a reference to the edge and whether the IDs were swapped.
+  inline std::pair<Edge&, bool> EdgeRef(image_t image_id1, image_t image_id2);
+  inline std::pair<const Edge&, bool> EdgeRef(image_t image_id1,
+                                              image_t image_id2) const;
+  inline Edge GetEdge(image_t image_id1, image_t image_id2) const;
+  inline bool DeleteEdge(image_t image_id1, image_t image_id2);
+  inline void UpdateEdge(image_t image_id1, image_t image_id2, Edge edge);
+
+  // Validity operations.
+  inline bool IsValid(image_pair_t pair_id) const;
+  inline void SetValidEdge(image_pair_t pair_id);
+  inline void SetInvalidEdge(image_pair_t pair_id);
+
+  // Returns a filter view over valid edges only.
+  auto ValidEdges() const {
+    return filter_view(
+        [](const std::pair<const image_pair_t, Edge>& kv) {
+          return kv.second.valid;
+        },
+        edges_.begin(),
+        edges_.end());
+  }
+
+  // Returns connected components as sets of frame IDs, largest first. If
+  // filter_unregistered is true, only considers frames with HasPose().
+  std::vector<FlatHashSet<frame_t>> ConnectedFrameComponents(
+      const Reconstruction& reconstruction,
+      bool filter_unregistered = true) const;
+
+  // Returns image IDs for each connected frame component. The outer vector is
+  // sorted by the number of frames in each component, largest first. If
+  // filter_unregistered is true, only considers frames with HasPose().
+  std::vector<FlatHashSet<image_t>> ConnectedImageIdsForFrameComponents(
+      const Reconstruction& reconstruction,
+      bool filter_unregistered = true) const;
+
+  // Returns the frame IDs in the largest connected component. If
+  // filter_unregistered is true, only considers frames with HasPose().
+  FlatHashSet<frame_t> LargestConnectedFrameComponent(
+      const Reconstruction& reconstruction,
+      bool filter_unregistered = true) const;
+
+  // Mark image pairs as invalid if either image is not in the active set.
+  void InvalidatePairsOutsideActiveImageIds(
+      const FlatHashSet<image_t>& active_image_ids);
+
+  // Returns the subgraph of the edges between images in the given set, with
+  // all their data and validity.
+  PoseGraph Subgraph(const FlatHashSet<image_t>& image_ids) const;
+
+ private:
+  // Map from pair ID to edge data. The pair ID is computed from the
+  // two image IDs using ImagePairToPairId, with the smaller ID first.
+  NodeHashMap<image_pair_t, Edge> edges_;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// Implementation
+////////////////////////////////////////////////////////////////////////////////
+
+NodeHashMap<image_pair_t, PoseGraph::Edge>& PoseGraph::Edges() {
+  return edges_;
+}
+
+const NodeHashMap<image_pair_t, PoseGraph::Edge>& PoseGraph::Edges() const {
+  return edges_;
+}
+
+size_t PoseGraph::NumEdges() const { return edges_.size(); }
+
+bool PoseGraph::Empty() const { return edges_.empty(); }
+
+void PoseGraph::Clear() { edges_.clear(); }
+
+PoseGraph::Edge& PoseGraph::AddEdge(image_t image_id1,
+                                    image_t image_id2,
+                                    PoseGraph::Edge edge) {
+  if (ShouldSwapImagePair(image_id1, image_id2)) {
+    edge.Invert();
+  }
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  auto [it, inserted] = edges_.emplace(pair_id, std::move(edge));
+  if (!inserted) {
+    throw std::runtime_error(
+        "Image pair already exists: " + std::to_string(image_id1) + ", " +
+        std::to_string(image_id2));
+  }
+  return it->second;
+}
+
+bool PoseGraph::HasEdge(image_t image_id1, image_t image_id2) const {
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  return edges_.find(pair_id) != edges_.end();
+}
+
+std::pair<PoseGraph::Edge&, bool> PoseGraph::EdgeRef(image_t image_id1,
+                                                     image_t image_id2) {
+  const bool swapped = ShouldSwapImagePair(image_id1, image_id2);
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  return {edges_.at(pair_id), swapped};
+}
+
+std::pair<const PoseGraph::Edge&, bool> PoseGraph::EdgeRef(
+    image_t image_id1, image_t image_id2) const {
+  const bool swapped = ShouldSwapImagePair(image_id1, image_id2);
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  return {edges_.at(pair_id), swapped};
+}
+
+bool PoseGraph::DeleteEdge(image_t image_id1, image_t image_id2) {
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  return edges_.erase(pair_id) > 0;
+}
+
+PoseGraph::Edge PoseGraph::GetEdge(image_t image_id1, image_t image_id2) const {
+  const bool swapped = ShouldSwapImagePair(image_id1, image_id2);
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  PoseGraph::Edge result = edges_.at(pair_id);
+  if (swapped) {
+    result.Invert();
+  }
+  return result;
+}
+
+void PoseGraph::UpdateEdge(image_t image_id1,
+                           image_t image_id2,
+                           PoseGraph::Edge edge) {
+  if (ShouldSwapImagePair(image_id1, image_id2)) {
+    edge.Invert();
+  }
+  const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
+  auto it = edges_.find(pair_id);
+  if (it == edges_.end()) {
+    throw std::runtime_error(
+        "Image pair does not exist: " + std::to_string(image_id1) + ", " +
+        std::to_string(image_id2));
+  }
+  it->second = std::move(edge);
+}
+
+bool PoseGraph::IsValid(image_pair_t pair_id) const {
+  auto it = edges_.find(pair_id);
+  return it != edges_.end() && it->second.valid;
+}
+
+void PoseGraph::SetValidEdge(image_pair_t pair_id) {
+  auto it = edges_.find(pair_id);
+  THROW_CHECK(it != edges_.end()) << "Edge does not exist";
+  it->second.valid = true;
+}
+
+void PoseGraph::SetInvalidEdge(image_pair_t pair_id) {
+  auto it = edges_.find(pair_id);
+  THROW_CHECK(it != edges_.end()) << "Edge does not exist";
+  it->second.valid = false;
+}
+
+}  // namespace colmap

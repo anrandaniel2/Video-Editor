@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+#pragma once
+
+#include "colmap/estimators/bundle_adjustment.h"
+#include "colmap/estimators/ceres_loss_function.h"
+#include "colmap/math/math.h"
+
+#include <ceres/ceres.h>
+
+namespace colmap {
+
+// Ceres-specific bundle adjustment options.
+struct CeresBundleAdjustmentOptions {
+  // Loss function types: Trivial (non-robust) and robust loss functions.
+  CeresLossFunctionType loss_function_type = CeresLossFunctionType::TRIVIAL;
+
+  // Scaling factor determines residual at which robustification takes place.
+  double loss_function_scale = 1.0;
+
+  // Multiplier applied to the loss function output.
+  double loss_function_weight = 1.0;
+
+  // Whether to use Ceres' CUDA linear algebra library, if available.
+  bool use_gpu = false;
+  std::string gpu_index = "-1";
+
+  // Ceres-Solver options.
+  ceres::Solver::Options solver_options;
+
+  // Heuristic threshold to switch from CPU to GPU based solvers.
+  // Typically, the GPU is faster for large problems but the overhead of
+  // transferring memory from the CPU to the GPU leads to better CPU performance
+  // for small problems. This depends on the specific problem and hardware.
+  int min_num_images_gpu_solver = 50;
+
+  // Heuristic threshold on the minimum number of residuals to enable
+  // multi-threading. Note that single-threaded is typically better for small
+  // bundle adjustment problems due to the overhead of threading.
+  int min_num_residuals_for_cpu_multi_threading = 50000;
+
+  // Heuristic thresholds to switch between direct, sparse, and iterative
+  // solvers. These thresholds may not be optimal for all types of problems.
+  int max_num_images_direct_dense_cpu_solver = 50;
+  int max_num_images_direct_sparse_cpu_solver = 1000;
+  int max_num_images_direct_dense_gpu_solver = 200;
+  int max_num_images_direct_sparse_gpu_solver = 4000;
+
+  // Whether to automatically select solver type based on problem size.
+  // When false, uses the linear_solver_type and preconditioner_type
+  // from solver_options directly.
+  bool auto_select_solver_type = true;
+
+  CeresBundleAdjustmentOptions();
+
+  // Create options tailored for given bundle adjustment config and problem.
+  ceres::Solver::Options CreateSolverOptions(
+      const BundleAdjustmentConfig& config,
+      const ceres::Problem& problem) const;
+
+  bool Check() const;
+};
+
+// Ceres-specific bundle adjustment summary with access to full solver details.
+struct CeresBundleAdjustmentSummary : public BundleAdjustmentSummary {
+  ceres::Solver::Summary ceres_summary;
+
+  std::string BriefReport() const override;
+
+  static std::shared_ptr<CeresBundleAdjustmentSummary> Create(
+      ceres::Solver::Summary ceres_summary);
+};
+
+// Ceres-specific pose prior bundle adjustment options.
+struct CeresPosePriorBundleAdjustmentOptions {
+  // Loss function for prior position loss.
+  CeresLossFunctionType prior_position_loss_function_type =
+      CeresLossFunctionType::TRIVIAL;
+
+  // Threshold on the residual for the robust loss.
+  double prior_position_loss_scale = std::sqrt(kChiSquare95ThreeDof);
+
+  bool Check() const;
+};
+
+// Ceres-specific bundle adjuster with access to the underlying problem.
+class CeresBundleAdjuster : public BundleAdjuster {
+ public:
+  using BundleAdjuster::BundleAdjuster;
+
+  virtual std::shared_ptr<ceres::Problem>& Problem() = 0;
+};
+
+std::unique_ptr<CeresBundleAdjuster> CreateDefaultCeresBundleAdjuster(
+    const BundleAdjustmentOptions& options,
+    const BundleAdjustmentConfig& config,
+    Reconstruction& reconstruction);
+
+std::unique_ptr<CeresBundleAdjuster> CreatePosePriorCeresBundleAdjuster(
+    const BundleAdjustmentOptions& options,
+    const PosePriorBundleAdjustmentOptions& prior_options,
+    const BundleAdjustmentConfig& config,
+    std::vector<PosePrior> pose_priors,
+    Reconstruction& reconstruction);
+
+void PrintSolverSummary(const ceres::Solver::Summary& summary,
+                        const std::string& header);
+
+}  // namespace colmap

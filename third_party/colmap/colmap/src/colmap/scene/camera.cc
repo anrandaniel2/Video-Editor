@@ -1,0 +1,123 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "colmap/scene/camera.h"
+
+#include "colmap/sensor/models.h"
+#include "colmap/util/logging.h"
+#include "colmap/util/misc.h"
+
+namespace colmap {
+
+Camera Camera::CreateFromModelId(camera_t camera_id,
+                                 const CameraModelId model_id,
+                                 const double focal_length,
+                                 const size_t width,
+                                 const size_t height,
+                                 const CameraSource source) {
+  THROW_CHECK(ExistsCameraModelWithId(model_id));
+  THROW_CHECK_NE(source, CameraSource::BEST) << "Camera source cannot be BEST.";
+  Camera camera;
+  camera.camera_id = camera_id;
+  camera.model_id = model_id;
+  camera.width = width;
+  camera.height = height;
+  camera.params =
+      CameraModelInitializeParams(model_id, focal_length, width, height);
+  camera.source = source;
+  return camera;
+}
+
+Camera Camera::CreateFromModelName(camera_t camera_id,
+                                   const std::string& model_name,
+                                   const double focal_length,
+                                   const size_t width,
+                                   const size_t height,
+                                   const CameraSource source) {
+  return CreateFromModelId(camera_id,
+                           CameraModelNameToId(model_name),
+                           focal_length,
+                           width,
+                           height,
+                           source);
+}
+
+Eigen::Matrix3d Camera::CalibrationMatrix() const {
+  THROW_CHECK(IsPerspective())
+      << "CalibrationMatrix() only defined for perspective cameras.";
+  return CameraModelCalibrationMatrix(model_id, params);
+}
+
+double Camera::MeanFocalLength() const {
+  // The omnidirectional EQUIRECTANGULAR model has no focal length.
+  if (IsSpherical()) {
+    return 0.0;
+  }
+  const span<const size_t> focal_length_idxs = FocalLengthIdxs();
+  double focal_length = 0;
+  for (const auto idx : focal_length_idxs) {
+    focal_length += params[idx];
+  }
+  return focal_length / focal_length_idxs.size();
+}
+
+std::string Camera::ParamsToString() const { return VectorToCSV(params); }
+
+bool Camera::SetParamsFromString(const std::string& string) {
+  std::vector<double> new_camera_params = CSVToVector<double>(string);
+  if (!CameraModelVerifyParams(model_id, new_camera_params)) {
+    return false;
+  }
+  params = std::move(new_camera_params);
+  return true;
+}
+
+bool Camera::IsUndistorted() const {
+  // Non-perspective cameras (e.g. EQUIRECTANGULAR) have no pinhole image plane
+  // to undistort to; treat them as already undistorted so undistortion is a
+  // no-op.
+  if (IsSpherical()) {
+    return true;
+  }
+  for (const size_t idx : ExtraParamsIdxs()) {
+    if (std::abs(params[idx]) > 1e-8) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void Camera::Rescale(const double scale) {
+  THROW_CHECK_GT(scale, 0.0);
+  const double scale_x = std::round(scale * width) / static_cast<double>(width);
+  const double scale_y =
+      std::round(scale * height) / static_cast<double>(height);
+  width = static_cast<size_t>(std::round(scale * width));
+  height = static_cast<size_t>(std::round(scale * height));
+  CameraModelRescale(model_id, scale_x, scale_y, params);
+}
+
+void Camera::Rescale(const size_t new_width, const size_t new_height) {
+  const double scale_x =
+      static_cast<double>(new_width) / static_cast<double>(width);
+  const double scale_y =
+      static_cast<double>(new_height) / static_cast<double>(height);
+  width = new_width;
+  height = new_height;
+  CameraModelRescale(model_id, scale_x, scale_y, params);
+}
+
+std::ostream& operator<<(std::ostream& stream, const Camera& camera) {
+  const bool valid_model = ExistsCameraModelWithId(camera.model_id);
+  const std::string camera_id_str = camera.camera_id != kInvalidCameraId
+                                        ? std::to_string(camera.camera_id)
+                                        : "Invalid";
+  const std::string params_info = valid_model ? camera.ParamsInfo() : "?";
+  const std::string model_name = valid_model ? camera.ModelName() : "Invalid";
+  stream << "Camera(camera_id=" << camera_id_str << ", model=" << model_name
+         << ", width=" << camera.width << ", height=" << camera.height
+         << ", params=[" << camera.ParamsToString() << "] (" << params_info
+         << "))";
+  return stream;
+}
+
+}  // namespace colmap

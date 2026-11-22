@@ -1,0 +1,164 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+#pragma once
+
+#include "colmap/util/enum_utils.h"
+#include "colmap/util/logging.h"
+#include "colmap/util/types.h"
+
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <string>
+#include <vector>
+
+#define THROW_CHECK_FILE_EXISTS(path)                 \
+  {                                                   \
+    const auto& path_val = (path);                    \
+    THROW_CHECK(colmap::ExistsFile(path_val))         \
+        << "File " << path_val << " does not exist."; \
+  }
+
+#define THROW_CHECK_DIR_EXISTS(path)                       \
+  {                                                        \
+    const auto& path_val = (path);                         \
+    THROW_CHECK(colmap::ExistsDir(path_val))               \
+        << "Directory " << path_val << " does not exist."; \
+  }
+
+#define THROW_CHECK_PATH_OPEN(path)                                       \
+  {                                                                       \
+    const auto& path_val = (path);                                        \
+    THROW_CHECK(std::ofstream(path_val, std::ios::trunc).is_open())       \
+        << "Could not open " << path_val                                  \
+        << ". Is the path a directory or does the parent dir not exist?"; \
+  }
+
+#define THROW_CHECK_FILE_OPEN(file, path) \
+  THROW_CHECK((file).is_open())           \
+      << "Could not open " << (path)      \
+      << ". Is the path a directory or does the parent dir not exist?";
+
+#define THROW_CHECK_HAS_FILE_EXTENSION(path, ext)                              \
+  {                                                                            \
+    const auto& path_val = (path);                                             \
+    const auto& ext_val = (ext);                                               \
+    THROW_CHECK(colmap::HasFileExtension(path_val, ext_val))                   \
+        << "Path " << path_val << " does not match file extension " << ext_val \
+        << ".";                                                                \
+  }
+
+namespace colmap {
+
+MAKE_ENUM_CLASS(FileCopyType, 0, COPY, HARD_LINK, SOFT_LINK);
+
+// Append trailing slash to string if it does not yet end with a slash.
+std::string EnsureTrailingSlash(const std::string& str);
+
+// Check whether file name has the file extension (case insensitive).
+bool HasFileExtension(const std::filesystem::path& file_name,
+                      const std::string& ext);
+
+// Add a file extension.
+std::filesystem::path AddFileExtension(std::filesystem::path path,
+                                       const std::string& ext);
+
+// Split the path into its root and extension, for example,
+// "dir/file.jpg" into "dir/file" and ".jpg".
+void SplitFileExtension(const std::string& path,
+                        std::string* root,
+                        std::string* ext);
+
+// Copy or link file from source to destination path
+void FileCopy(const std::filesystem::path& src_path,
+              const std::filesystem::path& dst_path,
+              FileCopyType type = FileCopyType::COPY);
+
+// Check if the path points to an existing file.
+bool ExistsFile(const std::filesystem::path& path);
+
+// Check if the path points to an existing directory.
+bool ExistsDir(const std::filesystem::path& path);
+
+// Check if the path points to an existing file or directory.
+bool ExistsPath(const std::filesystem::path& path);
+
+// Create the directory if it does not exist.
+void CreateDirIfNotExists(const std::filesystem::path& path,
+                          bool recursive = false);
+
+// Extract the base name of a path, e.g., "image.jpg" for "/dir/image.jpg".
+std::filesystem::path GetPathBaseName(const std::filesystem::path& path);
+
+// Get the path of the parent directory for the given path.
+std::filesystem::path GetParentDir(const std::filesystem::path& path);
+
+// Normalize the path by removing repeated separators and dots and, on Windows,
+// replacing \\ separators by /.
+std::string NormalizePath(const std::filesystem::path& path);
+
+// Get the normalized relative path of full_path w.r.t. base_path.
+std::string GetNormalizedRelativePath(const std::filesystem::path& full_path,
+                                      const std::filesystem::path& base_path);
+
+// Return list of files, recursively in all sub-directories.
+std::vector<std::filesystem::path> GetRecursiveFileList(
+    const std::filesystem::path& path);
+
+// Return list of directories in the given directory.
+std::vector<std::filesystem::path> GetDirList(
+    const std::filesystem::path& path);
+
+// Gets the value of an environment variable, or null if it is not set.
+// Portable replacement for std::getenv, which is deprecated by MSVC.
+std::optional<std::string> GetEnvSafe(const char* key);
+
+// Gets current user's home directory from environment variables.
+// Returns null if it cannot be resolved.
+std::optional<std::filesystem::path> HomeDir();
+
+// Read contiguous binary blob from file.
+void ReadBinaryBlob(const std::filesystem::path& path, std::vector<char>* data);
+
+// Write contiguous binary blob to file.
+void WriteBinaryBlob(const std::filesystem::path& path,
+                     const span<const char>& data);
+
+// Read each line of a text file into a separate element. Empty lines are
+// ignored and leading/trailing whitespace is removed.
+std::vector<std::string> ReadTextFileLines(const std::filesystem::path& path);
+
+// Detect if given string is a URI
+// (i.e., starts with http://, https://, file://).
+bool IsURI(const std::string& uri);
+
+#ifdef COLMAP_DOWNLOAD_ENABLED
+
+// Download file from server. Supports any protocol suppported by Curl.
+// Automatically follows redirects. Returns null in case of failure. Notice that
+// this function is not suitable for large files that don't fit easily into
+// memory. If such a use case emerges in the future, we want to instead stream
+// the downloaded data chunks to disk instead of accumulating them in memory.
+std::optional<std::string> DownloadFile(const std::string& url);
+
+// Computes SHA256 digest for given string.
+std::string ComputeSHA256(const std::string_view& str);
+
+// Downloads and caches file from given URI. The URI must take the format
+// "<url>;<name>;<sha256>". The file will be cached under
+// $HOME/.cache/colmap/<sha256>-<name>. File integrity is checked against the
+// provided SHA256 digest. Throws exception if the digest does not match.
+// Returns the path to the cached file.
+std::string DownloadAndCacheFile(const std::string& uri);
+
+// Overwrites the default download cache directory at $HOME/.cache/colmap/.
+void OverwriteDownloadCacheDir(std::filesystem::path path);
+
+#endif  // COLMAP_DOWNLOAD_ENABLED
+
+// If the given URI is a local filesystem path, returns the input path. If the
+// URI matches the "<url>;<name>;<sha256>" format, calls DownloadAndCacheFile().
+// Throws runtime exception if download is not supported.
+std::filesystem::path MaybeDownloadAndCacheFile(const std::string& uri);
+
+}  // namespace colmap

@@ -1,0 +1,249 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "colmap/geometry/triangulation.h"
+
+#include "colmap/geometry/essential_matrix.h"
+#include "colmap/util/eigen_alignment.h"
+#include "colmap/util/logging.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+#include <Eigen/Dense>
+
+namespace colmap {
+
+bool TriangulatePoint(const Eigen::Matrix3x4d& cam1_from_world,
+                      const Eigen::Matrix3x4d& cam2_from_world,
+                      const Eigen::Vector2d& cam_point1,
+                      const Eigen::Vector2d& cam_point2,
+                      Eigen::Vector3d* xyz) {
+  THROW_CHECK_NOTNULL(xyz);
+
+  Eigen::Matrix4d A;
+  A.row(0) = cam_point1(0) * cam1_from_world.row(2) - cam1_from_world.row(0);
+  A.row(1) = cam_point1(1) * cam1_from_world.row(2) - cam1_from_world.row(1);
+  A.row(2) = cam_point2(0) * cam2_from_world.row(2) - cam2_from_world.row(0);
+  A.row(3) = cam_point2(1) * cam2_from_world.row(2) - cam2_from_world.row(1);
+
+  const Eigen::JacobiSVD<Eigen::Matrix4d> svd(A, Eigen::ComputeFullV);
+#if EIGEN_VERSION_AT_LEAST(3, 4, 0)
+  if (svd.info() != Eigen::Success) {
+    return false;
+  }
+#endif
+
+  if (svd.matrixV()(3, 3) == 0) {
+    return false;
+  }
+
+  *xyz = svd.matrixV().col(3).hnormalized();
+  return true;
+}
+
+bool TriangulatePoint(const Eigen::Matrix3x4d& cam1_from_world,
+                      const Eigen::Matrix3x4d& cam2_from_world,
+                      const Eigen::Vector3d& cam_ray1,
+                      const Eigen::Vector3d& cam_ray2,
+                      Eigen::Vector3d* xyz) {
+  THROW_CHECK_NOTNULL(xyz);
+
+  Eigen::Matrix<double, 6, 4> A;
+  A.topRows<3>() =
+      cam1_from_world - cam_ray1 * (cam_ray1.transpose() * cam1_from_world);
+  A.bottomRows<3>() =
+      cam2_from_world - cam_ray2 * (cam_ray2.transpose() * cam2_from_world);
+
+  const Eigen::JacobiSVD<Eigen::Matrix<double, 6, 4>> svd(A,
+                                                          Eigen::ComputeFullV);
+#if EIGEN_VERSION_AT_LEAST(3, 4, 0)
+  if (svd.info() != Eigen::Success) {
+    return false;
+  }
+#endif
+
+  if (svd.matrixV()(3, 3) == 0) {
+    return false;
+  }
+
+  *xyz = svd.matrixV().col(3).hnormalized();
+  return true;
+}
+
+bool TriangulateMidPoint(const Rigid3d& cam2_from_cam1,
+                         const Eigen::Vector3d& cam_ray1,
+                         const Eigen::Vector3d& cam_ray2,
+                         Eigen::Vector3d* point3D_in_cam1) {
+  const Eigen::Quaterniond cam1_from_cam2_rotation =
+      cam2_from_cam1.rotation().inverse();
+  const Eigen::Vector3d cam_ray2_in_cam1 = cam1_from_cam2_rotation * cam_ray2;
+  const Eigen::Vector3d cam2_in_cam1 =
+      cam1_from_cam2_rotation * -cam2_from_cam1.translation();
+
+  Eigen::Matrix3d A;
+  A << cam_ray1(0), -cam_ray2_in_cam1(0), -cam2_in_cam1(0), cam_ray1(1),
+      -cam_ray2_in_cam1(1), -cam2_in_cam1(1), cam_ray1(2), -cam_ray2_in_cam1(2),
+      -cam2_in_cam1(2);
+
+  const Eigen::JacobiSVD<Eigen::Matrix3d> svd(A, Eigen::ComputeFullV);
+#if EIGEN_VERSION_AT_LEAST(3, 4, 0)
+  if (svd.info() != Eigen::Success) {
+    return false;
+  }
+#endif
+
+  if (svd.matrixV()(2, 2) == 0) {
+    return false;
+  }
+
+  const Eigen::Vector2d lambda = svd.matrixV().col(2).hnormalized();
+
+  // Check if point is behind cameras.
+  if (lambda(0) <= std::numeric_limits<double>::epsilon() ||
+      lambda(1) <= std::numeric_limits<double>::epsilon()) {
+    return false;
+  }
+
+  *point3D_in_cam1 = 0.5 * (lambda(0) * cam_ray1 + cam2_in_cam1 +
+                            lambda(1) * cam_ray2_in_cam1);
+
+  return true;
+}
+
+namespace {
+
+// Contribution of a single bearing observation to the projector-based DLT
+// normal-equation matrix. With unit bearing b and projection matrix
+// P = cam_from_world, the residual operator is term = P - b b^T P, and the
+// system accumulates term^T term.
+inline Eigen::Matrix4d TriangulationDltTerm(
+    const Eigen::Matrix3x4d& cam_from_world, const Eigen::Vector3d& cam_ray) {
+  const Eigen::Matrix3x4d term =
+      cam_from_world - cam_ray * cam_ray.transpose() * cam_from_world;
+  return term.transpose() * term;
+}
+
+// Solve the DLT system for the homogeneous point (smallest eigenvector of A).
+inline bool SolveTriangulationDlt(const Eigen::Matrix4d& A,
+                                  Eigen::Vector3d* xyz) {
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eigen_solver(A);
+  if (eigen_solver.info() != Eigen::Success ||
+      eigen_solver.eigenvectors()(3, 0) == 0) {
+    return false;
+  }
+  *xyz = eigen_solver.eigenvectors().col(0).hnormalized();
+  return true;
+}
+
+}  // namespace
+
+bool TriangulateMultiViewPoint(
+    const span<const Eigen::Matrix3x4d>& cams_from_world,
+    const span<const Eigen::Vector2d>& cam_points,
+    Eigen::Vector3d* xyz) {
+  THROW_CHECK_EQ(cams_from_world.size(), cam_points.size());
+  THROW_CHECK_NOTNULL(xyz);
+  Eigen::Matrix4d A = Eigen::Matrix4d::Zero();
+  for (size_t i = 0; i < cam_points.size(); ++i) {
+    A += TriangulationDltTerm(cams_from_world[i],
+                              cam_points[i].homogeneous().normalized());
+  }
+  return SolveTriangulationDlt(A, xyz);
+}
+
+bool TriangulateMultiViewPoint(
+    const span<const Eigen::Matrix3x4d>& cams_from_world,
+    const span<const Eigen::Vector3d>& cam_rays,
+    Eigen::Vector3d* xyz) {
+  THROW_CHECK_EQ(cams_from_world.size(), cam_rays.size());
+  THROW_CHECK_NOTNULL(xyz);
+  Eigen::Matrix4d A = Eigen::Matrix4d::Zero();
+  for (size_t i = 0; i < cam_rays.size(); ++i) {
+    A += TriangulationDltTerm(cams_from_world[i], cam_rays[i]);
+  }
+  return SolveTriangulationDlt(A, xyz);
+}
+
+bool TriangulateOptimalPoint(const Eigen::Matrix3x4d& cam1_from_world_mat,
+                             const Eigen::Matrix3x4d& cam2_from_world_mat,
+                             const Eigen::Vector2d& cam_point1,
+                             const Eigen::Vector2d& cam_point2,
+                             Eigen::Vector3d* xyz) {
+  const Rigid3d cam1_from_world(
+      Eigen::Quaterniond(cam1_from_world_mat.leftCols<3>()),
+      cam1_from_world_mat.col(3));
+  const Rigid3d cam2_from_world(
+      Eigen::Quaterniond(cam2_from_world_mat.leftCols<3>()),
+      cam2_from_world_mat.col(3));
+  const Rigid3d cam1_from_cam2 = cam1_from_world * Inverse(cam2_from_world);
+  const Eigen::Matrix3d E = EssentialMatrixFromPose(cam1_from_cam2);
+
+  Eigen::Vector2d optimal_point1;
+  Eigen::Vector2d optimal_point2;
+  // The correction helper uses point1^T E point2 = 0.
+  FindOptimalImageObservations(
+      E, cam_point1, cam_point2, &optimal_point1, &optimal_point2);
+
+  return TriangulatePoint(cam1_from_world_mat,
+                          cam2_from_world_mat,
+                          optimal_point1,
+                          optimal_point2,
+                          xyz);
+}
+
+double CalculateTriangulationAngle(const Eigen::Vector3d& proj_center1,
+                                   const Eigen::Vector3d& proj_center2,
+                                   const Eigen::Vector3d& point3D) {
+  const double angle = CalculateAngleBetweenVectors(point3D - proj_center1,
+                                                    point3D - proj_center2);
+  // Triangulation is unstable for acute angles (far away points) and
+  // obtuse angles (close points), so always compute the minimum angle
+  // between the two intersecting rays.
+  return std::min(angle, static_cast<double>(EIGEN_PI) - angle);
+}
+
+std::vector<double> CalculateTriangulationAngles(
+    const Eigen::Vector3d& proj_center1,
+    const Eigen::Vector3d& proj_center2,
+    const std::vector<Eigen::Vector3d>& points3D) {
+  std::vector<double> angles(points3D.size());
+  for (size_t i = 0; i < points3D.size(); ++i) {
+    angles[i] =
+        CalculateTriangulationAngle(proj_center1, proj_center2, points3D[i]);
+  }
+  return angles;
+}
+
+double CalculateAngleBetweenVectors(const Eigen::Vector3d& v1,
+                                    const Eigen::Vector3d& v2) {
+  const double squared_norm1 = v1.squaredNorm();
+  const double squared_norm2 = v2.squaredNorm();
+  const double squared_norm_product = squared_norm1 * squared_norm2;
+  if (std::isnormal(squared_norm_product) &&
+      std::min(squared_norm1, squared_norm2) >=
+          std::numeric_limits<double>::min()) {
+    const double cosine = v1.dot(v2) / std::sqrt(squared_norm_product);
+    // acos loses accuracy near parallel or opposite vectors (|cosine| within
+    // 1e-8 of 1, i.e. within ~1.4e-4 rad of 0 or pi), so only use it for
+    // ordinary angles and fall through to the stable formulation below.
+    constexpr double kAcosCosineThreshold = 1.0 - 1e-8;
+    if (std::abs(cosine) < kAcosCosineThreshold) {
+      return std::acos(cosine);
+    }
+  }
+  // Rescale by the largest component to avoid overflow/underflow of the
+  // squared norms, then use atan2 of the cross-product norm and the dot
+  // product, which remains accurate for small angles and near pi.
+  const double scale1 = v1.cwiseAbs().maxCoeff();
+  const double scale2 = v2.cwiseAbs().maxCoeff();
+  if (scale1 == 0.0 || scale2 == 0.0) {
+    return 0.0;
+  }
+  const Eigen::Vector3d scaled_v1 = v1 / scale1;
+  const Eigen::Vector3d scaled_v2 = v2 / scale2;
+  return std::atan2(scaled_v1.cross(scaled_v2).stableNorm(),
+                    scaled_v1.dot(scaled_v2));
+}
+
+}  // namespace colmap
