@@ -349,6 +349,36 @@ jobs:
               biggest = ", ".join("%s %.2f MB" % (n, s / 1e6)
                                   for n, s in sorted(sections, key=lambda kv: -kv[1])[:6])
               note("sections of %s: %s" % (path.rsplit("/", 1)[-1], biggest))
+              init_bytes = next((s for n, s in sections if n == ".init_array"), 0)
+              dyn = subprocess.run(["readelf", "-d", "--wide", path],
+                                   capture_output=True, text=True).stdout
+              needed = re.findall(r"\(NEEDED\)\s+Shared library:\s+\[([^\]]+)\]", dyn)
+              allowed_needed = {
+                  "libc.so", "libm.so", "libdl.so", "liblog.so", "libandroid.so",
+                  "libEGL.so", "libGLESv2.so", "libGLESv3.so", "libvulkan.so",
+                  "libOpenSLES.so", "libaaudio.so", "libmediandk.so", "libnativewindow.so",
+              }
+              bad_needed = [n for n in needed if n not in allowed_needed]
+              if bad_needed:
+                  fail("%s has non-system DT_NEEDED libraries that are not packaged: %s"
+                       % (path, ", ".join(bad_needed)))
+              phdrs = subprocess.run(["readelf", "-l", "--wide", path],
+                                     capture_output=True, text=True).stdout
+              load_aligns = [int(a, 16) for a in re.findall(r"^\s*LOAD\s+.*?\s+(0x[0-9a-fA-F]+)\s*$", phdrs, re.M)]
+              min_align = min(load_aligns) if load_aligns else 0
+              if min_align and min_align < 0x4000:
+                  fail("%s has PT_LOAD alignment 0x%x (< 16 KB required for targetSdk 36)" % (path, min_align))
+              dynsym = subprocess.run(["nm", "-D", "--defined-only", path],
+                                      capture_output=True, text=True).stdout
+              leaked_cxx = [ln.split()[-1] for ln in dynsym.splitlines()
+                            if len(ln.split()) >= 3 and ln.split()[-1].startswith(("_ZNSt6__ndk1", "_ZN6colmap", "_ZN5ceres", "_ZN7poselib"))]
+              unwind_syms = [ln.split()[-1] for ln in dynsym.splitlines()
+                             if len(ln.split()) >= 3 and ln.split()[-1].startswith(("__cxa_", "_Unwind_"))]
+              if leaked_cxx:
+                  fail("%s leaks %d static C++ symbols in .dynsym (e.g. %s)"
+                       % (path, len(leaked_cxx), ", ".join(leaked_cxx[:5])))
+              note("ABI check %s: DT_NEEDED=%s, min_LOAD_align=0x%x, .init_array=%dB, leaked_cxx=0, unwind_dynsym=%d"
+                   % (path.rsplit("/", 1)[-1], needed, min_align, init_bytes, len(unwind_syms)))
 
           by_name = {}
           for library in ours:
@@ -381,10 +411,9 @@ jobs:
           if not called:
               fail("the generated bindings call no ffi_ entry point: they were not generated")
 
-          # a component's own entry points are its namespace's; the buffer helpers are shared, and
-          # which library carries one is the linker's business, so those only have to be somewhere
+          # One library carries both FilmCraft and ProCraft components (via uniffi libraryOverride).
           carriers = {"ffi_filmcraft_android": "/libfilmcraft_android.so",
-                      "ffi_procraft_core": "/libprocraft_core.so"}
+                      "ffi_procraft_core": "/libfilmcraft_android.so"}
           for component, suffix in carriers.items():
               wanted = {n for n in called if n.startswith(component)}
               if not wanted:

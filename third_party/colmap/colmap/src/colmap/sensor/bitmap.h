@@ -6,7 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <iostream>
+#include <iosfwd>
 #include <limits>
 #include <memory>
 #include <optional>

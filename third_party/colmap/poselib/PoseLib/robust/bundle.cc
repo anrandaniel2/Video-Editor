@@ -43,7 +43,6 @@
 #include "PoseLib/robust/optim/monodepth_relpose.h"
 #include "PoseLib/robust/robust_loss.h"
 
-#include <iostream>
 #include <memory>
 
 namespace poselib {

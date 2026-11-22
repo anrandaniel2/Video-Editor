@@ -28,11 +28,16 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
 
+extern "C" void vl_constructor(void);
+
 namespace {
+
+std::once_flag g_vl_init_once;
 
 void SetError(ColmapSolveResult* out, const char* msg) {
   if (!out) return;
@@ -66,6 +71,8 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
   }
 
   try {
+    std::call_once(g_vl_init_once, vl_constructor);
+
     const uint32_t width = frames[0].width;
     const uint32_t height = frames[0].height;
     if (width < 16 || height < 16) {

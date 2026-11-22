@@ -92,15 +92,15 @@
 #ifndef CERCES_INTERNAL_MINIGLOG_GLOG_LOGGING_H_
 #define CERCES_INTERNAL_MINIGLOG_GLOG_LOGGING_H_
 
-#ifdef ANDROID
+#if defined(ANDROID) || defined(__ANDROID__)
 #include <android/log.h>
-#endif  // ANDROID
+#endif  // ANDROID || __ANDROID__
 
 #include <algorithm>
+#include <cstdio>
 #include <ctime>
 #include <exception>
 #include <fstream>
-#include <iostream>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -149,8 +149,11 @@ class CERES_EXPORT LogSink {
   virtual void WaitTillSent() = 0;
 };
 
-// Global set of log sinks. The actual object is defined in logging.cc.
-extern CERES_EXPORT std::set<LogSink*> log_sinks_global;
+// Lazy function-local set of log sinks (zero dlopen static constructors).
+inline std::set<LogSink*>& LogSinksGlobal() {
+  static std::set<LogSink*> sinks;
+  return sinks;
+}
 
 inline void InitGoogleLogging(const char* /* argv */) {
   // Do nothing; this is ignored.
@@ -159,9 +162,9 @@ inline void InitGoogleLogging(const char* /* argv */) {
 // Note: the Log sink functions are not thread safe.
 inline void AddLogSink(LogSink* sink) {
   // TODO(settinger): Add locks for thread safety.
-  log_sinks_global.insert(sink);
+  LogSinksGlobal().insert(sink);
 }
-inline void RemoveLogSink(LogSink* sink) { log_sinks_global.erase(sink); }
+inline void RemoveLogSink(LogSink* sink) { LogSinksGlobal().erase(sink); }
 
 }  // namespace google
 
@@ -192,7 +195,7 @@ class CERES_EXPORT MessageLogger {
     }
     stream_ << "\n";
 
-#ifdef ANDROID
+#if defined(ANDROID) || defined(__ANDROID__)
     static const int android_log_levels[] = {
         ANDROID_LOG_FATAL,    // LOG(FATAL)
         ANDROID_LOG_ERROR,    // LOG(ERROR)
@@ -216,9 +219,10 @@ class CERES_EXPORT MessageLogger {
       __android_log_write(ANDROID_LOG_FATAL, tag_.c_str(), "terminating.\n");
     }
 #else
-    // If not building on Android, log all output to std::cerr.
-    std::cerr << stream_.str();
-#endif  // ANDROID
+    // If not building on Android, log all output to stderr without pulling iostream.
+    const std::string msg = stream_.str();
+    std::fwrite(msg.data(), 1, msg.size(), stderr);
+#endif  // ANDROID || __ANDROID__
 
     LogToSinks(severity_);
     WaitForSinks();
@@ -247,10 +251,11 @@ class CERES_EXPORT MessageLogger {
     localtime_r(&rawtime, &timeinfo);
 #endif
 
+    std::set<google::LogSink*>& sinks = google::LogSinksGlobal();
     std::set<google::LogSink*>::iterator iter;
     // Send the log message to all sinks.
-    for (iter = google::log_sinks_global.begin();
-         iter != google::log_sinks_global.end();
+    for (iter = sinks.begin();
+         iter != sinks.end();
          ++iter) {
       (*iter)->send(severity,
                     file_.c_str(),
@@ -264,11 +269,12 @@ class CERES_EXPORT MessageLogger {
 
   void WaitForSinks() {
     // TODO(settinger): Add locks for thread safety.
+    std::set<google::LogSink*>& sinks = google::LogSinksGlobal();
     std::set<google::LogSink*>::iterator iter;
 
     // Call WaitTillSent() for all sinks.
-    for (iter = google::log_sinks_global.begin();
-         iter != google::log_sinks_global.end();
+    for (iter = sinks.begin();
+         iter != sinks.end();
          ++iter) {
       (*iter)->WaitTillSent();
     }

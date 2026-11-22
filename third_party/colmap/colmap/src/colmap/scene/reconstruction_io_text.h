@@ -5,7 +5,8 @@
 #include "colmap/scene/reconstruction.h"
 
 #include <filesystem>
-#include <iostream>
+#include <istream>
+#include <ostream>
 
 namespace colmap {
 

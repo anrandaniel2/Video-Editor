@@ -1518,6 +1518,12 @@ vl_constructor (void)
 
   state = vl_get_state() ;
 
+  state->malloc_func  = malloc ;
+  state->realloc_func = realloc ;
+  state->calloc_func  = calloc ;
+  state->free_func    = free ;
+  state->printf_func  = printf ;
+
 #if ! defined(VL_DISABLE_THREADS)
 #if defined(DEBUG)
   printf("VLFeat DEBUG: constructing thread specific state.\n") ;
@@ -1541,14 +1547,10 @@ vl_constructor (void)
 #if defined(DEBUG)
   printf("VLFeat DEBUG: constructing the generic thread state instance (threading support disabled).\n") ;
 #endif
-  vl_get_state()->threadState = vl_thread_specific_state_new() ;
+  if (state->threadState == NULL) {
+    state->threadState = vl_thread_specific_state_new() ;
+  }
 #endif
-
-  state->malloc_func  = malloc ;
-  state->realloc_func = realloc ;
-  state->calloc_func  = calloc ;
-  state->free_func    = free ;
-  state->printf_func  = printf ;
 
   /* on x86 platforms read the CPUID register */
 #if defined(VL_ARCH_IX86) || defined(VL_ARCH_X64) || defined(VL_ARCH_IA64)
@@ -1671,9 +1673,6 @@ vl_destructor ()
         static void f(void)
 #endif
 
-INITIALIZER(vl_initialize)
-{
-    vl_constructor();
-    atexit(vl_destructor);
-}
+/* Lazily initialized by colmap_solve_sequence() instead of a dlopen constructor. */
+
 

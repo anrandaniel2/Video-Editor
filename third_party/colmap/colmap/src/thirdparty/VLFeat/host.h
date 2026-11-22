@@ -302,6 +302,9 @@ defined(__DOXYGEN__)
 /** @name Identifying the host endianness
  ** @{ */
 #if defined(__LITTLE_ENDIAN__) || \
+    (defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || \
+    defined(__aarch64__)       || \
+    defined(__arm__)           || \
     defined(VL_ARCH_IX86)      || \
     defined(VL_ARCH_IA64)      || \
     defined(VL_ARCH_X64)       || \

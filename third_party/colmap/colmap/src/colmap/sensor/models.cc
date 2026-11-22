@@ -61,9 +61,11 @@ CameraModelId CameraModelNameToId(const std::string& model_name) {
 
 const std::string& CameraModelIdToName(const CameraModelId model_id) {
   switch (model_id) {
-#define CAMERA_MODEL_CASE(CameraModel) \
-  case CameraModel::model_id:          \
-    return CameraModel::model_name;
+#define CAMERA_MODEL_CASE(CameraModel)                  \
+  case CameraModel::model_id: {                         \
+    static const std::string kName(CameraModel::model_name); \
+    return kName;                                       \
+  }
 
     CAMERA_MODEL_CASES
 
@@ -97,10 +99,11 @@ std::vector<double> CameraModelInitializeParams(const CameraModelId model_id,
 
 const std::string& CameraModelParamsInfo(const CameraModelId model_id) {
   switch (model_id) {
-#define CAMERA_MODEL_CASE(CameraModel) \
-  case CameraModel::model_id:          \
-    return CameraModel::params_info;   \
-    break;
+#define CAMERA_MODEL_CASE(CameraModel)                  \
+  case CameraModel::model_id: {                         \
+    static const std::string kInfo(CameraModel::params_info); \
+    return kInfo;                                       \
+  }
 
     CAMERA_MODEL_SWITCH_CASES
 

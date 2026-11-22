@@ -34,7 +34,6 @@
 
 #include "ceres/c_api.h"
 
-#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -181,5 +180,5 @@ void ceres_solve(ceres_problem_t* c_problem) {
 
   ceres::Solver::Summary summary;
   ceres::Solve(options, problem, &summary);
-  std::cout << summary.FullReport() << "\n";
+  LOG(INFO) << summary.FullReport();
 }

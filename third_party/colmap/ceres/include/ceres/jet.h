@@ -160,7 +160,7 @@
 #include <cmath>
 #include <complex>
 #include <iosfwd>
-#include <iostream>  // NOLINT
+#include <ostream>  // NOLINT
 #include <limits>
 #include <numeric>
 #include <string>

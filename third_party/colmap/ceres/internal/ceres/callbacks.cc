@@ -31,7 +31,6 @@
 #include "ceres/callbacks.h"
 
 #include <algorithm>
-#include <iostream>  // NO LINT
 #include <string>
 
 #include "ceres/program.h"
@@ -118,7 +117,7 @@ CallbackReturnType LoggingCallback::operator()(
   }
 
   if (log_to_stdout_) {
-    std::cout << output << std::endl;
+    LOG(INFO) << output;
   } else {
     VLOG(1) << output;
   }

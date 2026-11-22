@@ -5,7 +5,8 @@
 #include "colmap/util/types.h"
 
 #include <algorithm>
-#include <iostream>
+#include <istream>
+#include <ostream>
 #include <vector>
 
 namespace colmap {

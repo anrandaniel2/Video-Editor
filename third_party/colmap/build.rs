@@ -17,9 +17,10 @@ fn collect_ext(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn configure_common(b: &mut cc::Build, root: &Path) {
+fn configure_common(b: &mut cc::Build, root: &Path, is_android: bool) {
     b.warnings(false)
         .opt_level(2)
+        .flag_if_supported("-fvisibility=hidden")
         .include(root.join("eigen"))
         .include(root.join("poselib"))
         .include(root.join("ceres/include"))
@@ -34,14 +35,18 @@ fn configure_common(b: &mut cc::Build, root: &Path) {
         .define("VL_DISABLE_THREADS", None)
         .define("NDEBUG", None)
         .cargo_metadata(false);
+    if is_android {
+        b.define("ANDROID", None);
+    }
 }
 
 fn build_cpp_group(name: &str, files: &[PathBuf], root: &Path, is_android: bool) {
     let mut b = cc::Build::new();
-    configure_common(&mut b, root);
+    configure_common(&mut b, root, is_android);
     b.cpp(true)
         .flag_if_supported("-std=c++17")
-        .flag_if_supported("/std:c++17");
+        .flag_if_supported("/std:c++17")
+        .flag_if_supported("-fvisibility-inlines-hidden");
     if is_android {
         b.cpp_link_stdlib(None);
     }
@@ -79,7 +84,7 @@ fn main() {
         s.spawn(move || {
             build_cpp_group("colmap_poselib", &poselib_cc, root, is_android);
             let mut c_build = cc::Build::new();
-            configure_common(&mut c_build, root);
+            configure_common(&mut c_build, root, is_android);
             c_build.flag_if_supported("-std=gnu11");
             c_build.flag("-iquote");
             c_build.flag(root.join("colmap/src/thirdparty/VLFeat").to_string_lossy().as_ref());
@@ -100,14 +105,14 @@ fn main() {
         let mut probe = cc::Build::new();
         probe.cpp(true);
         let compiler = probe.get_compiler();
-        let mut search_dirs: Vec<PathBuf> = Vec::new();
+        let mut candidate_dirs: Vec<PathBuf> = Vec::new();
         let mut push_dir = |d: PathBuf| {
-            if d.exists() && !search_dirs.contains(&d) {
-                search_dirs.push(d);
+            if d.exists() && !candidate_dirs.contains(&d) {
+                candidate_dirs.push(d);
             }
         };
 
-        for lib_name in ["libc++_static.a", "libc++abi.a", "libunwind.a"] {
+        for lib_name in ["libc++_static.a", "libc++abi.a"] {
             if let Ok(out) = compiler.to_command().arg(format!("-print-file-name={lib_name}")).output() {
                 if out.status.success() {
                     let s = String::from_utf8_lossy(&out.stdout);
@@ -144,15 +149,24 @@ fn main() {
             }
         }
 
-        let has_unwind = search_dirs.iter().any(|d| d.join("libunwind.a").exists());
-        for dir in &search_dirs {
-            println!("cargo:rustc-link-search=native={}", dir.display());
+        // Stage ONLY libc++_static.a and libc++abi.a into OUT_DIR under private archive names.
+        // Never add `<ndk>/sysroot/usr/lib/<triple>` directly to `rustc-link-search`: that directory
+        // also holds static Bionic `libc.a`/`libdl.a`/`libm.a` and `libc++_shared.so`.
+        for (src_name, dst_stem) in [
+            ("libc++_static.a", "filmcraft_cxx_static"),
+            ("libc++abi.a", "filmcraft_cxxabi_static"),
+        ] {
+            let src = candidate_dirs
+                .iter()
+                .map(|d| d.join(src_name))
+                .find(|p| p.exists())
+                .unwrap_or_else(|| panic!("Failed to locate Android NDK {src_name} in {candidate_dirs:?}"));
+            let dst = out_dir.join(format!("lib{dst_stem}.a"));
+            fs::copy(&src, &dst).unwrap_or_else(|e| panic!("Failed to stage {src:?} -> {dst:?}: {e}"));
+            println!("cargo:rustc-link-lib=static={dst_stem}");
         }
-        println!("cargo:rustc-link-lib=static=c++_static");
-        println!("cargo:rustc-link-lib=static=c++abi");
-        if has_unwind {
-            println!("cargo:rustc-link-lib=static=unwind");
-        }
+        // Note: cargo-ndk's generated `libgcc.a` (`INPUT(-lunwind)`) already links a single unwinder
+        // at the end of the link line after `c++abi`; do not link a second `libunwind.a`.
         println!("cargo:rustc-link-lib=log");
         println!("cargo:rustc-link-lib=dl");
         println!("cargo:rustc-link-lib=m");

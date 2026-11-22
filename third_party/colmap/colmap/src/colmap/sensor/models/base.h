@@ -92,8 +92,8 @@ constexpr std::array<size_t, N> IotaArray() {
   static constexpr bool has_img_from_cam_with_jac =                    \
       has_img_from_cam_with_jac_val;                                   \
   static constexpr CameraModelId model_id = model_id_val;              \
-  static inline const std::string model_name = model_name_val;         \
-  static inline const std::string params_info = params_info_val;       \
+  static constexpr const char* model_name = model_name_val;            \
+  static constexpr const char* params_info = params_info_val;          \
   template <bool Enable = has_img_from_cam_with_jac,                   \
             typename std::enable_if<Enable, int>::type = 0>            \
   static inline bool ImgFromCamWithJac(const double* params,           \

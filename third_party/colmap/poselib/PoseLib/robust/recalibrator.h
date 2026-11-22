@@ -33,8 +33,6 @@
 #include "optim/jacobian_accumulator.h"
 #include "optim/refiner_base.h"
 
-#include <iostream>
-
 namespace poselib {
 
 // Re-calibrate a camera from one model to another given a collection of 2D points.

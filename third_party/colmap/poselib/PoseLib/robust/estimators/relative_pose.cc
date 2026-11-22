@@ -42,8 +42,6 @@
 #include "PoseLib/solvers/relpose_monodepth_3pt_shared_focal.h"
 #include "PoseLib/solvers/relpose_monodepth_3pt_varying_focal.h"
 
-#include <iostream>
-
 namespace poselib {
 
 void RelativePoseEstimator::generate_models(std::vector<CameraPose> *models) {

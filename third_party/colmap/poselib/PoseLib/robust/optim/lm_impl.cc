@@ -1,14 +1,20 @@
 #include "lm_impl.h"
 
-#include <iostream>
+#include <cstdio>
 namespace poselib {
 
 void print_iteration(const BundleStats &stats, RobustLoss *loss_fn) {
+    (void)loss_fn;
     if (stats.iterations == 0) {
-        std::cout << "initial_cost=" << stats.initial_cost << "\n";
+        std::fprintf(stderr, "initial_cost=%g\n", stats.initial_cost);
     }
-    std::cout << "iter=" << stats.iterations << ", cost=" << stats.cost << ", step=" << stats.step_norm
-              << ", grad=" << stats.grad_norm << ", lambda=" << stats.lambda << "\n";
+    std::fprintf(stderr,
+                 "iter=%zu, cost=%g, step=%g, grad=%g, lambda=%g\n",
+                 stats.iterations,
+                 stats.cost,
+                 stats.step_norm,
+                 stats.grad_norm,
+                 stats.lambda);
 }
 
 } // namespace poselib

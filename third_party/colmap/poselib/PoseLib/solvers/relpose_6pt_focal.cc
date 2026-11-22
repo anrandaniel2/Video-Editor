@@ -2,7 +2,6 @@
 #include "PoseLib/misc/sturm.h"
 
 #include <Eigen/Dense>
-#include <iostream>
 #include <math.h>
 #include <stdio.h>
 
