@@ -94,18 +94,115 @@ impl Gray {
             .collect()
     }
 
-    /// Central differences, zero at the border.
+    /// Rotation-invariant 3×3 Scharr gradients (`[3, 10, 3] / 32`), zero at the 1-px border.
+    /// Eliminates directional sub-pixel bias on diagonal edges compared to raw 2-tap differences.
     pub(crate) fn gradients(&self) -> (Vec<f32>, Vec<f32>) {
-        let (mut ix, mut iy) = (vec![0.0; self.w * self.h], vec![0.0; self.h * self.w]);
-        for y in 1..self.h.saturating_sub(1) {
-            for x in 1..self.w.saturating_sub(1) {
-                let i = y * self.w + x;
-                ix[i] = (self.p[i + 1] - self.p[i - 1]) * 0.5;
-                iy[i] = (self.p[i + self.w] - self.p[i - self.w]) * 0.5;
+        let (w, h) = (self.w, self.h);
+        let (mut ix, mut iy) = (vec![0.0; w * h], vec![0.0; h * w]);
+        if w < 3 || h < 3 {
+            return (ix, iy);
+        }
+        for y in 1..h - 1 {
+            let r0 = (y - 1) * w;
+            let r1 = y * w;
+            let r2 = (y + 1) * w;
+            for x in 1..w - 1 {
+                let p00 = self.p[r0 + x - 1];
+                let p01 = self.p[r0 + x];
+                let p02 = self.p[r0 + x + 1];
+                let p10 = self.p[r1 + x - 1];
+                let p12 = self.p[r1 + x + 1];
+                let p20 = self.p[r2 + x - 1];
+                let p21 = self.p[r2 + x];
+                let p22 = self.p[r2 + x + 1];
+                ix[r1 + x] = (3.0 * (p02 - p00) + 10.0 * (p12 - p10) + 3.0 * (p22 - p20)) * (1.0 / 32.0);
+                iy[r1 + x] = (3.0 * (p20 - p00) + 10.0 * (p21 - p01) + 3.0 * (p22 - p02)) * (1.0 / 32.0);
             }
         }
         (ix, iy)
     }
+}
+
+/// One feature query for batched GPU pyramidal Lucas–Kanade + forward-backward verification.
+#[derive(Clone, Copy, Debug)]
+pub struct GpuTrackQuery {
+    pub pt: (f32, f32),
+    pub guess: (f32, f32),
+}
+
+/// Pluggable GPU compute backend (`filmcraft_gpu::tracker`) executing RGBA→luma, Gaussian
+/// pyramids, Scharr gradients, Shi–Tomasi corner detection, illumination-invariant forward-backward
+/// pyramidal Lucas–Kanade, coarse ZNCC search, and stereo disparity completely on the GPU.
+pub trait GpuTrackBackend: Send + Sync {
+    /// Upload RGBA8, crop to `crop = (vx, vy, vw, vh)`, conform to `dst_size = (dw, dh)`, and
+    /// build `levels` Gaussian pyramid levels + Scharr gradients in GPU VRAM `slot`.
+    fn build_rgba_pyramid(
+        &self,
+        slot: usize,
+        rgba: &[u8],
+        src_w: usize,
+        src_h: usize,
+        crop: (usize, usize, usize, usize),
+        dst_size: (usize, usize),
+        levels: usize,
+    ) -> Option<Gray>;
+
+    /// Upload an existing level-0 [`Gray`] plane and build its Gaussian pyramid + Scharr gradients
+    /// on the GPU in `slot`.
+    fn upload_gray_pyramid(&self, slot: usize, gray: &Gray, levels: usize) -> bool;
+
+    /// Compute dense Shi–Tomasi minimum eigenvalues on GPU `slot` level 0 inside
+    /// `roi = (x0, y0, x1, y1)`, returning `(min_eig, x, y)` tile maxima per `cell`×`cell` block.
+    fn detect_corners(
+        &self,
+        slot: usize,
+        roi: (usize, usize, usize, usize),
+        cell: usize,
+    ) -> Option<Vec<(f32, f32, f32)>>;
+
+    /// Track a batch of points from `prev_slot` to `curr_slot` on the GPU using mean-normalized
+    /// Inverse-Compositional Pyramidal LK + `curr -> prev` backward verification (`<= fb_max_px`).
+    fn track_batch_fb(
+        &self,
+        prev_slot: usize,
+        curr_slot: usize,
+        queries: &[GpuTrackQuery],
+        patch_radius: i32,
+        fb_max_px: f32,
+    ) -> Option<Vec<Option<(f32, f32)>>>;
+
+    /// Coarse-level ZNCC search on the GPU around `pt` between `prev_slot` and `curr_slot`.
+    fn coarse_search(
+        &self,
+        prev_slot: usize,
+        curr_slot: usize,
+        pt: (f32, f32),
+        patch_radius: i32,
+        reach_px: f32,
+    ) -> Option<(f32, f32)>;
+
+    /// Batched horizontal ZNCC stereo disparity (`0..=max_disp`) on the GPU between `left_slot`
+    /// and `right_slot`, returning normalized disparity `d / max_disp` (`0..=1`) or `None`.
+    fn stereo_disparity_batch(
+        &self,
+        left_slot: usize,
+        right_slot: usize,
+        pts: &[(f32, f32)],
+        patch_radius: i32,
+        max_disp: f32,
+    ) -> Option<Vec<Option<f32>>>;
+}
+
+static GPU_BACKEND: std::sync::OnceLock<&'static dyn GpuTrackBackend> = std::sync::OnceLock::new();
+
+/// Register the `wgpu` compute tracking backend at startup.
+pub fn register_gpu_backend(backend: &'static dyn GpuTrackBackend) {
+    let _ = GPU_BACKEND.set(backend);
+}
+
+/// Active GPU tracking backend, if registered and supported by the device.
+pub fn gpu_backend() -> Option<&'static dyn GpuTrackBackend> {
+    GPU_BACKEND.get().copied()
 }
 
 /// Active primary-eye rectangle `(x0, y0, width, height)` for a stereoscopic packing layout.
@@ -155,14 +252,14 @@ pub struct TrackPoint {
     pub confidence: f32,
 }
 
-/// The template of one feature at one level: values and gradients sampled once at the point's
-/// exact (fractional) place, and the inverse Hessian of the Lucas–Kanade system. Snapping the
-/// template to whole pixels while the point stays fractional biases every frame by up to half a
-/// pixel, which a long track turns into a visible slide.
+/// Mean-subtracted template of one feature at one level: zero-mean patch values, Scharr gradients
+/// sampled at the point's exact fractional position, and the inverse Hessian of the IC-LK system.
+/// Subtracting patch means makes sub-pixel tracking invariant to DC brightness/exposure flicker.
+#[derive(Clone)]
 struct Template {
     dx: Vec<f32>,
     dy: Vec<f32>,
-    v: Vec<f32>,
+    v_zero: Vec<f32>,
     ix: Vec<f32>,
     iy: Vec<f32>,
     /// Inverse of [[Σix², Σixiy], [Σixiy, Σiy²]].
@@ -176,26 +273,35 @@ fn template(l: &Level, x: f32, y: f32, r: i32) -> Option<Template> {
         return None;
     }
     let count = ((2 * r + 1) * (2 * r + 1)) as f32;
-    let (mut t, mut gxx, mut gyy, mut gxy) =
-        (Template { dx: Vec::new(), dy: Vec::new(), v: Vec::new(), ix: Vec::new(), iy: Vec::new(), h: [0.0; 4] }, 0.0f32, 0.0f32, 0.0f32);
+    let (mut t, mut gxx, mut gyy, mut gxy, mut sum_v) = (
+        Template { dx: Vec::new(), dy: Vec::new(), v_zero: Vec::new(), ix: Vec::new(), iy: Vec::new(), h: [0.0; 4] },
+        0.0f32,
+        0.0f32,
+        0.0f32,
+        0.0f32,
+    );
     for oy in -r..=r {
         for ox in -r..=r {
             let (sx, sy) = (x + ox as f32, y + oy as f32);
             let a = sample(&l.ix, img.w, img.h, sx, sy)?;
             let b = sample(&l.iy, img.w, img.h, sx, sy)?;
+            let v = img.at(sx, sy)?;
             t.dx.push(ox as f32);
             t.dy.push(oy as f32);
-            t.v.push(img.at(sx, sy)?);
+            t.v_zero.push(v);
             t.ix.push(a);
             t.iy.push(b);
+            sum_v += v;
             gxx += a * a;
             gyy += b * b;
             gxy += a * b;
         }
     }
+    let mean = sum_v / count;
+    for v in &mut t.v_zero {
+        *v -= mean;
+    }
     let det = gxx * gyy - gxy * gxy;
-    // Shi–Tomasi: the smaller eigenvalue of the structure tensor, per pixel. OpenCV's
-    // minEigThreshold is 1e-4 on the same quantity; flat and edge-only patches are unusable.
     let tr = gxx + gyy;
     let min_eig = (tr - (tr * tr - 4.0 * det).max(0.0).sqrt()) * 0.5 / count;
     if det.abs() < 1e-8 || min_eig < 1e-4 {
@@ -205,36 +311,51 @@ fn template(l: &Level, x: f32, y: f32, r: i32) -> Option<Template> {
     Some(t)
 }
 
-/// One pyramid level of Lucas–Kanade: where does the template at (`px`, `py`) in `prev` land in
-/// `next`, starting from `guess`? Returns the new point and the mean absolute patch error.
+/// Mean-normalized Inverse-Compositional Lucas–Kanade at one pyramid level.
 fn lk_level(next: &Gray, t: &Template, px: f32, py: f32, guess: (f32, f32)) -> Option<((f32, f32), f32)> {
     let (mut gx, mut gy) = guess;
+    let n = t.v_zero.len();
+    let inv_n = 1.0 / (n.max(1) as f32);
+    let mut cur = vec![0.0f32; n];
     for _ in 0..20 {
+        let mut sum = 0.0f32;
+        for k in 0..n {
+            let v = next.at(px + t.dx[k] + gx, py + t.dy[k] + gy)?;
+            cur[k] = v;
+            sum += v;
+        }
+        let mean = sum * inv_n;
         let (mut bx, mut by) = (0.0f32, 0.0f32);
-        for k in 0..t.v.len() {
-            let it = next.at(px + t.dx[k] + gx, py + t.dy[k] + gy)? - t.v[k];
+        for k in 0..n {
+            let it = (cur[k] - mean) - t.v_zero[k];
             bx += t.ix[k] * it;
             by += t.iy[k] * it;
         }
         let vx = -(t.h[0] * bx + t.h[1] * by);
         let vy = -(t.h[2] * bx + t.h[3] * by);
-        // A step this large means the linearisation has stopped meaning anything.
         if !vx.is_finite() || !vy.is_finite() || vx.abs() > 16.0 || vy.abs() > 16.0 {
             return None;
         }
         gx += vx;
         gy += vy;
-        if vx.abs() + vy.abs() < 0.01 {
+        if vx.abs() + vy.abs() < 0.004 {
             break;
         }
     }
     let out = (px + gx, py + gy);
     next.at(out.0, out.1)?;
-    let mut err = 0.0f32;
-    for k in 0..t.v.len() {
-        err += (next.at(px + t.dx[k] + gx, py + t.dy[k] + gy)? - t.v[k]).abs();
+    let mut sum = 0.0f32;
+    for k in 0..n {
+        let v = next.at(px + t.dx[k] + gx, py + t.dy[k] + gy)?;
+        cur[k] = v;
+        sum += v;
     }
-    Some((out, err / t.v.len() as f32))
+    let mean = sum * inv_n;
+    let mut err = 0.0f32;
+    for k in 0..n {
+        err += ((cur[k] - mean) - t.v_zero[k]).abs();
+    }
+    Some((out, err * inv_n))
 }
 
 /// Pyramidal track of one point from `prev` to `next`, coarse to fine, starting from `initial`
@@ -377,56 +498,87 @@ pub(crate) fn corners(img: &Gray, x: f32, y: f32, reach: f32, apart: f32, want: 
     out
 }
 
-/// Least-squares similarity (no reflection) taking `from` to `to`: the complex scale-rotation
-/// a+bi and the translation that goes with it, in the same coordinates. One round of outlier
-/// rejection drops points that disagree with the majority, so a corner that slipped onto the
-/// background cannot pull the target with it.
+/// Huber-IRLS similarity (no reflection) taking `from` to `to` with variance-aware scale/rotation
+/// regularization so narrow clusters or borderline points never inject sudden jitter into `target`.
 fn similarity(from: &[(f32, f32)], to: &[(f32, f32)]) -> Option<(f32, f32, f32, f32)> {
     if from.len() < 2 || from.len() != to.len() {
         return None;
     }
-    let fit = |keep: &[bool]| -> Option<(f32, f32, f32, f32)> {
-        let n = keep.iter().filter(|k| **k).count();
-        if n < 2 {
+    let fit_weighted = |w: &[f64]| -> Option<(f64, f64, f64, f64, f64)> {
+        let w_sum: f64 = w.iter().copied().sum();
+        if w_sum < 1.2 {
             return None;
         }
         let (mut fx, mut fy, mut tx, mut ty) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
         for i in 0..from.len() {
-            if keep[i] {
-                fx += f64::from(from[i].0);
-                fy += f64::from(from[i].1);
-                tx += f64::from(to[i].0);
-                ty += f64::from(to[i].1);
+            let wi = w[i];
+            if wi <= 0.0 {
+                continue;
             }
+            fx += wi * f64::from(from[i].0);
+            fy += wi * f64::from(from[i].1);
+            tx += wi * f64::from(to[i].0);
+            ty += wi * f64::from(to[i].1);
         }
-        let (fx, fy, tx, ty) = (fx / n as f64, fy / n as f64, tx / n as f64, ty / n as f64);
-        let (mut a, mut b, mut den) = (0.0f64, 0.0f64, 0.0f64);
+        let (fx, fy, tx, ty) = (fx / w_sum, fy / w_sum, tx / w_sum, ty / w_sum);
+        let (mut num_a, mut num_b, mut den) = (0.0f64, 0.0f64, 0.0f64);
         for i in 0..from.len() {
-            if !keep[i] {
+            let wi = w[i];
+            if wi <= 0.0 {
                 continue;
             }
             let (ux, uy) = (f64::from(from[i].0) - fx, f64::from(from[i].1) - fy);
             let (vx, vy) = (f64::from(to[i].0) - tx, f64::from(to[i].1) - ty);
-            a += ux * vx + uy * vy;
-            b += ux * vy - uy * vx;
-            den += ux * ux + uy * uy;
+            num_a += wi * (ux * vx + uy * vy);
+            num_b += wi * (ux * vy - uy * vx);
+            den += wi * (ux * ux + uy * uy);
         }
-        // Everything on top of itself: only a translation is observable.
-        let (a, b) = if den < 1e-6 { (1.0, 0.0) } else { (a / den, b / den) };
-        Some((a as f32, b as f32, (tx - (a * fx - b * fy)) as f32, (ty - (b * fx + a * fy)) as f32))
+        let (a, b) = if den < 36.0 {
+            (1.0, 0.0)
+        } else {
+            let raw_a = num_a / den;
+            let raw_b = num_b / den;
+            let shrink = den / (den + 60.0);
+            (1.0 + shrink * (raw_a - 1.0), shrink * raw_b)
+        };
+        Some((a, b, tx - (a * fx - b * fy), ty - (b * fx + a * fy), den))
     };
-    let all = vec![true; from.len()];
-    let first = fit(&all)?;
-    let (a, b, tx, ty) = first;
-    let mut res: Vec<(usize, f32)> =
-        from.iter().zip(to).enumerate().map(|(i, (f, t))| (i, (a * f.0 - b * f.1 + tx - t.0).hypot(b * f.0 + a * f.1 + ty - t.1))).collect();
-    res.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap_or(std::cmp::Ordering::Equal));
-    let cut = (res[res.len() / 2].1 * 2.5).max(1.0);
-    let mut keep = vec![false; from.len()];
-    for (i, r) in res {
-        keep[i] = r <= cut;
+
+    let mut weights = vec![1.0f64; from.len()];
+    let mut est = fit_weighted(&weights)?;
+    for pass in 0..3 {
+        let (a, b, tx, ty, _) = est;
+        let res: Vec<f64> = from
+            .iter()
+            .zip(to)
+            .map(|(f, t)| {
+                let px = a * f64::from(f.0) - b * f64::from(f.1) + tx - f64::from(t.0);
+                let py = b * f64::from(f.0) + a * f64::from(f.1) + ty - f64::from(t.1);
+                px.hypot(py)
+            })
+            .collect();
+        let mut sorted = res.clone();
+        sorted.sort_by(|x, y| x.total_cmp(y));
+        let med = sorted[sorted.len() / 2];
+        let huber = (med * 1.8).clamp(0.45, 2.5);
+        let hard_cut = if pass == 2 { (med * 2.8).max(1.2) } else { (med * 3.5).max(1.8) };
+        for (wi, &r) in weights.iter_mut().zip(&res) {
+            *wi = if r > hard_cut {
+                0.0
+            } else if r <= huber {
+                1.0
+            } else {
+                huber / r
+            };
+        }
+        if let Some(next_est) = fit_weighted(&weights) {
+            est = next_est;
+        } else {
+            break;
+        }
     }
-    fit(&keep).or(Some(first))
+    let (a, b, tx, ty, _) = est;
+    Some((a as f32, b as f32, tx as f32, ty as f32))
 }
 
 pub(crate) fn disparity(left: &Gray, right: &Gray, pt: (f32, f32), radius: i32, max_disp: f32) -> f32 {
@@ -463,20 +615,25 @@ pub(crate) fn disparity(left: &Gray, right: &Gray, pt: (f32, f32), radius: i32, 
     (refined / max_disp.max(1.0)).clamp(0.0, 1.0)
 }
 
-/// How often the corner set is refreshed, in frames. Corners drift and leave the picture; a
-/// fresh set around the current target keeps a long track honest.
-const RESEED_EVERY: usize = 8;
+/// Maximum active feature count maintained around the tracked target.
+const MAX_TRACK_FEATS: usize = 24;
+const TOPUP_BELOW_FEATS: usize = 16;
 
-/// A streaming tracker: build it on the first frame, then [`Tracker::push`] each next frame.
+/// A streaming tracker: build it on the first frame, then [`Tracker::push`] (or
+/// [`Tracker::push_rgba`] for zero-CPU-copy GPU pyramid construction) each next frame.
+/// When [`gpu_backend`] is registered, pyramid building, corner detection, forward-backward
+/// pyramidal IC-LK, coarse ZNCC recovery, and stereo disparity execute completely on the GPU.
 pub struct Tracker {
     prev: Vec<Level>,
+    gpu_prev_slot: Option<usize>,
     feats: Vec<(f32, f32)>,
+    anchor_pos: (f32, f32),
+    anchor_tpl: Option<Template>,
     /// The target in level-0 view pixels.
     target: (f32, f32),
     radius: i32,
     reach: f32,
     levels: usize,
-    since_seed: usize,
     scale: f32,
     rotation: f32,
     velocity: (f32, f32),
@@ -485,21 +642,68 @@ pub struct Tracker {
 }
 
 impl Tracker {
+    /// Initialize directly from an RGBA8 frame on the GPU when a GPU backend is registered.
+    pub fn new_rgba(
+        rgba: &[u8],
+        src_w: usize,
+        src_h: usize,
+        crop: (usize, usize, usize, usize),
+        target: (f32, f32),
+        patch: usize,
+        max_disp: f32,
+    ) -> Self {
+        let vw = crop.2.max(1);
+        let vh = crop.3.max(1);
+        let radius = (patch.clamp(7, 41) as i32) / 2;
+        let levels = ((vw.min(vh) as f32 / patch.clamp(7, 41) as f32).log2().floor().max(0.0) as usize).clamp(1, 4);
+        let reach = (radius as f32 * 4.5).max(28.0);
+        if let Some(gpu) = gpu_backend()
+            && let Some(first_gray) = gpu.build_rgba_pyramid(0, rgba, src_w, src_h, crop, (vw, vh), levels)
+        {
+            let feats = Self::seed_with_gpu(Some((gpu, 0)), &first_gray, target, reach, radius, &[], MAX_TRACK_FEATS);
+            let anchor_tpl = Self::extract_anchor_template(&first_gray, target, radius);
+            return Self {
+                prev: Vec::new(),
+                gpu_prev_slot: Some(0),
+                feats,
+                anchor_pos: target,
+                anchor_tpl,
+                target,
+                radius,
+                reach,
+                levels,
+                scale: 1.0,
+                rotation: 0.0,
+                velocity: (0.0, 0.0),
+                max_disp: max_disp.max(1.0),
+                lost: 0,
+            };
+        }
+        let g = Gray::from_rgba8(rgba, src_w, src_h);
+        let left = crop_gray(&g, crop.0, crop.1, vw, vh);
+        Self::new(&left, target, patch, max_disp)
+    }
+
     /// `patch` is the full window width in view pixels; `max_disp` only matters for stereo.
     pub fn new(first: &Gray, target: (f32, f32), patch: usize, max_disp: f32) -> Self {
         let radius = (patch.clamp(7, 41) as i32) / 2;
         let levels = ((first.w.min(first.h) as f32 / patch.clamp(7, 41) as f32).log2().floor().max(0.0) as usize).clamp(1, 4);
-        let prev = first.pyramid(levels);
-        let reach = (radius as f32 * 4.0).max(24.0);
-        let feats = Self::seed(first, target, reach, radius);
+        let reach = (radius as f32 * 4.5).max(28.0);
+        let gpu_prev_slot = gpu_backend().and_then(|gpu| gpu.upload_gray_pyramid(0, first, levels).then_some(0));
+        let prev = if gpu_prev_slot.is_some() { Vec::new() } else { first.pyramid(levels) };
+        let gpu_ctx = gpu_backend().zip(gpu_prev_slot);
+        let feats = Self::seed_with_gpu(gpu_ctx, first, target, reach, radius, &[], MAX_TRACK_FEATS);
+        let anchor_tpl = Self::extract_anchor_template(first, target, radius);
         Self {
             prev,
+            gpu_prev_slot,
             feats,
+            anchor_pos: target,
+            anchor_tpl,
             target,
             radius,
             reach,
             levels,
-            since_seed: 0,
             scale: 1.0,
             rotation: 0.0,
             velocity: (0.0, 0.0),
@@ -508,16 +712,69 @@ impl Tracker {
         }
     }
 
-    fn seed(img: &Gray, target: (f32, f32), reach: f32, radius: i32) -> Vec<(f32, f32)> {
-        let apart = (radius as f32).max(4.0);
-        let mut pts = corners(img, target.0, target.1, reach, apart, 16);
-        // The tapped point itself, if it carries any texture at all: the user asked for it.
-        let (ix, iy) = img.gradients();
-        let level = Level { img: img.clone(), ix, iy };
-        if template(&level, target.0, target.1, radius).is_some() && pts.iter().all(|p| (p.0 - target.0).hypot(p.1 - target.1) >= apart * 0.5) {
-            pts.insert(0, target);
+    fn extract_anchor_template(img: &Gray, target: (f32, f32), radius: i32) -> Option<Template> {
+        let r_win = (radius + 2) as usize;
+        let x0 = (target.0.floor() as isize - r_win as isize).max(0) as usize;
+        let y0 = (target.1.floor() as isize - r_win as isize).max(0) as usize;
+        let x1 = ((target.0.ceil() as usize) + r_win + 1).min(img.w);
+        let y1 = ((target.1.ceil() as usize) + r_win + 1).min(img.h);
+        if x1 <= x0 + 4 || y1 <= y0 + 4 {
+            return None;
         }
-        pts
+        let sub = crop_gray(img, x0, y0, x1 - x0, y1 - y0);
+        let (ix, iy) = sub.gradients();
+        let lvl = Level { img: sub, ix, iy };
+        template(&lvl, target.0 - x0 as f32, target.1 - y0 as f32, radius)
+    }
+
+    fn seed_with_gpu(
+        gpu_ctx: Option<(&'static dyn GpuTrackBackend, usize)>,
+        img: &Gray,
+        target: (f32, f32),
+        reach: f32,
+        radius: i32,
+        existing: &[(f32, f32)],
+        want_total: usize,
+    ) -> Vec<(f32, f32)> {
+        let apart = (radius as f32 * 0.85).max(4.0);
+        let mut out: Vec<(f32, f32)> = existing.to_vec();
+        if out.is_empty()
+            && Self::extract_anchor_template(img, target, radius).is_some()
+        {
+            out.push(target);
+        }
+        if out.len() >= want_total {
+            return out;
+        }
+        let cand: Vec<(f32, f32)> = if let Some((gpu, slot)) = gpu_ctx {
+            let x0 = (target.0 - reach).floor().max(2.0) as usize;
+            let y0 = (target.1 - reach).floor().max(2.0) as usize;
+            let x1 = ((target.0 + reach).ceil() as usize).min(img.w.saturating_sub(2));
+            let y1 = ((target.1 + reach).ceil() as usize).min(img.h.saturating_sub(2));
+            if x1 > x0 + 4 && y1 > y0 + 4 {
+                if let Some(mut gpu_cands) = gpu.detect_corners(slot, (x0, y0, x1, y1), 4) {
+                    gpu_cands.retain(|&(_, px, py)| (px - target.0).hypot(py - target.1) <= reach);
+                    gpu_cands.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    gpu_cands.into_iter().map(|(_, px, py)| (px, py)).collect()
+                } else {
+                    corners(img, target.0, target.1, reach, apart, want_total)
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            corners(img, target.0, target.1, reach, apart, want_total)
+        };
+
+        for (px, py) in cand {
+            if out.len() >= want_total {
+                break;
+            }
+            if out.iter().all(|&(qx, qy)| (qx - px).hypot(qy - py) >= apart) {
+                out.push((px, py));
+            }
+        }
+        out
     }
 
     /// The first sample: the anchor everything else is relative to.
@@ -525,15 +782,12 @@ impl Tracker {
         TrackPoint { x: self.target.0, y: self.target.1, z: 0.0, scale: 1.0, rotation: 0.0, confidence: 1.0 }
     }
 
-    /// Track every feature with a starting guess, keeping the ones that track home again.
-    fn match_all(&self, next: &[Level], guess: (f32, f32)) -> (Vec<(f32, f32)>, Vec<(f32, f32)>) {
+    /// Track every feature on the CPU with a starting guess, keeping forward-backward consistent matches.
+    fn match_all_cpu(&self, next: &[Level], guess: (f32, f32)) -> (Vec<(f32, f32)>, Vec<(f32, f32)>) {
         let (mut from, mut to) = (Vec::new(), Vec::new());
         for &p in &self.feats {
             let Some(q) = track_point(&self.prev, next, p, self.radius, guess) else { continue };
-            // Forward/backward error: track the match home again and see if it lands where it
-            // started. This throws away points that slipped onto a similar-looking bit of the
-            // picture (Median-Flow's check, the same test the OpenCV samples use).
-            let Some(back) = track_point(next, &self.prev, q, self.radius, (-guess.0, -guess.1)) else { continue };
+            let Some(back) = track_point(next, &self.prev, q, self.radius, (p.0 - q.0, p.1 - q.1)) else { continue };
             if (back.0 - p.0).hypot(back.1 - p.1) > 1.0 {
                 continue;
             }
@@ -543,49 +797,279 @@ impl Tracker {
         (from, to)
     }
 
-    /// Track into `frame` (and its rectified `right` view, for depth).
-    pub fn push(&mut self, frame: &Gray, right: Option<&Gray>) -> TrackPoint {
-        let next = frame.pyramid(self.levels);
-        let (mut from, mut to) = self.match_all(&next, self.velocity);
-        // Too few survived: the motion was bigger than the window, or the guess was wrong.
-        // Find the target patch by correlation at the coarsest level and try again from there.
-        if to.len() < 3.max(self.feats.len() / 4) {
-            if let Some(g) = search(&self.prev, &next, self.target, self.radius, self.reach * 1.5) {
-                let (f2, t2) = self.match_all(&next, g);
-                if t2.len() > to.len() {
-                    (from, to) = (f2, t2);
-                }
+    /// Track every feature on the GPU between `prev_slot` and `curr_slot`.
+    fn match_all_gpu(
+        &self,
+        gpu: &'static dyn GpuTrackBackend,
+        prev_slot: usize,
+        curr_slot: usize,
+        guess: (f32, f32),
+    ) -> Option<(Vec<(f32, f32)>, Vec<(f32, f32)>)> {
+        if self.feats.is_empty() {
+            return Some((Vec::new(), Vec::new()));
+        }
+        let queries: Vec<GpuTrackQuery> = self.feats.iter().map(|&pt| GpuTrackQuery { pt, guess }).collect();
+        let tracked = gpu.track_batch_fb(prev_slot, curr_slot, &queries, self.radius, 1.0)?;
+        let (mut from, mut to) = (Vec::with_capacity(self.feats.len()), Vec::with_capacity(self.feats.len()));
+        for (&p, res) in self.feats.iter().zip(tracked) {
+            if let Some(q) = res {
+                from.push(p);
+                to.push(q);
             }
         }
-        let confidence: f32 = if self.feats.is_empty() { 0.0 } else { to.len() as f32 / self.feats.len() as f32 };
-        if let Some((a, b, tx, ty)) = similarity(&from, &to) {
+        Some((from, to))
+    }
+
+    /// Stream an RGBA8 frame directly into the GPU tracker (with optional stereo right-eye crop).
+    pub fn push_rgba(
+        &mut self,
+        rgba: &[u8],
+        src_w: usize,
+        src_h: usize,
+        left_crop: (usize, usize, usize, usize),
+        right_crop: Option<(usize, usize, usize, usize)>,
+    ) -> TrackPoint {
+        let (vw, vh) = (left_crop.2.max(1), left_crop.3.max(1));
+        if let (Some(gpu), Some(prev_slot)) = (gpu_backend(), self.gpu_prev_slot) {
+            let curr_slot = 1 - (prev_slot & 1);
+            if let Some(left_gray) = gpu.build_rgba_pyramid(curr_slot, rgba, src_w, src_h, left_crop, (vw, vh), self.levels) {
+                let right_slot = right_crop.and_then(|rc| {
+                    gpu.build_rgba_pyramid(2, rgba, src_w, src_h, rc, (rc.2.max(1), rc.3.max(1)), 1).map(|_| 2usize)
+                });
+                return self.finish_step_gpu(gpu, prev_slot, curr_slot, &left_gray, right_slot);
+            }
+        }
+        let g = Gray::from_rgba8(rgba, src_w, src_h);
+        let left = crop_gray(&g, left_crop.0, left_crop.1, vw, vh);
+        let right = right_crop.map(|rc| crop_gray(&g, rc.0, rc.1, rc.2.max(1), rc.3.max(1)));
+        self.push(&left, right.as_ref())
+    }
+
+    fn apply_motion_update(&mut self, frame: &Gray, from: &[(f32, f32)], to: &[(f32, f32)]) -> Vec<(f32, f32)> {
+        if let Some((a, b, tx, ty)) = similarity(from, to) {
             let (x, y) = self.target;
-            self.target = (a * x - b * y + tx, b * x + a * y + ty);
-            self.velocity = (self.target.0 - x, self.target.1 - y);
+            let mut nx = a * x - b * y + tx;
+            let mut ny = b * x + a * y + ty;
             let s = (a * a + b * b).sqrt();
             if s.is_finite() && s > 0.05 && s < 20.0 {
-                self.scale *= s;
-                self.rotation += b.atan2(a).to_degrees();
+                if (s - 1.0).abs() >= 0.0012 {
+                    self.scale *= s;
+                }
+                let dtheta = b.atan2(a).to_degrees();
+                if dtheta.abs() >= 0.035 {
+                    self.rotation += dtheta;
+                }
             }
+            // Gentle sub-pixel anchor lock against Frame-0 template when scale & rotation remain near
+            // unity, preventing cumulative multi-second random-walk drift.
+            if (self.scale - 1.0).abs() < 0.09
+                && self.rotation.abs() < 6.5
+                && let Some(tpl) = &self.anchor_tpl
+                && let Some((refined, err)) = lk_level(frame, tpl, self.anchor_pos.0, self.anchor_pos.1, (nx - self.anchor_pos.0, ny - self.anchor_pos.1))
+                && err < 0.075
+                && (refined.0 - nx).hypot(refined.1 - ny) < 2.2
+            {
+                nx = 0.65 * nx + 0.35 * refined.0;
+                ny = 0.65 * ny + 0.35 * refined.1;
+            }
+            self.target = (nx, ny);
+            self.velocity = (nx - x, ny - y);
+            self.lost = 0;
+        } else if from.len() == 1 && to.len() == 1 {
+            let dx = to[0].0 - from[0].0;
+            let dy = to[0].1 - from[0].1;
+            self.target = (self.target.0 + dx, self.target.1 + dy);
+            self.velocity = (dx, dy);
             self.lost = 0;
         } else {
             self.lost += 1;
         }
-        self.feats = to;
-        self.since_seed += 1;
-        // Re-seed when the set thins out or on a fixed cadence, so drift cannot accumulate.
-        if self.feats.len() < 6 || self.since_seed >= RESEED_EVERY {
-            let fresh = Self::seed(frame, self.target, self.reach, self.radius);
-            if fresh.len() >= self.feats.len() {
-                self.feats = fresh;
-                self.since_seed = 0;
+        let max_keep_r = self.reach * 1.35;
+        to.iter()
+            .copied()
+            .filter(|&(px, py)| {
+                px >= 2.0
+                    && py >= 2.0
+                    && px < frame.w as f32 - 2.0
+                    && py < frame.h as f32 - 2.0
+                    && (px - self.target.0).hypot(py - self.target.1) <= max_keep_r
+            })
+            .collect()
+    }
+
+    fn finish_step_gpu(
+        &mut self,
+        gpu: &'static dyn GpuTrackBackend,
+        prev_slot: usize,
+        curr_slot: usize,
+        frame: &Gray,
+        right_slot: Option<usize>,
+    ) -> TrackPoint {
+        let prev_count = self.feats.len();
+        let (mut from, mut to) = self.match_all_gpu(gpu, prev_slot, curr_slot, self.velocity).unwrap_or_default();
+        if to.len() * 2 < prev_count
+            && self.velocity.0.hypot(self.velocity.1) > 1.5
+            && let Some((fz, tz)) = self.match_all_gpu(gpu, prev_slot, curr_slot, (0.0, 0.0))
+            && tz.len() > to.len()
+        {
+            (from, to) = (fz, tz);
+        }
+        if to.len() < 3.max(prev_count / 4)
+            && let Some(g) = gpu.coarse_search(prev_slot, curr_slot, self.target, self.radius, self.reach * 1.6)
+            && let Some((f2, t2)) = self.match_all_gpu(gpu, prev_slot, curr_slot, g)
+            && t2.len() > to.len()
+        {
+            (from, to) = (f2, t2);
+        }
+        let confidence: f32 = if prev_count == 0 { 0.0 } else { to.len() as f32 / prev_count as f32 };
+        let kept = self.apply_motion_update(frame, &from, &to);
+        self.feats = if kept.len() < TOPUP_BELOW_FEATS {
+            Self::seed_with_gpu(Some((gpu, curr_slot)), frame, self.target, self.reach, self.radius, &kept, MAX_TRACK_FEATS)
+        } else {
+            kept
+        };
+        self.gpu_prev_slot = Some(curr_slot);
+        let inside = self.target.0 >= 0.0 && self.target.1 >= 0.0 && self.target.0 < frame.w as f32 && self.target.1 < frame.h as f32;
+        let conf = if inside && self.lost == 0 { confidence.clamp(0.0, 1.0) } else { 0.0 };
+        let z = right_slot
+            .and_then(|rs| gpu.stereo_disparity_batch(curr_slot, rs, &[self.target], self.radius.min(7), self.max_disp))
+            .and_then(|v| v.into_iter().next().flatten())
+            .unwrap_or(0.0);
+        TrackPoint { x: self.target.0, y: self.target.1, z, scale: self.scale, rotation: self.rotation, confidence: conf }
+    }
+
+    /// Track into `frame` (and its rectified `right` view, for depth).
+    pub fn push(&mut self, frame: &Gray, right: Option<&Gray>) -> TrackPoint {
+        if let (Some(gpu), Some(prev_slot)) = (gpu_backend(), self.gpu_prev_slot) {
+            let curr_slot = 1 - (prev_slot & 1);
+            if gpu.upload_gray_pyramid(curr_slot, frame, self.levels) {
+                let right_slot = right.and_then(|r| gpu.upload_gray_pyramid(2, r, 1).then_some(2usize));
+                return self.finish_step_gpu(gpu, prev_slot, curr_slot, frame, right_slot);
+            }
+            // Fallback seamlessly to CPU if GPU device lost mid-stream
+            self.gpu_prev_slot = None;
+        }
+        if self.prev.is_empty() {
+            self.prev = frame.pyramid(self.levels);
+        }
+        let prev_count = self.feats.len();
+        let next = frame.pyramid(self.levels);
+        let (mut from, mut to) = self.match_all_cpu(&next, self.velocity);
+        if to.len() * 2 < prev_count && self.velocity.0.hypot(self.velocity.1) > 1.5 {
+            let (fz, tz) = self.match_all_cpu(&next, (0.0, 0.0));
+            if tz.len() > to.len() {
+                (from, to) = (fz, tz);
             }
         }
+        if to.len() < 3.max(prev_count / 4)
+            && let Some(g) = search(&self.prev, &next, self.target, self.radius, self.reach * 1.6)
+        {
+            let (f2, t2) = self.match_all_cpu(&next, g);
+            if t2.len() > to.len() {
+                (from, to) = (f2, t2);
+            }
+        }
+        let confidence: f32 = if prev_count == 0 { 0.0 } else { to.len() as f32 / prev_count as f32 };
+        let kept = self.apply_motion_update(frame, &from, &to);
+        self.feats = if kept.len() < TOPUP_BELOW_FEATS {
+            Self::seed_with_gpu(None, frame, self.target, self.reach, self.radius, &kept, MAX_TRACK_FEATS)
+        } else {
+            kept
+        };
         self.prev = next;
         let inside = self.target.0 >= 0.0 && self.target.1 >= 0.0 && self.target.0 < frame.w as f32 && self.target.1 < frame.h as f32;
         let conf = if inside && self.lost == 0 { confidence.clamp(0.0, 1.0) } else { 0.0 };
         let z = right.map(|r| disparity(frame, r, self.target, self.radius.min(7), self.max_disp)).unwrap_or(0.0);
         TrackPoint { x: self.target.0, y: self.target.1, z, scale: self.scale, rotation: self.rotation, confidence: conf }
+    }
+}
+
+/// Zero-phase, confidence-weighted, motion-adaptive temporal filter for [`filmcraft_project::TrackSample`]
+/// trajectories. Eliminates high-frequency sub-pixel / macroblock shake without introducing phase
+/// lag or smearing intentional fast pans and stops.
+pub fn smooth_track_samples(samples: &mut [filmcraft_project::TrackSample]) {
+    let n = samples.len();
+    if n < 3 {
+        return;
+    }
+    let orig = samples.to_vec();
+    // Estimate per-frame velocity magnitude to adapt smoothing strength: steady/slow segments get
+    // strong jitter suppression while rapid whip-pans preserve crisp responsiveness.
+    let mut speed = vec![0.0f32; n];
+    for i in 0..n {
+        let i0 = i.saturating_sub(1);
+        let i1 = (i + 1).min(n - 1);
+        let dt = (i1 - i0).max(1) as f32;
+        speed[i] = ((orig[i1].x - orig[i0].x).hypot(orig[i1].y - orig[i0].y)) / dt;
+    }
+
+    for (i, out) in samples.iter_mut().enumerate() {
+        if i == 0 || orig[i].confidence <= 0.0 {
+            // Preserve the exact Frame-0 anchor so relative follow_track delta starts at (0, 0).
+            continue;
+        }
+        // Bilateral temporal kernel over [i - 3 ..= i + 3] for position, [i - 4 ..= i + 4] for
+        // scale/rotation/depth (which are far more visually sensitive to micro-oscillation).
+        let sp = speed[i];
+        let sigma_t_xy: f32 = if sp > 0.035 { 0.85 } else if sp > 0.012 { 1.25 } else { 1.75 };
+        let (mut wx_sum, mut sx, mut sy) = (0.0f32, 0.0f32, 0.0f32);
+        let j0 = i.saturating_sub(3);
+        let j1 = (i + 3).min(n - 1);
+        for (j, sj) in orig.iter().enumerate().take(j1 + 1).skip(j0) {
+            if sj.confidence <= 0.0 && j != i {
+                continue;
+            }
+            let dt = (j as f32 - i as f32).abs();
+            let wt = (-0.5 * (dt / sigma_t_xy).powi(2)).exp();
+            // Linear prediction from j to i using local velocity prevents curvature bias on constant-speed pans!
+            let vel_x = if j > 0 && j + 1 < n { (orig[j + 1].x - orig[j - 1].x) * 0.5 } else { 0.0 };
+            let vel_y = if j > 0 && j + 1 < n { (orig[j + 1].y - orig[j - 1].y) * 0.5 } else { 0.0 };
+            let pred_x = sj.x + vel_x * (i as f32 - j as f32);
+            let pred_y = sj.y + vel_y * (i as f32 - j as f32);
+            let dev = (pred_x - orig[i].x).hypot(pred_y - orig[i].y);
+            // Bilateral range gate: reject across sharp motion discontinuities / direction reversals.
+            let wr = (-0.5 * (dev / 0.012f32).powi(2)).exp();
+            let w = wt * (0.25 + 0.75 * wr) * sj.confidence.max(0.15);
+            wx_sum += w;
+            sx += w * pred_x;
+            sy += w * pred_y;
+        }
+        if wx_sum > 1e-6 {
+            out.x = (sx / wx_sum).clamp(0.0, 1.0);
+            out.y = (sy / wx_sum).clamp(0.0, 1.0);
+        }
+
+        let (mut wz_sum, mut sz, mut ssc, mut srot_sin, mut srot_cos) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let k0 = i.saturating_sub(4);
+        let k1 = (i + 4).min(n - 1);
+        for (k, sk) in orig.iter().enumerate().take(k1 + 1).skip(k0) {
+            if sk.confidence <= 0.0 && k != i {
+                continue;
+            }
+            let dt = (k as f32 - i as f32).abs();
+            let w = (-0.5 * (dt / 2.1f32).powi(2)).exp() * sk.confidence.max(0.15);
+            wz_sum += w;
+            sz += w * sk.z;
+            ssc += w * sk.scale.max(0.01).ln();
+            let rad = sk.rotation.to_radians();
+            srot_sin += w * rad.sin();
+            srot_cos += w * rad.cos();
+        }
+        if wz_sum > 1e-6 {
+            out.z = sz / wz_sum;
+            out.scale = (ssc / wz_sum).exp();
+            // Unwrap smoothed circular angle around orig[i].rotation to preserve >180 deg multi-turn spins.
+            let base_rad = orig[i].rotation.to_radians();
+            let mean_ang = srot_sin.atan2(srot_cos);
+            let mut diff = mean_ang - base_rad;
+            while diff > std::f32::consts::PI {
+                diff -= 2.0 * std::f32::consts::PI;
+            }
+            while diff < -std::f32::consts::PI {
+                diff += 2.0 * std::f32::consts::PI;
+            }
+            out.rotation = (base_rad + diff).to_degrees();
+        }
     }
 }
 
@@ -689,5 +1173,46 @@ mod tests {
         let last = t.last().unwrap();
         let want = (80.0 + (39.0f32 * 1.5).sin() * 12.0, 60.0 + (39.0f32 * 0.9).cos() * 8.0 - 8.0);
         assert!((last.x - want.0).abs() < 2.0 && (last.y - want.1).abs() < 2.0, "ended at ({}, {}), wanted {want:?}", last.x, last.y);
+    }
+
+    #[test]
+    fn suppresses_flicker_and_sensor_shake_without_lag() {
+        let mut rng: u64 = 0x5EA1_E001;
+        let frames: Vec<Gray> = (0..24)
+            .map(|i| {
+                let mut g = scene(i as f32 * 1.5, i as f32 * -0.75, 1.0, 0.0);
+                let gain = 1.0 + 0.16 * (i as f32 * 2.3).sin();
+                let bias = 0.06 * (i as f32 * 1.7).cos();
+                for px in &mut g.p {
+                    rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let noise = (((rng >> 40) as f32 / ((1u32 << 24) as f32)) - 0.5) * 0.03;
+                    *px = (*px * gain + bias + noise).clamp(0.0, 1.0);
+                }
+                g
+            })
+            .collect();
+        let raw = track_sequence(&frames, None, (80.0, 60.0), 17, 16.0);
+        let mut samples: Vec<filmcraft_project::TrackSample> = raw
+            .iter()
+            .enumerate()
+            .map(|(i, p)| filmcraft_project::TrackSample {
+                time: filmcraft_time::Tick(i as i64 * 1000),
+                x: p.x / 160.0,
+                y: p.y / 120.0,
+                z: p.z,
+                scale: p.scale,
+                rotation: p.rotation,
+                confidence: p.confidence,
+            })
+            .collect();
+        smooth_track_samples(&mut samples);
+        for (i, s) in samples.iter().enumerate() {
+            let want_x = (80.0 + i as f32 * 1.5) / 160.0;
+            let want_y = (60.0 - i as f32 * 0.75) / 120.0;
+            assert!((s.x - want_x).abs() * 160.0 < 0.75, "frame {i} x error={} px", (s.x - want_x) * 160.0);
+            assert!((s.y - want_y).abs() * 120.0 < 0.75, "frame {i} y error={} px", (s.y - want_y) * 120.0);
+            assert!((s.scale - 1.0).abs() < 0.02, "spurious scale shake on frame {i}: {}", s.scale);
+            assert!(s.rotation.abs() < 0.6, "spurious rotation shake on frame {i}: {}", s.rotation);
+        }
     }
 }

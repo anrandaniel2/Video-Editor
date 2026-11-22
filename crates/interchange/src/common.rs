@@ -539,6 +539,7 @@ pub(crate) fn empty_sequence(settings: SequenceSettings) -> Sequence {
         matchmove: None,
         scene_lighting: Default::default(),
         scene_camera: None,
+        scene_camera_tracks: Default::default(),
         split: Default::default(),
     }
 }

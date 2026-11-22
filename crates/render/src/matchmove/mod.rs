@@ -132,12 +132,30 @@ where
     if cancel() {
         return Err(SolveError::Cancelled);
     }
-    let mut model = initialize_scene(&shot, opts.refine_focal, opts.layout == StereoLayout::Mono, cancel)?;
-    run_bundle_adjustment(&mut model, &shot.tracks, opts.refine_focal, cancel)?;
+    let is_mono = opts.layout == StereoLayout::Mono;
+    let mut model = match initialize_scene(&shot, opts.refine_focal, is_mono, cancel) {
+        Ok(m) => m,
+        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 20 => {
+            return Err(SolveError::Planar2DVideo);
+        }
+        Err(e) => return Err(e),
+    };
+    if let Err(e) = run_bundle_adjustment(&mut model, &shot.tracks, opts.refine_focal, cancel) {
+        if is_mono && shot.tracks.len() >= 20 && matches!(e, SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) {
+            return Err(SolveError::Planar2DVideo);
+        }
+        return Err(e);
+    }
     if opts.layout != StereoLayout::Mono {
         apply_stereo_scale_prior(&mut model, &shot.stereo_obs, shot.width, opts.stereo_baseline);
     }
-    assemble_report(opts, &shot, &model)
+    match assemble_report(opts, &shot, &model) {
+        Ok(rep) => Ok(rep),
+        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 20 => {
+            Err(SolveError::Planar2DVideo)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Convenience wrapper over [`solve_camera`] for an in-memory slice of frames.
@@ -199,6 +217,7 @@ fn assemble_report(opts: &SolveOptions, shot: &TrackedShot, model: &SceneModel) 
     }
 
     let points = select_solved_points(model, &shot.tracks);
+    smooth_solved_frames(&mut solved_frames);
     let solve = CameraSolve {
         id: opts.id,
         clip: opts.clip,
@@ -282,3 +301,70 @@ fn select_solved_points(model: &SceneModel, tracks: &[FeatureTrack]) -> Vec<Solv
     scored.truncate(CameraSolve::MAX_POINTS);
     scored.into_iter().map(|(_, _, pt)| pt).collect()
 }
+
+/// Zero-phase, confidence-weighted temporal smoothing on solved 3D camera poses: removes
+/// high-frequency frame-to-frame micro-shake while keeping Frame 0 exact and preserving crisp
+/// camera motion using local linear velocity prediction.
+fn smooth_solved_frames(frames: &mut [SolvedFrame]) {
+    let n = frames.len();
+    if n < 5 {
+        return;
+    }
+    let orig = frames.to_vec();
+    let unwrap_deg = |base: f32, v: f32| -> f32 {
+        let mut d = v - base;
+        while d > 180.0 {
+            d -= 360.0;
+        }
+        while d < -180.0 {
+            d += 360.0;
+        }
+        base + d
+    };
+    for (i, out) in frames.iter_mut().enumerate() {
+        if i == 0 || !orig[i].is_confident() {
+            continue;
+        }
+        let j0 = i.saturating_sub(2);
+        let j1 = (i + 2).min(n - 1);
+        let mut w_sum = 0.0f32;
+        let mut pos = [0.0f32; 3];
+        let mut ang = [0.0f32; 3]; // yaw, pitch, roll unwrapped around orig[i]
+        for (j, fj) in orig.iter().enumerate().take(j1 + 1).skip(j0) {
+            if !fj.is_confident() && j != i {
+                continue;
+            }
+            let dt = (j as f32 - i as f32).abs();
+            let wt = (-0.5 * (dt / 1.15f32).powi(2)).exp() * fj.confidence.max(0.2);
+            let step = (i as isize - j as isize) as f32;
+            let has_neighbors = j > 0 && j + 1 < n && orig[j - 1].is_confident() && orig[j + 1].is_confident();
+            for axis in 0..3 {
+                let vel = if has_neighbors { 0.5 * (orig[j + 1].position[axis] - orig[j - 1].position[axis]) } else { 0.0 };
+                pos[axis] += wt * (fj.position[axis] + vel * step);
+            }
+            let yj = unwrap_deg(orig[i].yaw, fj.yaw);
+            let pj = unwrap_deg(orig[i].pitch, fj.pitch);
+            let rj = unwrap_deg(orig[i].roll, fj.roll);
+            let (vy, vp, vr) = if has_neighbors {
+                (
+                    0.5 * (unwrap_deg(yj, orig[j + 1].yaw) - unwrap_deg(yj, orig[j - 1].yaw)),
+                    0.5 * (unwrap_deg(pj, orig[j + 1].pitch) - unwrap_deg(pj, orig[j - 1].pitch)),
+                    0.5 * (unwrap_deg(rj, orig[j + 1].roll) - unwrap_deg(rj, orig[j - 1].roll)),
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            ang[0] += wt * (yj + vy * step);
+            ang[1] += wt * (pj + vp * step);
+            ang[2] += wt * (rj + vr * step);
+            w_sum += wt;
+        }
+        if w_sum > 1e-6 {
+            out.position = [pos[0] / w_sum, pos[1] / w_sum, pos[2] / w_sum];
+            out.yaw = ang[0] / w_sum;
+            out.pitch = (ang[1] / w_sum).clamp(-89.9, 89.9);
+            out.roll = ang[2] / w_sum;
+        }
+    }
+}
+

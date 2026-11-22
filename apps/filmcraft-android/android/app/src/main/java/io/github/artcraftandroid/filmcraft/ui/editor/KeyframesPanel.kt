@@ -48,77 +48,181 @@ private fun JSONObject.lanes(): List<AnimationLane> {
 @Composable
 fun KeyframesPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
     val clip = ed.selectedClip
-    var lanes by remember(clip?.id) { mutableStateOf<List<AnimationLane>>(emptyList()) }
-    var error by remember(clip?.id) { mutableStateOf<String?>(null) }
-    var laneId by remember(clip?.id) { mutableStateOf<String?>(null) }
-    var selected by remember(clip?.id, laneId) { mutableStateOf<Long?>(null) }
-    LaunchedEffect(clip?.id, ed.playhead, ed.timeline?.revision) {
-        if (clip != null) try { lanes = ed.animationState(clip.id).lanes(); error = null }
-        catch (e: kotlinx.coroutines.CancellationException) { throw e }
-        catch (e: Exception) { lanes = emptyList(); error = "Could not load keyframes: ${e.message}" }
+    val sceneTarget = ed.keyframesTarget
+    val clips3d = ed.all3DClips
+    val lights = ed.sceneLights.lights
+    val activeKey = sceneTarget ?: clip?.id?.toString() ?: "none"
+    var lanes by remember(activeKey) { mutableStateOf<List<AnimationLane>>(emptyList()) }
+    var spanStart by remember(activeKey) { mutableStateOf(0L) }
+    var spanDuration by remember(activeKey) { mutableStateOf(1L) }
+    var error by remember(activeKey) { mutableStateOf<String?>(null) }
+    var laneId by remember(activeKey) { mutableStateOf<String?>(null) }
+    var selected by remember(activeKey, laneId) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(activeKey, ed.playhead, ed.timeline?.revision, ed.sceneLights, ed.sceneCamera) {
+        try {
+            if (sceneTarget != null) {
+                val state = ed.sceneAnimationState(sceneTarget)
+                lanes = state.lanes()
+                spanStart = state.optLong("start", 0L)
+                spanDuration = state.optLong("duration", ed.timeline?.duration?.coerceAtLeast(TICKS.toLong()) ?: TICKS.toLong())
+                error = null
+            } else if (clip != null) {
+                val state = ed.animationState(clip.id)
+                lanes = state.lanes()
+                spanStart = clip.start
+                spanDuration = clip.duration
+                error = null
+            } else {
+                lanes = emptyList()
+                error = null
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            lanes = emptyList()
+            error = "Could not load keyframes: ${e.message}"
+        }
     }
     val lane = lanes.firstOrNull { it.id == laneId } ?: lanes.firstOrNull()
     val key = lane?.keys?.firstOrNull { it.time == selected }
     ToolPanel("Keyframes", close, modifier, tag = "keyframes_panel", scrollContent = false) {
       LazyColumn(Modifier.fillMaxWidth()) {
        item(key = "animation_header") {
-        Text("Add a keyframe snapshot, move the playhead, then change any slider or preview control. Tap a property title to edit its curve.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+        Text("Animate 3D models, camera, lights, or clip effects over time. Tap a target or property title to edit its spline curve.", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (clip != null && !clip.has3d) {
+                SelectChip(
+                    clip.name.ifBlank { "Selected clip" },
+                    sceneTarget == null,
+                    { ed.keyframesTarget = null },
+                    tag = "keyframes_target_selected_clip",
+                )
+            }
+            clips3d.forEach { c3d ->
+                SelectChip(
+                    "3D · ${c3d.name.ifBlank { "Object" }}",
+                    sceneTarget == null && clip?.id == c3d.id,
+                    {
+                        ed.keyframesTarget = null
+                        if (clip?.id != c3d.id) ed.select(c3d.id)
+                    },
+                    tag = "keyframes_target_clip_${c3d.id}",
+                )
+            }
+            SelectChip(
+                if (ed.sceneCamera?.animated == true) "3D Camera ◆" else "3D Camera",
+                sceneTarget == "camera",
+                { ed.keyframesTarget = "camera" },
+                tag = "keyframes_target_camera",
+            )
+            lights.forEach { l ->
+                val lKey = "light:${l.id}"
+                SelectChip(
+                    (l.name.ifBlank { "Light ${l.id}" }) + if (l.animated) " ◆" else "",
+                    sceneTarget == lKey,
+                    {
+                        ed.selectedLightId = l.id
+                        ed.keyframesTarget = lKey
+                    },
+                    tag = "keyframes_target_light_${l.id}",
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
         if (error != null) Text(error.orEmpty(), color = Fc.Detail, modifier = Modifier.padding(12.dp))
-        if (clip == null || lane == null) {
-            Text("Select a clip with animatable properties.", color = Fc.Detail, modifier = Modifier.padding(12.dp))
+        if ((sceneTarget == null && clip == null) || lane == null) {
+            Text("Select a 3D object, 3D Camera, Light, or timeline clip above to keyframe.", color = Fc.Detail, modifier = Modifier.padding(12.dp))
             return@item
         }
         val animated = lanes.any { it.animated }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SelectChip("◆ Key everything",false,{ed.animationCommand("animation.all",JSONObject().put("clip",clip.id.toLong()).put("action","key"))},tag="keyframes_key_all")
-            if (animated) SelectChip("Stop animation",false,{ed.animationCommand("animation.all",JSONObject().put("clip",clip.id.toLong()).put("action","disable"))},tag="keyframes_stop_all")
+            SelectChip("◆ Key everything", false, {
+                if (sceneTarget != null) ed.animationCommand("animation.sceneAll", JSONObject().put("target", sceneTarget).put("action", "key"))
+                else if (clip != null) ed.animationCommand("animation.all", JSONObject().put("clip", clip.id.toLong()).put("action", "key"))
+            }, tag = "keyframes_key_all")
+            if (animated) SelectChip("Stop animation", false, {
+                if (sceneTarget != null) ed.animationCommand("animation.sceneAll", JSONObject().put("target", sceneTarget).put("action", "disable"))
+                else if (clip != null) ed.animationCommand("animation.all", JSONObject().put("clip", clip.id.toLong()).put("action", "disable"))
+            }, tag = "keyframes_stop_all")
         }
-        Text("Curve: ${lane.group} · ${lane.label}",style=FcType.Caption,color=Fc.Detail,modifier=Modifier.padding(horizontal=12.dp))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-            val sorted=lane.keys.sortedBy { it.timeline }
-            SelectChip("‹ Previous",false,{sorted.lastOrNull {it.timeline<ed.playhead}?.let {selected=it.time;ed.seek(it.timeline,draft=false)}},tag="keyframes_prev")
-            SelectChip("Next ›",false,{sorted.firstOrNull {it.timeline>ed.playhead}?.let {selected=it.time;ed.seek(it.timeline,draft=false)}},tag="keyframes_next")
+        Text("Curve: ${lane.group} · ${lane.label}", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = 12.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val sorted = lane.keys.sortedBy { it.timeline }
+            SelectChip("‹ Previous", false, { sorted.lastOrNull { it.timeline < ed.playhead }?.let { selected = it.time; ed.seek(it.timeline, draft = false) } }, tag = "keyframes_prev")
+            SelectChip("◆ Key property", false, {
+                if (sceneTarget != null) ed.animationCommand("animation.sceneSetKeyframe", JSONObject().put("target", sceneTarget).put("param", lane.param).put("time", ed.playhead))
+                else if (clip != null) ed.animationCommand("effects.setParam", lane.address(clip.id).put("value", lane.value).put("time", ed.playhead).put("keyframe", true))
+            }, tag = "keyframes_key_lane")
+            SelectChip("Next ›", false, { sorted.firstOrNull { it.timeline > ed.playhead }?.let { selected = it.time; ed.seek(it.timeline, draft = false) } }, tag = "keyframes_next")
         }
-        KeyframeGraph(lane, selected, clip.start, clip.duration, ed.playhead,
+        KeyframeGraph(lane, selected, spanStart, spanDuration, ed.playhead,
             select = { selected = it.time; ed.seek(it.timeline, draft = false) },
             move = { k, delta ->
-                val ref = lane.address(clip.id).put("time", k.time)
-                ed.animationCommand("effects.moveKeyframes", JSONObject().put("keyframes", JSONArray().put(ref)).put("delta", delta))
+                if (sceneTarget != null) {
+                    ed.animationCommand("animation.sceneMoveKeyframes", JSONObject().put("target", sceneTarget).put("param", lane.param).put("times", JSONArray().put(k.time)).put("delta", delta))
+                } else if (clip != null) {
+                    val ref = lane.address(clip.id).put("time", k.time)
+                    ed.animationCommand("effects.moveKeyframes", JSONObject().put("keyframes", JSONArray().put(ref)).put("delta", delta))
+                }
             },
         )
-        Text(if (key != null) "Selected key · ${formatSeconds((key.timeline - clip.start).toDouble() / TICKS)} · ${key.interpolation}" else "Value at playhead", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = 12.dp))
+        Text(if (key != null) "Selected key · ${formatSeconds((key.timeline - spanStart).toDouble() / TICKS)} · ${key.interpolation}" else "Value at playhead", style = FcType.Caption, color = Fc.Detail, modifier = Modifier.padding(horizontal = 12.dp))
         if (key != null) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("linear" to "Linear", "hold" to "Hold", "easeIn" to "Ease in", "easeOut" to "Ease out", "easeInOut" to "Ease in/out", "strong" to "Strong ease").forEach { (id, label) ->
-                    SelectChip(label, false, { ed.animationCommand("animation.curve", lane.address(clip.id).put("mediaTime", key.time).put("preset", id)) }, tag = "keyframes_curve_$id")
+                    SelectChip(label, false, {
+                        if (sceneTarget != null) ed.animationCommand("animation.sceneCurve", JSONObject().put("target", sceneTarget).put("param", lane.param).put("mediaTime", key.time).put("preset", id))
+                        else if (clip != null) ed.animationCommand("animation.curve", lane.address(clip.id).put("mediaTime", key.time).put("preset", id))
+                    }, tag = "keyframes_curve_$id")
                 }
             }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SelectChip("−1 frame", false, { ed.animationCommand("effects.moveKeyframes", JSONObject().put("keyframes", JSONArray().put(lane.address(clip.id).put("time", key.time))).put("delta", -ed.frameTicks)) }, tag = "keyframes_nudge_back")
-                SelectChip("+1 frame", false, { ed.animationCommand("effects.moveKeyframes", JSONObject().put("keyframes", JSONArray().put(lane.address(clip.id).put("time", key.time))).put("delta", ed.frameTicks)) }, tag = "keyframes_nudge_next")
-                SelectChip("Delete key", false, { ed.animationCommand("effects.deleteKeyframe", lane.address(clip.id).put("mediaTime", key.time)); selected = null }, tag = "keyframes_delete")
+                SelectChip("−1 frame", false, {
+                    if (sceneTarget != null) ed.animationCommand("animation.sceneMoveKeyframes", JSONObject().put("target", sceneTarget).put("param", lane.param).put("times", JSONArray().put(key.time)).put("delta", -ed.frameTicks))
+                    else if (clip != null) ed.animationCommand("effects.moveKeyframes", JSONObject().put("keyframes", JSONArray().put(lane.address(clip.id).put("time", key.time))).put("delta", -ed.frameTicks))
+                }, tag = "keyframes_nudge_back")
+                SelectChip("+1 frame", false, {
+                    if (sceneTarget != null) ed.animationCommand("animation.sceneMoveKeyframes", JSONObject().put("target", sceneTarget).put("param", lane.param).put("times", JSONArray().put(key.time)).put("delta", ed.frameTicks))
+                    else if (clip != null) ed.animationCommand("effects.moveKeyframes", JSONObject().put("keyframes", JSONArray().put(lane.address(clip.id).put("time", key.time))).put("delta", ed.frameTicks))
+                }, tag = "keyframes_nudge_next")
+                SelectChip("Delete key", false, {
+                    if (sceneTarget != null) ed.animationCommand("animation.sceneDeleteKeyframe", JSONObject().put("target", sceneTarget).put("param", lane.param).put("time", key.time))
+                    else if (clip != null) ed.animationCommand("effects.deleteKeyframe", lane.address(clip.id).put("mediaTime", key.time))
+                    selected = null
+                }, tag = "keyframes_delete")
             }
         }
        }
-       if (clip != null && lane != null) {
+       if ((sceneTarget != null || clip != null) && lane != null) {
         lanes.groupBy { it.group }.forEach { (group, properties) ->
             if (properties.size != 1 || !properties.single().label.equals(group, ignoreCase = true)) {
-                item(key = "group:$group") { Text(group, style=FcType.Header, color=Fc.Title, modifier=Modifier.padding(16.dp)) }
+                item(key = "group:$group") { Text(group, style = FcType.Header, color = Fc.Title, modifier = Modifier.padding(16.dp)) }
             }
             items(properties, key = { "property:${it.id}" }) { item ->
-                Column(Modifier.fillMaxWidth().padding(horizontal=12.dp, vertical=4.dp).editorCard(14.dp).padding(vertical=10.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).editorCard(14.dp).padding(vertical = 10.dp)) {
                     val scalar = item.value is Number && (item.kind as? JSONObject)?.optJSONArray("Choice") == null
-                    if (!scalar) SelectChip(item.label + if (item.animated) " ◆" else "", item.id==lane.id, {laneId=item.id;selected=null}, tag="keyframes_property_${item.id}")
-                    val selectedKey=if (item.id==lane.id) key else null
-                    ValueEditor(selectedKey?.value ?: item.value,item.kind,item.param=="path" && item.mask!=null,item.label,item.id,
+                    if (!scalar) SelectChip(item.label + if (item.animated) " ◆" else "", item.id == lane.id, { laneId = item.id; selected = null }, tag = "keyframes_property_${item.id}")
+                    val selectedKey = if (item.id == lane.id) key else null
+                    ValueEditor(selectedKey?.value ?: item.value, item.kind, item.param == "path" && item.mask != null, item.label, item.id,
                         (ed.timeline?.width?.toDouble() ?: 1920.0) to (ed.timeline?.height?.toDouble() ?: 1080.0),
-                        selectProperty={laneId=item.id;selected=null}, propertySelected=item.id==lane.id, animated=item.animated,
-                        editPath={if(selectedKey!=null) ed.seek(selectedKey.timeline,draft=false);ed.panel=Panel.Mask},
-                        save={value,merge ->
-                            val body=item.address(clip.id).put("value",value)
-                            if(merge!=null) body.put("merge",merge)
-                            if(selectedKey!=null) ed.animationCommand("effects.setKeyframe",body.put("mediaTime",selectedKey.time))
-                            else ed.animationCommand("effects.setParam",body)
+                        selectProperty = { laneId = item.id; selected = null }, propertySelected = item.id == lane.id, animated = item.animated,
+                        editPath = { if (selectedKey != null) ed.seek(selectedKey.timeline, draft = false); ed.panel = Panel.Mask },
+                        save = { value, merge ->
+                            if (sceneTarget != null) {
+                                val body = JSONObject().put("target", sceneTarget).put("param", item.param).put("value", value)
+                                if (merge != null) body.put("merge", merge)
+                                if (selectedKey != null) body.put("time", selectedKey.time).put("keyframe", true)
+                                ed.animationCommand("animation.sceneSetParam", body)
+                            } else if (clip != null) {
+                                val body = item.address(clip.id).put("value", value)
+                                if (merge != null) body.put("merge", merge)
+                                if (selectedKey != null) ed.animationCommand("effects.setKeyframe", body.put("mediaTime", selectedKey.time))
+                                else ed.animationCommand("effects.setParam", body)
+                            }
                         },
                     )
                 }

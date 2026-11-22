@@ -64,35 +64,35 @@ internal fun buildLightConeSpec(light: SceneLight, gizmoRadius: Double): LightCo
     val ref = if (abs(emit.y) < 0.92) GizmoVec(0.0, 1.0, 0.0) else GizmoVec(1.0, 0.0, 0.0)
     val u = emit.cross(ref).unit()
     val v = emit.cross(u).unit()
-    val r = gizmoRadius.coerceAtLeast(16.0)
+    val r = gizmoRadius.coerceAtLeast(24.0)
     val rangeFactor = if (light.range > 0.0) {
-        0.65 + 1.85 * (light.range / 2000.0).coerceIn(0.05, 1.5)
+        1.65 + 2.55 * (light.range / 2000.0).coerceIn(0.05, 1.5)
     } else {
-        1.42
+        2.85
     }
     val beamLen = when (light.kind) {
-        "directional" -> r * 1.38
+        "directional" -> r * 2.55
         else -> r * rangeFactor
     }
     return when (light.kind) {
         "spot" -> {
             val coneDeg = light.cone.coerceIn(4.0, 82.0)
-            val outerR = (beamLen * tan(Math.toRadians(coneDeg))).coerceIn(r * 0.08, beamLen * 2.25)
+            val outerR = (beamLen * tan(Math.toRadians(coneDeg))).coerceIn(r * 0.16, beamLen * 2.25)
             val soft = light.softness.coerceIn(0.0, 1.0)
             val innerR = if (soft > 0.03) {
-                val innerDeg = (coneDeg * (1.0 - 0.95 * soft)).coerceAtLeast(1.0)
-                (beamLen * tan(Math.toRadians(innerDeg))).coerceIn(r * 0.02, outerR)
+                val innerDeg = (coneDeg * (1.0 - 0.92 * soft)).coerceAtLeast(1.0)
+                (beamLen * tan(Math.toRadians(innerDeg))).coerceIn(r * 0.04, outerR * 0.97)
             } else {
                 null
             }
             LightConeSpec(emit, u, v, beamLen, outerR, innerR, hasAimTarget = true)
         }
         "directional" -> {
-            val outerR = beamLen * tan(Math.toRadians(15.0))
+            val outerR = beamLen * tan(Math.toRadians(20.0))
             LightConeSpec(emit, u, v, beamLen, outerR, innerRadius = null, hasAimTarget = true)
         }
         else -> {
-            val outerR = if (light.range > 0.0) (r * (0.35 + 0.85 * (light.range / 2000.0).coerceIn(0.05, 1.5))) else r * 0.42
+            val outerR = if (light.range > 0.0) (r * (0.65 + 1.45 * (light.range / 2000.0).coerceIn(0.05, 1.5))) else r * 0.85
             LightConeSpec(emit, u, v, beamLen, outerR, innerRadius = null, hasAimTarget = false)
         }
     }
@@ -317,25 +317,32 @@ private fun DrawScope.drawBlenderLightCone(
         light.color.getOrElse(1) { 1f }.coerceIn(0f, 1f),
         light.color.getOrElse(2) { 1f }.coerceIn(0f, 1f),
     )
-    val strength = if (!light.enabled) 0.25f else (0.45f + 0.55f * (light.intensity / 2.5).coerceIn(0.0, 1.0).toFloat())
-    val strokeAlpha = (if (selected) 0.95f else 0.62f) * strength
-    val secondaryAlpha = (if (selected) 0.55f else 0.34f) * strength
-    val tint = rawTint.copy(alpha = strokeAlpha.coerceIn(0.18f, 1f))
-    val softTint = rawTint.copy(alpha = secondaryAlpha.coerceIn(0.12f, 0.85f))
-    val dash = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()))
-    val lineStroke = if (selected) 2.1.dp.toPx() else 1.4.dp.toPx()
+    val strength = if (!light.enabled) 0.28f else (0.55f + 0.45f * (light.intensity / 2.5).coerceIn(0.0, 1.0).toFloat())
+    val strokeAlpha = (if (selected) 0.98f else 0.78f) * strength
+    val secondaryAlpha = (if (selected) 0.68f else 0.46f) * strength
+    val tint = rawTint.copy(alpha = strokeAlpha.coerceIn(0.24f, 1f))
+    val softTint = rawTint.copy(alpha = secondaryAlpha.coerceIn(0.16f, 0.9f))
+    val haloColor = Color.Black.copy(alpha = if (selected) 0.62f else 0.42f)
+    val dash = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()))
+    val lineStroke = if (selected) 2.5.dp.toPx() else 1.8.dp.toPx()
 
     val spec = buildLightConeSpec(light, geo.radius)
     val baseCenter = geo.origin + spec.emitDir * spec.beamLength
 
-    fun drawProjectedRing(center: GizmoVec, u: GizmoVec, v: GizmoVec, radius: Double, color: Color, widthPx: Float, dashed: Boolean = false) {
-        val segments = 48
+    fun projectRingPoints(center: GizmoVec, u: GizmoVec, v: GizmoVec, radius: Double, segments: Int = 36): List<GizmoPoint?> =
+        (0 until segments).map { i ->
+            val th = i * 2.0 * PI / segments
+            geo.project(center + (u * cos(th) + v * sin(th)) * radius)
+        }
+
+    fun drawProjectedRing(pts: List<GizmoPoint?>, color: Color, widthPx: Float, dashed: Boolean = false, withHalo: Boolean = false, fillAlpha: Float = 0f) {
         val path = Path()
         var started = false
-        for (i in 0..segments) {
-            val th = i * 2.0 * PI / segments
-            val pt = geo.project(center + (u * cos(th) + v * sin(th)) * radius)?.screen
+        var validCount = 0
+        for (i in 0..pts.size) {
+            val pt = pts[i % pts.size]?.screen
             if (pt != null) {
+                validCount++
                 if (!started) {
                     path.moveTo(pt.x, pt.y)
                     started = true
@@ -346,95 +353,196 @@ private fun DrawScope.drawBlenderLightCone(
                 started = false
             }
         }
-        if (started) {
-            drawPath(
-                path,
-                color,
-                style = Stroke(width = widthPx, pathEffect = if (dashed) dash else null),
-            )
+        if (validCount >= 3) {
+            if (fillAlpha > 0f) {
+                drawPath(path, rawTint.copy(alpha = fillAlpha))
+            }
+            if (withHalo) {
+                drawPath(path, haloColor, style = Stroke(width = widthPx + 2.4.dp.toPx(), pathEffect = if (dashed) dash else null))
+            }
+            drawPath(path, color, style = Stroke(width = widthPx, pathEffect = if (dashed) dash else null))
+        }
+    }
+
+    // Helper: draw true 2D perspective tangent silhouette lines from apexScreen to a projected 3D ring.
+    fun drawConeTangentEdges(apexScreen: Offset, pts: List<GizmoPoint?>, color: Color, widthPx: Float, dashed: Boolean = false, withHalo: Boolean = false) {
+        val screens = pts.mapNotNull { it?.screen }
+        if (screens.size < 6) return
+        val center = screens.fold(Offset.Zero) { acc, p -> acc + p } / screens.size.toFloat()
+        val refVec = center - apexScreen
+        val refLen = refVec.getDistance()
+        if (refLen < 4f) {
+            // Looking nearly straight down the cone barrel: draw 4 clean symmetric generator spokes.
+            for (k in listOf(0, pts.size / 4, pts.size / 2, (pts.size * 3) / 4)) {
+                pts.getOrNull(k)?.screen?.let { rim ->
+                    if (withHalo) drawLine(haloColor, apexScreen, rim, strokeWidth = widthPx + 2.2.dp.toPx(), cap = StrokeCap.Round)
+                    drawLine(color, apexScreen, rim, strokeWidth = widthPx, cap = StrokeCap.Round, pathEffect = if (dashed) dash else null)
+                }
+            }
+            return
+        }
+        val refDir = refVec / refLen
+        var minAng = Double.POSITIVE_INFINITY
+        var maxAng = Double.NEGATIVE_INFINITY
+        var leftPt: Offset? = null
+        var rightPt: Offset? = null
+        for (p in screens) {
+            val d = p - apexScreen
+            if (d.getDistance() < 2f) continue
+            val cross = (refDir.x * d.y - refDir.y * d.x).toDouble()
+            val dot = (refDir.x * d.x + refDir.y * d.y).toDouble()
+            val ang = atan2(cross, dot)
+            if (ang < minAng) { minAng = ang; leftPt = p }
+            if (ang > maxAng) { maxAng = ang; rightPt = p }
+        }
+        for (edge in listOfNotNull(leftPt, rightPt)) {
+            if (withHalo) {
+                drawLine(haloColor, apexScreen, edge, strokeWidth = widthPx + 2.4.dp.toPx(), cap = StrokeCap.Round, pathEffect = if (dashed) dash else null)
+            }
+            drawLine(color, apexScreen, edge, strokeWidth = widthPx, cap = StrokeCap.Round, pathEffect = if (dashed) dash else null)
         }
     }
 
     if (light.kind == "spot" || light.kind == "directional") {
-        // 4 clean Blender cone silhouette generators + subtle translucent cone wash when selected.
-        val cardinals = listOf(spec.basisU, spec.basisV, spec.basisU * -1.0, spec.basisV * -1.0)
-        val rimPts = cardinals.map { dir -> geo.project(baseCenter + dir * spec.outerRadius)?.screen }
-        if (selected && light.enabled) {
-            for (k in 0 until 4) {
-                val a = rimPts[k]
-                val b = rimPts[(k + 1) % 4]
-                if (a != null && b != null) {
-                    val wash = Path().apply {
+        val segs = 32
+        val outerRingPts = projectRingPoints(baseCenter, spec.basisU, spec.basisV, spec.outerRadius, segs)
+
+        // 1. Volumetric back-to-front shaded 3D beam cone facets so the cone volume is unmistakable.
+        if (light.enabled) {
+            data class ConeFacet(val a: Offset, val b: Offset, val depth: Double, val shade: Float)
+            val facets = ArrayList<ConeFacet>(segs)
+            val originPt = geo.project(geo.origin)
+            if (originPt != null) {
+                for (i in 0 until segs) {
+                    val j = (i + 1) % segs
+                    val pa = outerRingPts[i] ?: continue
+                    val pb = outerRingPts[j] ?: continue
+                    val thMid = (i + 0.5) * 2.0 * PI / segs
+                    val radial = spec.basisU * cos(thMid) + spec.basisV * sin(thMid)
+                    val shade = (0.45 + 0.55 * abs(radial.y)).toFloat()
+                    facets.add(ConeFacet(pa.screen, pb.screen, (originPt.depth + pa.depth + pb.depth) / 3.0, shade))
+                }
+                facets.sortByDescending { it.depth }
+                val baseWash = if (selected) 0.13f else 0.075f
+                for (f in facets) {
+                    val triPath = Path().apply {
                         moveTo(originScreen.x, originScreen.y)
-                        lineTo(a.x, a.y)
-                        lineTo(b.x, b.y)
+                        lineTo(f.a.x, f.a.y)
+                        lineTo(f.b.x, f.b.y)
                         close()
                     }
-                    drawPath(wash, rawTint.copy(alpha = (0.09f * strength).coerceIn(0.03f, 0.14f)))
+                    drawPath(triPath, rawTint.copy(alpha = (baseWash * f.shade * strength).coerceIn(0.02f, 0.22f)))
                 }
             }
         }
-        for (rim in rimPts) {
-            if (rim != null) {
-                drawLine(
-                    tint,
-                    originScreen,
-                    rim,
-                    strokeWidth = lineStroke,
-                    cap = StrokeCap.Round,
-                    pathEffect = if (!light.enabled) dash else null,
-                )
-            }
+
+        // 2. Subtle 4-quadrant longitudinal ribs so 3D rotation/perspective of the cone reads clearly.
+        for (q in listOf(0, segs / 4, segs / 2, (segs * 3) / 4)) {
+            val rim = outerRingPts[q]?.screen ?: continue
+            drawLine(softTint.copy(alpha = (softTint.alpha * 0.55f).coerceAtLeast(0.12f)), originScreen, rim, strokeWidth = 1.1.dp.toPx(), cap = StrokeCap.Round, pathEffect = if (!light.enabled) dash else null)
         }
 
-        // Outer cone base circle.
-        drawProjectedRing(baseCenter, spec.basisU, spec.basisV, spec.outerRadius, tint, lineStroke, dashed = !light.enabled)
+        // 3. True 2D perspective tangent silhouette sides + projected 3D base ellipse with contrast halo.
+        drawConeTangentEdges(originScreen, outerRingPts, tint, lineStroke, dashed = !light.enabled, withHalo = true)
+        drawProjectedRing(
+            outerRingPts,
+            tint,
+            lineStroke,
+            dashed = !light.enabled,
+            withHalo = true,
+            fillAlpha = if (light.enabled) ((if (selected) 0.10f else 0.055f) * strength) else 0f,
+        )
 
-        // Inner softness penumbra circle for spotlights (reflects `softness` dynamically).
+        // 4. Inner softness penumbra 3D cone (updates live with `softness` & `cone`!).
         if (spec.innerRadius != null) {
-            drawProjectedRing(baseCenter, spec.basisU, spec.basisV, spec.innerRadius, softTint, (lineStroke * 0.78f).coerceAtLeast(1f), dashed = true)
+            val innerPts = projectRingPoints(baseCenter, spec.basisU, spec.basisV, spec.innerRadius, segs)
+            drawConeTangentEdges(originScreen, innerPts, softTint, (lineStroke * 0.72f).coerceAtLeast(1.1f), dashed = true, withHalo = false)
+            drawProjectedRing(innerPts, softTint, (lineStroke * 0.8f).coerceAtLeast(1.2f), dashed = true)
         }
 
-        // Extra parallel sun rays for directional lights so sun vs spot is immediately distinct.
+        // 5. Parallel sun-ray streaks around directional cones so sun vs spot stays clear.
         if (light.kind == "directional") {
-            val rayLen = spec.beamLength * 0.42
-            for (dir in cardinals) {
-                val r0 = geo.project(geo.origin + dir * (spec.outerRadius * 0.65))?.screen
-                val r1 = geo.project(geo.origin + dir * (spec.outerRadius * 0.65) + spec.emitDir * rayLen)?.screen
+            val rayLen = spec.beamLength * 0.45
+            for (dir in listOf(spec.basisU, spec.basisV, spec.basisU * -1.0, spec.basisV * -1.0)) {
+                val r0 = geo.project(geo.origin + dir * (spec.outerRadius * 0.72))?.screen
+                val r1 = geo.project(geo.origin + dir * (spec.outerRadius * 0.72) + spec.emitDir * rayLen)?.screen
                 if (r0 != null && r1 != null) {
-                    drawLine(softTint, r0, r1, strokeWidth = (lineStroke * 0.8f).coerceAtLeast(1f), cap = StrokeCap.Round)
+                    drawLine(haloColor, r0, r1, strokeWidth = lineStroke + 1.8.dp.toPx(), cap = StrokeCap.Round)
+                    drawLine(softTint, r0, r1, strokeWidth = lineStroke * 0.85f, cap = StrokeCap.Round)
                 }
             }
         }
 
-        // Central aim axis + draggable Blender-style aim target dot at the cone base center.
+        // 6. Solid 3D shaded Lamp Housing Cone Cap right at the emitter (`origin -> lampRim`)!
+        val capSegs = 18
+        val capLen = (geo.radius * 0.46).coerceAtMost(spec.beamLength * 0.32)
+        val capRad = (capLen * tan(Math.toRadians(if (light.kind == "spot") light.cone.coerceIn(16.0, 52.0) else 26.0))).coerceIn(geo.radius * 0.16, geo.radius * 0.42)
+        val capCenter = geo.origin + spec.emitDir * capLen
+        val capRingPts = projectRingPoints(capCenter, spec.basisU, spec.basisV, capRad, capSegs)
+        val originProj = geo.project(geo.origin)
+        if (originProj != null) {
+            data class CapTri(val a: Offset, val b: Offset, val depth: Double, val lit: Float)
+            val capTris = ArrayList<CapTri>(capSegs)
+            for (i in 0 until capSegs) {
+                val j = (i + 1) % capSegs
+                val pa = capRingPts[i] ?: continue
+                val pb = capRingPts[j] ?: continue
+                val th = (i + 0.5) * 2.0 * PI / capSegs
+                val n = (spec.basisU * cos(th) + spec.basisV * sin(th) - spec.emitDir * 0.35).unit()
+                val lit = (0.35 + 0.65 * ((-n.y) * 0.5 + 0.5)).toFloat().coerceIn(0.25f, 1f)
+                capTris.add(CapTri(pa.screen, pb.screen, (originProj.depth + pa.depth + pb.depth) / 3.0, lit))
+            }
+            capTris.sortByDescending { it.depth }
+            for (ct in capTris) {
+                val p = Path().apply {
+                    moveTo(originScreen.x, originScreen.y)
+                    lineTo(ct.a.x, ct.a.y)
+                    lineTo(ct.b.x, ct.b.y)
+                    close()
+                }
+                val bodyCol = Color(
+                    (0.16f + rawTint.red * 0.55f) * ct.lit,
+                    (0.16f + rawTint.green * 0.55f) * ct.lit,
+                    (0.18f + rawTint.blue * 0.55f) * ct.lit,
+                    if (selected) 0.90f else 0.76f,
+                )
+                drawPath(p, bodyCol)
+            }
+            // Bright glowing bulb lens face across the open mouth of the 3D lamp cone!
+            drawProjectedRing(
+                capRingPts,
+                tint,
+                (lineStroke * 0.9f).coerceAtLeast(1.4f),
+                withHalo = true,
+                fillAlpha = if (light.enabled) (0.48f * strength).coerceIn(0.18f, 0.72f) else 0.12f,
+            )
+            drawConeTangentEdges(originScreen, capRingPts, tint, (lineStroke * 0.95f).coerceAtLeast(1.5f), withHalo = true)
+        }
+
+        // 7. Central aim axis + draggable Blender-style aim target handle at the cone base center.
         val aimScreen = geo.project(baseCenter)?.screen
         if (aimScreen != null) {
-            drawLine(softTint, originScreen, aimScreen, strokeWidth = 1.2.dp.toPx(), pathEffect = dash)
-            val handleRadius = if (aiming) 6.5.dp.toPx() else if (selected) 5.2.dp.toPx() else 3.4.dp.toPx()
-            drawCircle(Color.Black.copy(alpha = 0.55f), handleRadius + 1.6.dp.toPx(), aimScreen)
+            drawLine(haloColor, originScreen, aimScreen, strokeWidth = 2.8.dp.toPx(), pathEffect = dash)
+            drawLine(softTint, originScreen, aimScreen, strokeWidth = 1.4.dp.toPx(), pathEffect = dash)
+            val handleRadius = if (aiming) 7.5.dp.toPx() else if (selected) 6.0.dp.toPx() else 4.2.dp.toPx()
+            drawCircle(Color.Black.copy(alpha = 0.68f), handleRadius + 2.dp.toPx(), aimScreen)
             drawCircle(if (aiming) Color.White else tint, handleRadius, aimScreen)
             if (selected) {
-                drawCircle(Color.White.copy(alpha = 0.9f), handleRadius + 2.5.dp.toPx(), aimScreen, style = Stroke(1.3.dp.toPx()))
+                drawCircle(Color.White.copy(alpha = 0.92f), handleRadius + 2.8.dp.toPx(), aimScreen, style = Stroke(1.5.dp.toPx()))
             }
         }
     } else {
-        // Point lamp: clean single screen-space radial ticks + optional single falloff circle (no wireframe sphere!).
-        val tickInner = 9.dp.toPx()
-        val tickOuter = (13.dp.toPx() + 4.dp.toPx() * (light.intensity / 3.0).coerceIn(0.0, 1.0).toFloat())
+        // Point lamp: bright 3D radial starburst + 3D equatorial falloff ring.
+        val tickInner = 10.dp.toPx()
+        val tickOuter = (16.dp.toPx() + 5.dp.toPx() * (light.intensity / 3.0).coerceIn(0.0, 1.0).toFloat())
         for (i in 0 until 8) {
             val th = (i * PI / 4.0).toFloat()
             val dir = Offset(cos(th), sin(th))
-            drawLine(softTint, originScreen + dir * tickInner, originScreen + dir * tickOuter, strokeWidth = 1.5.dp.toPx(), cap = StrokeCap.Round)
+            drawLine(haloColor, originScreen + dir * tickInner, originScreen + dir * tickOuter, strokeWidth = 3.2.dp.toPx(), cap = StrokeCap.Round)
+            drawLine(tint, originScreen + dir * tickInner, originScreen + dir * tickOuter, strokeWidth = 1.8.dp.toPx(), cap = StrokeCap.Round)
         }
-        if (light.range > 0.0) {
-            val edge = geo.project(geo.origin + GizmoVec(spec.outerRadius, 0.0, 0.0))?.screen
-                ?: geo.project(geo.origin + GizmoVec(0.0, spec.outerRadius, 0.0))?.screen
-            if (edge != null) {
-                val screenR = (edge - originScreen).getDistance().coerceIn(16.dp.toPx(), min(size.width, size.height) * 0.48f)
-                drawCircle(softTint, screenR, originScreen, style = Stroke(1.3.dp.toPx(), pathEffect = dash))
-            }
-        }
+        val ringPts = projectRingPoints(geo.origin, GizmoVec(1.0, 0.0, 0.0), GizmoVec(0.0, 0.0, 1.0), spec.outerRadius, 36)
+        drawProjectedRing(ringPts, softTint, 1.5.dp.toPx(), dashed = true, withHalo = true)
     }
 
     // Crisp Blender-style light emitter dot at origin.

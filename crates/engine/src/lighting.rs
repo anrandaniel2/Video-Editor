@@ -14,18 +14,24 @@ fn light_from(v: &Value, cmd: &str) -> Result<filmcraft_project::Light3D> {
     serde_json::from_value(v.clone()).map_err(|e| bad(cmd, format!("bad light: {e}")))
 }
 
-fn scene_camera_json(s: &Session) -> Result<Value> {
+fn scene_camera_json_at(s: &Session, at: filmcraft_time::Tick) -> Result<Value> {
     let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
-    Ok(match &seq.scene_camera {
+    let animated = seq.scene_camera_tracks.values().any(filmcraft_project::Param::is_animated);
+    Ok(match seq.scene_camera_at(at) {
         Some(c) => json!({
             "position": c.position,
             "yaw": c.yaw,
             "pitch": c.pitch,
             "roll": c.roll,
             "fov": c.fov,
+            "animated": animated,
         }),
         None => Value::Null,
     })
+}
+
+fn scene_camera_json(s: &Session) -> Result<Value> {
+    scene_camera_json_at(s, s.playhead())
 }
 
 fn camera_solves_json(s: &Session) -> Result<Value> {
@@ -286,12 +292,12 @@ pub fn commands() -> Vec<CommandSpec> {
             label: "Scene Camera",
             menu: &[],
             shortcut: None,
-            params: "{}",
+            params: r#"{"time":i64?}"#,
             enabled: has_seq,
-            run: |s, _| scene_camera_json(s),
+            run: |s, p| scene_camera_json_at(s, tick_arg(s, p)),
             journal: false,
         },
-        set_spec("scene.setCamera", "Set Scene Camera", r#"{"position":[x,y,z] f64, "yaw":f64, "pitch":f64, "roll":f64, "fov":f64, "merge":str?}"#, |s, p| {
+        set_spec("scene.setCamera", "Set Scene Camera", r#"{"position":[x,y,z] f64, "yaw":f64, "pitch":f64, "roll":f64, "fov":f64, "time":i64?, "merge":str?}"#, |s, p| {
             let pos = p
                 .get("position")
                 .and_then(|v| v.as_array().cloned())
@@ -305,16 +311,18 @@ pub fn commands() -> Vec<CommandSpec> {
                 roll: pick("roll", 0.0) as f32,
                 fov: (pick("fov", filmcraft_project::CLASSIC_FOV as f64) as f32).clamp(1.0, 179.0),
             };
+            let at = tick_arg(s, p);
             let merge = p.get("merge").and_then(|v| v.as_str()).map(str::to_string);
             s.edit_sequence_as("Set Scene Camera", merge.as_deref(), |seq, _ctx, _st| {
-                seq.scene_camera = Some(cam);
+                seq.update_scene_camera_at(cam, at);
                 Ok(())
             })?;
-            scene_camera_json(s)
+            scene_camera_json_at(s, at)
         }),
         set_spec("scene.clearCamera", "Remove Scene Camera", r#"{}"#, |s, _p| {
             s.edit_sequence_as("Remove Scene Camera", None, |seq, _ctx, _st| {
                 seq.scene_camera = None;
+                seq.scene_camera_tracks.clear();
                 Ok(())
             })?;
             Ok(json!({ "cleared": true }))
@@ -532,6 +540,54 @@ mod tests {
         let eval_mid = loaded.scene_lighting.evaluated_at(Tick(TICKS_PER_SECOND / 2));
         assert!((eval_mid.lights[0].intensity - 2.0).abs() < 1e-4);
         assert!((eval_mid.lights[0].cone - 35.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn unified_scene_camera_and_light_keyframe_lanes_roundtrip() {
+        let mut s = Session::default();
+        s.execute("file.newSequence", json!({ "name": "SceneAnim", "fps": 24, "width": 1920, "height": 1080, "video": 1, "audio": 0 }))
+            .unwrap();
+
+        // 1. Enable all 3D camera animation lanes at t = 0, then move playhead to t = 1s and edit yaw + fov.
+        s.set_playhead(Tick::ZERO);
+        s.execute("animation.sceneAll", json!({ "target": "camera", "action": "key" })).unwrap();
+        s.set_playhead(Tick(TICKS_PER_SECOND));
+        s.execute("animation.sceneSetParam", json!({ "target": "camera", "param": "yaw", "value": 40.0 })).unwrap();
+        s.execute("animation.sceneSetParam", json!({ "target": "camera", "param": "fov", "value": 70.0 })).unwrap();
+        s.execute("animation.sceneCurve", json!({ "target": "camera", "param": "yaw", "mediaTime": 0, "preset": "linear" })).unwrap();
+
+        let cam_lanes = s.execute("animation.sceneList", json!({ "target": "camera" })).unwrap();
+        let yaw_lane = cam_lanes["lanes"].as_array().unwrap().iter().find(|l| l["param"] == "yaw").unwrap();
+        assert_eq!(yaw_lane["keys"].as_array().unwrap().len(), 2);
+
+        // Evaluate 3D camera at midpoint t = 0.5s: yaw should interpolate linearly from 0 -> 40 = 20 deg!
+        let mid_cam = s.active_sequence().unwrap().scene_camera_at(Tick(TICKS_PER_SECOND / 2)).unwrap();
+        assert!((mid_cam.yaw - 20.0).abs() < 1e-3, "expected midpoint yaw 20.0, got {}", mid_cam.yaw);
+
+        // 2. Add a spot light and drive its keyframe lanes through `animation.scene*` (`target = "light:<id>"`).
+        let added = s.execute("lights.set", json!({ "id": 0, "kind": "spot", "name": "Rim", "intensity": 1.25 })).unwrap();
+        let lid = added["id"].as_u64().unwrap();
+        let ltarget = format!("light:{lid}");
+        s.set_playhead(Tick::ZERO);
+        s.execute("animation.sceneAll", json!({ "target": ltarget, "action": "key" })).unwrap();
+        s.set_playhead(Tick(TICKS_PER_SECOND));
+        s.execute("animation.sceneSetParam", json!({ "target": ltarget, "param": "intensity", "value": 3.0 })).unwrap();
+        s.execute("animation.sceneCurve", json!({ "target": ltarget, "param": "intensity", "mediaTime": 0, "preset": "linear" })).unwrap();
+        s.execute(
+            "animation.sceneMoveKeyframes",
+            json!({ "target": ltarget, "param": "intensity", "times": [TICKS_PER_SECOND], "delta": TICKS_PER_SECOND }),
+        )
+        .unwrap();
+
+        let eval_1s = s.active_sequence().unwrap().scene_lighting.evaluated_at(Tick(TICKS_PER_SECOND));
+        // Spot intensity is 1.25 at t=0, moved keyframe 3.0 to t=2s -> midpoint at t=1s is 2.125!
+        assert!((eval_1s.lights[0].intensity - 2.125).abs() < 1e-3, "got {}", eval_1s.lights[0].intensity);
+
+        s.execute("animation.sceneDeleteKeyframe", json!({ "target": ltarget, "param": "intensity", "time": TICKS_PER_SECOND * 2 }))
+            .unwrap();
+        let after_del = s.execute("animation.sceneList", json!({ "target": ltarget })).unwrap();
+        let int_lane = after_del["lanes"].as_array().unwrap().iter().find(|l| l["param"] == "intensity").unwrap();
+        assert_eq!(int_lane["keys"].as_array().unwrap().len(), 1);
     }
 }
 

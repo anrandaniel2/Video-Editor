@@ -73,7 +73,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifier) {
     val clip = ed.selectedClip
-    val close = { ed.panel = null }
+    val close = { ed.closeInspectorPanel() }
     when (panel) {
         Panel.OnlineVideos -> MixkitPanel(ed, video = true, close = close)
         Panel.OnlineSounds -> MixkitPanel(ed, video = false, close = close)
@@ -107,7 +107,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         if (panel != Panel.Background && panel != Panel.Tracking) ed.resetAdvancedTools()
     }
     // a panel whose clip went away closes
-    val standalone = panel == Panel.OnlineVideos || panel == Panel.Lights || panel == Panel.OnlineSounds || panel == Panel.Drawing || panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D || panel == Panel.MatchMove
+    val standalone = panel == Panel.OnlineVideos || panel == Panel.Lights || panel == Panel.Keyframes || panel == Panel.OnlineSounds || panel == Panel.Drawing || panel is Panel.Transitions || panel == Panel.AspectRatio || panel == Panel.Voiceover || panel is Panel.TextInput || panel == Panel.Captions || panel is Panel.Speech || panel == Panel.Object3D || panel == Panel.MatchMove
     if (clip == null && !standalone) {
         LaunchedEffect(Unit) { ed.panel = null }
     }

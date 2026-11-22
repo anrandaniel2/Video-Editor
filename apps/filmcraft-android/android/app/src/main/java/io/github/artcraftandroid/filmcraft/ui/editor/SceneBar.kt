@@ -39,12 +39,26 @@ internal fun SceneBar(ed: EditorController) {
     }
 
     val tools = listOf(
-        Tool("scene_models", "3D Models", Glyphs.Object3D, active = ed.panel == Panel.Object3D) { ed.panel = Panel.Object3D },
-        Tool("scene_lights", "Lights", LucideIcons.Sun.glyph(), active = ed.panel == Panel.Lights) { ed.panel = Panel.Lights },
+        Tool("scene_models", "3D Models", Glyphs.Object3D, active = ed.panel == Panel.Object3D) { cameraStrip = false; ed.openPanelFromScene(Panel.Object3D) },
+        Tool("scene_lights", "Lights", LucideIcons.Sun.glyph(), active = ed.panel == Panel.Lights) { cameraStrip = false; ed.openPanelFromScene(Panel.Lights) },
         Tool("scene_camera_toggle", "Camera", cameraGlyph(), active = cameraStrip) { cameraStrip = !cameraStrip },
+        Tool("scene_keyframes", "Keyframes", LucideIcons.ChartSpline.glyph(), active = ed.panel == Panel.Keyframes) {
+            cameraStrip = false
+            val initialTarget = when {
+                ed.selectedClip?.has3d == true -> null
+                ed.all3DClips.isNotEmpty() -> {
+                    ed.select(ed.all3DClips.first().id)
+                    null
+                }
+                ed.sceneCamera != null -> "camera"
+                ed.sceneLights.lights.isNotEmpty() -> "light:${ed.sceneLights.lights.first().id}"
+                else -> "camera"
+            }
+            ed.openPanelFromScene(Panel.Keyframes, initialTarget)
+        },
         Tool("scene_matchmove_toggle", "Match-Move", Glyphs.Camera3D, active = ed.panel == Panel.MatchMove || ed.matchmoveActive) {
             cameraStrip = false
-            ed.panel = Panel.MatchMove
+            ed.openPanelFromScene(Panel.MatchMove)
         },
         Tool("scene_show_video", if (ed.sceneShowVideo) "Hide video" else "Show video", LucideIcons.Film.glyph(), active = ed.sceneShowVideo) { ed.toggleSceneShowVideo() },
         Tool("scene_reset_view", "Reset view", LucideIcons.RotateCcw.glyph()) { ed.setSceneOrbit(SceneOrbit.DEFAULT) },
@@ -81,9 +95,18 @@ internal fun SceneBar(ed: EditorController) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Text("Render camera", style = FcType.Label, color = Fc.Title)
-                        if (cam != null) SelectChip("Remove camera", false, { ed.clearSceneCamera() }, tag = "scene_remove_camera")
-                        else SelectChip("Add camera", false, { ed.addSceneCamera() }, tag = "scene_add_camera")
+                        Text(if (cam?.animated == true) "Render camera · ◆" else "Render camera", style = FcType.Label, color = Fc.Title)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (cam != null) {
+                                SelectChip("Keyframes", cam.animated, {
+                                    cameraStrip = false
+                                    ed.openPanelFromScene(Panel.Keyframes, "camera")
+                                }, tag = "scene_camera_keyframes")
+                                SelectChip("Remove camera", false, { ed.clearSceneCamera() }, tag = "scene_remove_camera")
+                            } else {
+                                SelectChip("Add camera", false, { ed.addSceneCamera() }, tag = "scene_add_camera")
+                            }
+                        }
                     }
                     if (cam != null) {
                         fun change(next: SceneCamera, k: String?) = ed.setSceneCamera(next, k)

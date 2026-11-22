@@ -932,12 +932,13 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
         "Lights", close, modifier, tag = "lights_panel",
         actions = {
             if (light != null) {
+                PanelAction(LucideIcons.ChartSpline.glyph(), "Keyframes", { ed.openSceneKeyframes("light:${light.id}") }, tag = "lights_keyframes")
                 PanelAction(LucideIcons.Trash2.glyph(), "Delete light", { ed.removeLight(light.id); ed.selectedLightId = 0L }, tag = "lights_delete")
             }
         },
     ) {
         Text(
-            "Coloured light objects that light every 3D object and text. Add as many as you like.",
+            "Coloured 3D light objects with real-time cone and falloff gizmos. Keyframe any light, camera, or 3D model from Keyframes in the 3D Scene bar.",
             style = FcType.Caption, color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
         )
@@ -955,9 +956,9 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            SelectChip("+ Spot", false, { ed.addLight("spot") { ed.selectedLightId = it } }, tag = "lights_add_spot")
             SelectChip("+ Directional", false, { ed.addLight("directional") { ed.selectedLightId = it } }, tag = "lights_add_directional")
             SelectChip("+ Point", false, { ed.addLight("point") { ed.selectedLightId = it } }, tag = "lights_add_point")
-            SelectChip("+ Spot", false, { ed.addLight("spot") { ed.selectedLightId = it } }, tag = "lights_add_spot")
         }
         if (lighting.lights.isEmpty()) {
             Text(
@@ -995,86 +996,28 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
         }
         if (light != null) {
             Spacer(Modifier.height(8.dp))
-            Text("Selected light", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
-            Spacer(Modifier.height(4.dp))
-            Text(
-                if (light.animated) "Keyframed · ${light.keyframes.size} keys · edits at playhead"
-                else "Static · enable keyframes to animate over time",
-                style = FcType.Caption, color = Fc.Detail,
-                modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
-            )
-            Spacer(Modifier.height(6.dp))
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                SelectChip(
-                    if (light.animated) "Keyframes On" else "Enable keyframes",
-                    light.animated,
-                    { ed.toggleLightAnimation(light.id) },
-                    tag = "lights_toggle_keyframes",
+                Text(
+                    if (light.animated) "Selected light · ${light.keyframes.size} keyframes" else "Selected light",
+                    style = FcType.Label, color = Fc.Title,
                 )
-                if (light.keyframes.isNotEmpty()) {
-                    SelectChip("◀◆", false, { ed.jumpLightKeyframe(light.id, -1) }, tag = "lights_prev_keyframe")
-                }
-                if (light.animated) {
-                    SelectChip(
-                        if (light.hasKeyframe) "− Keyframe" else "+ Keyframe",
-                        light.hasKeyframe,
-                        { if (light.hasKeyframe) ed.removeLightKeyframe(light.id) else ed.addLightKeyframe(light.id) },
-                        tag = "lights_stamp_keyframe",
-                    )
-                }
-                if (light.keyframes.isNotEmpty()) {
-                    SelectChip("◆▶", false, { ed.jumpLightKeyframe(light.id, 1) }, tag = "lights_next_keyframe")
-                }
-            }
-            if (light.animated) {
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    listOf(
-                        "linear" to "Linear",
-                        "smooth" to "Smooth",
-                        "easeIn" to "Ease in",
-                        "easeOut" to "Ease out",
-                        "hold" to "Hold",
-                    ).forEach { (id, label) ->
-                        SelectChip(
-                            label,
-                            light.interpolation == id,
-                            { ed.setLightInterpolation(light.id, id) },
-                            tag = "lights_curve_$id",
-                        )
-                    }
-                }
-                if (light.keyframes.isNotEmpty()) {
-                    Spacer(Modifier.height(6.dp))
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        light.keyframes.forEachIndexed { idx, tick ->
-                            val sec = String.format(Locale.US, "◆ %.2fs", tick.toDouble() / TPS.toDouble())
-                            val atKey = kotlin.math.abs(ed.playhead - tick) < TPS / 120L
-                            SelectChip(
-                                sec,
-                                atKey,
-                                { ed.seek(tick, draft = false) },
-                                tag = "lights_key_$idx",
-                            )
-                        }
-                    }
-                }
+                SelectChip(
+                    "Keyframes…",
+                    light.animated,
+                    { ed.openSceneKeyframes("light:${light.id}") },
+                    tag = "lights_open_keyframes",
+                )
             }
             Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                for (kind in listOf("directional", "point", "spot")) {
+                for (kind in listOf("spot", "directional", "point")) {
                     SelectChip(kind.replaceFirstChar { it.uppercase() }, light.kind == kind, {
                         ed.setLight(light.copy(kind = kind))
                     }, tag = "lights_kind_$kind")

@@ -186,8 +186,10 @@ impl FxEnv for ItemEnv<'_> {
         self.seq.scene_lighting.evaluated_at(self.t)
     }
     fn scene_camera(&self) -> Option<filmcraft_project::SceneCamera3D> {
-        // the editor's grid/orbit preview camera wins over the sequence's match-move and static camera
-        crate::preview_camera().or_else(|| self.seq.matchmove_camera_at(self.t)).or(self.seq.scene_camera)
+        // the editor's grid/orbit preview camera wins over the sequence's match-move and manual camera
+        crate::preview_camera()
+            .or_else(|| self.seq.matchmove_camera_at(self.t))
+            .or_else(|| self.seq.scene_camera_at(self.t))
     }
     fn clip_key(&self) -> u64 {
         let mut h = 0xcbf2_9ce4_8422_2325u64;

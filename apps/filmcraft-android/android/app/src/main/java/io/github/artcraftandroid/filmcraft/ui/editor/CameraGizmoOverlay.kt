@@ -45,7 +45,7 @@ internal fun CameraGizmoOverlay(
                     minOf(54.dp.toPx(), minOf(size.width, size.height) * .25f).toDouble(),
                     ViewProjection(
                         GizmoVec(orbit.target[0], orbit.target[1], orbit.target[2]),
-                        orbit.yaw, orbit.pitch, 0.0, cam.fov,
+                        orbit.yaw, orbit.pitch, 0.0, CLASSIC_FOV,
                         fw.toDouble(), fh.toDouble(), size.width.toDouble(), size.height.toDouble(),
                         orbit.distance,
                     ),
@@ -140,7 +140,7 @@ internal fun CameraGizmoOverlay(
                 if (size.width <= 0f || size.height <= 0f || fw <= 0f || fh <= 0f) return@drawBehind
                 val proj = ViewProjection(
                     GizmoVec(o.target[0], o.target[1], o.target[2]),
-                    o.yaw, o.pitch, 0.0, cam.fov,
+                    o.yaw, o.pitch, 0.0, CLASSIC_FOV,
                     fw.toDouble(), fh.toDouble(), size.width.toDouble(), size.height.toDouble(),
                     o.distance,
                 )

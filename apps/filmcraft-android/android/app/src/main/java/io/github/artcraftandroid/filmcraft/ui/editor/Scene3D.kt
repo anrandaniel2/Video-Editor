@@ -12,8 +12,7 @@ import org.json.JSONObject
 internal fun viewFor(ed: EditorController, fw: Double, fh: Double, w: Double, h: Double): ViewProjection? {
     if (ed.panel == Panel.Scene) {
         val o = ed.sceneOrbit
-        val fov = ed.activeRenderCamera?.fov ?: CLASSIC_FOV
-        return ViewProjection(GizmoVec(o.target[0], o.target[1], o.target[2]), o.yaw, o.pitch, 0.0, fov, fw, fh, w, h, o.distance)
+        return ViewProjection(GizmoVec(o.target[0], o.target[1], o.target[2]), o.yaw, o.pitch, 0.0, CLASSIC_FOV, fw, fh, w, h, o.distance)
     }
     return cameraProjection(ed.activeRenderCamera, fw, fh, w, h)
 }
@@ -79,14 +78,16 @@ data class SceneCamera(
     val pitch: Double = 0.0,
     val roll: Double = 0.0,
     val fov: Double = CLASSIC_FOV,
+    val animated: Boolean = false,
 ) {
-    fun toJson(merge: String? = null): String {
+    fun toJson(merge: String? = null, time: Long? = null): String {
         val j = JSONObject()
         j.put("position", org.json.JSONArray(position))
         j.put("yaw", yaw)
         j.put("pitch", pitch)
         j.put("roll", roll)
         j.put("fov", fov)
+        if (time != null) j.put("time", time)
         if (merge != null) j.put("merge", merge)
         return j.toString()
     }
@@ -125,6 +126,7 @@ data class SceneCamera(
                 pitch = j.optDouble("pitch", 0.0),
                 roll = j.optDouble("roll", 0.0),
                 fov = j.optDouble("fov", CLASSIC_FOV),
+                animated = j.optBoolean("animated", false),
             )
         }
     }

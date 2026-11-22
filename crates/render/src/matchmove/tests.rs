@@ -730,3 +730,77 @@ fn ac_2d_planar_pan_zoom_is_detected_as_planar_2d_video() {
     );
 }
 
+#[test]
+fn ac_pure_2d_pan_and_2d_with_static_hud_are_detected_as_planar_2d_video() {
+    use filmcraft_time::FrameRate;
+
+    let (w, h) = (480usize, 270usize);
+    let num_frames = 24usize;
+    let rate = FrameRate::FPS_24;
+    let mut seed = 0x5041_4E_32_44_u64;
+    let mut next = || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 32) as f32) / (u32::MAX as f32)
+    };
+    let pts_2d: Vec<(f32, f32, u8)> = (0..220)
+        .map(|i| {
+            let x = (next() * 2.0 - 1.0) * 195.0;
+            let y = (next() * 2.0 - 1.0) * 110.0;
+            let lum = 160u8.saturating_add(((i % 5) * 18) as u8);
+            (x, y, lum)
+        })
+        .collect();
+    // Stationary 2D HUD / subtitle / corner markers overlaid on top of the 2D pan.
+    let static_hud: Vec<(i32, i32)> = (0..18).map(|i| (36 + (i % 9) * 44, if i < 9 { 28 } else { 242 })).collect();
+
+    for with_hud in [false, true] {
+        let mut frames = Vec::with_capacity(num_frames);
+        for f in 0..num_frames {
+            let t = f as f32 / (num_frames - 1) as f32;
+            // Pure 2D translation (scale = 1.000, rotation = 0.0) — the exact case where telephoto
+            // 3D rotation previously mimicked 2D motion!
+            let tx = -34.0 * t;
+            let ty = 11.0 * t;
+            let mut rgba = vec![22u8; w * h * 4];
+            for px in rgba.chunks_exact_mut(4) {
+                px[3] = 255;
+            }
+            for &(bx, by, lum) in &pts_2d {
+                let sx = (w as f32 * 0.5 + bx + tx).round() as i32;
+                let sy = (h as f32 * 0.5 + by + ty).round() as i32;
+                for dy in -2..=2 {
+                    for dx in -2..=2 {
+                        let (px_x, px_y) = (sx + dx, sy + dy);
+                        if px_x >= 0 && px_x < w as i32 && px_y >= 0 && px_y < h as i32 {
+                            let off = (px_y as usize * w + px_x as usize) * 4;
+                            rgba[off] = lum;
+                            rgba[off + 1] = lum;
+                            rgba[off + 2] = lum;
+                        }
+                    }
+                }
+            }
+            if with_hud {
+                for &(hx, hy) in &static_hud {
+                    for dy in -2..=2 {
+                        for dx in -2..=2 {
+                            let off = ((hy + dy) as usize * w + (hx + dx) as usize) * 4;
+                            rgba[off] = 248;
+                            rgba[off + 1] = 248;
+                            rgba[off + 2] = 248;
+                        }
+                    }
+                }
+            }
+            frames.push(InputFrame { time: rate.tick_of(f as i64), width: w, height: h, rgba });
+        }
+        let res = solve_frames(&SolveOptions::default(), &frames, &|| false);
+        assert!(
+            matches!(res, Err(SolveError::Planar2DVideo)),
+            "pure 2D pan (with_hud={with_hud}) must be classified as Planar2DVideo, got: {:?}",
+            res.map(|s| (s.solve.rotation_only, s.solve.points.len()))
+        );
+    }
+}
+
+

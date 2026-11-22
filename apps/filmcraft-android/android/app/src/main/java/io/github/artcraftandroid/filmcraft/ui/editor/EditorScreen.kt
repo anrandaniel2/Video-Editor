@@ -235,9 +235,12 @@ private fun WorkspaceMonitor(ed: EditorController, modifier: Modifier) {
 private fun WorkspaceBar(ed: EditorController) {
     Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         NativeAction(LucideIcons.X.glyph(), "Save and return to Projects", false) { ed.closeEditor() }
-        NativeAction(LucideIcons.ChartSpline.glyph(), "Keyframes", ed.panel == Panel.Keyframes) { if (ed.selectedClip != null) ed.panel = Panel.Keyframes }
-        NativeAction(LucideIcons.WandSparkles.glyph(), "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) ed.panel = Panel.Effects }
-        NativeAction(Glyphs.Object3D, "3D Scene", ed.panel == Panel.Scene) { ed.panel = if (ed.panel == Panel.Scene) null else Panel.Scene }
+        NativeAction(LucideIcons.ChartSpline.glyph(), "Keyframes", ed.panel == Panel.Keyframes) {
+            if (ed.panel == Panel.Keyframes) ed.closeInspectorPanel()
+            else if (ed.canOpenKeyframes) ed.openSceneKeyframes(if (ed.selectedClip != null) null else if (ed.sceneCamera != null) "camera" else ed.sceneLights.lights.firstOrNull()?.let { "light:${it.id}" })
+        }
+        NativeAction(LucideIcons.WandSparkles.glyph(), "Effects", ed.panel == Panel.Effects) { if (ed.selectedClip != null) { ed.returnToScene = false; ed.panel = Panel.Effects } }
+        NativeAction(Glyphs.Object3D, "3D Scene", ed.panel == Panel.Scene) { ed.returnToScene = false; ed.panel = if (ed.panel == Panel.Scene) null else Panel.Scene }
         Spacer(Modifier.weight(1f))
         NativeAction(LucideIcons.Paintbrush.glyph(), "Draw", ed.panel == Panel.Drawing) { ed.panel = Panel.Drawing }
         NativeAction(LucideIcons.Share2.glyph(), "Export", false) { if ((ed.timeline?.duration ?: 0L) > 0L) ed.export() }
@@ -289,7 +292,8 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     LaunchedEffect(sel?.id, t?.revision, ed.playhead, ed.panel) {
         if (object3d && sel != null) ed.loadObject3D(sel.id)
         if (masking && sel != null) ed.loadMasks(sel.id)
-        if (ed.panel == Panel.Lights || ed.panel == Panel.Scene) ed.loadLights(ed.playhead)
+        if (ed.panel == Panel.Lights || ed.panel == Panel.Scene || ed.panel == Panel.Keyframes) ed.loadLights(ed.playhead)
+        if (ed.sceneCamera != null || ed.panel == Panel.Scene || ed.panel == Panel.Keyframes) ed.loadSceneCamera(ed.playhead)
     }
     LaunchedEffect(ed.panel) {
         if (ed.panel != Panel.MatchMove) ed.matchmoveTapToPlace = false
@@ -504,8 +508,7 @@ private fun Modifier.sceneOrbitPointerInput(
                     val pan = event.calculatePan()
                     if (zoom != 1f || pan != Offset.Zero) {
                         ed.stop()
-                        val fov = ed.activeRenderCamera?.fov ?: CLASSIC_FOV
-                        cur = cur.dollyAndPanBy(zoom, pan.x, pan.y, fov, viewHeightPx())
+                        cur = cur.dollyAndPanBy(zoom, pan.x, pan.y, CLASSIC_FOV, viewHeightPx())
                         ed.setSceneOrbit(cur)
                         moved = true
                     }

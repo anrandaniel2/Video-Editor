@@ -141,7 +141,14 @@ pub(super) fn gpu_scene(img: &Image, p: &Params, cx: &FxCtx) -> Option<Scene> {
     } else {
         let k=p.size*p.scale*0.5;
         let dz=if p.mesh==5 {0.0} else if p.depth>0.0 {p.depth*p.scale*0.5} else {k};
-        let radius=k*scene.camera[2]/p.z.max(1.0);
+        let view_dist = p.view
+            .map(|x| {
+                let vp = x.point(off);
+                (vp.x * vp.x + vp.y * vp.y + vp.z * vp.z).sqrt()
+            })
+            .unwrap_or(p.z)
+            .max(1.0);
+        let radius=k*scene.camera[2]/view_dist;
         let vertices=mesh_tris(p.mesh,k,dz,radius).into_iter().flat_map(|t| t.map(place)).collect();
         scene.draws.push(Draw { vertices, material:material(p.color), model:None, pbr:true, deformation:primitive_deformation() });
     }

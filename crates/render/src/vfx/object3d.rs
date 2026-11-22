@@ -247,7 +247,14 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
         }
     }
     let view_cam = cx.env.and_then(|env| env.scene_camera());
-    let view = view_cam.map(|c| ViewXform::from(&c, img.h as f32));
+    let view = view_cam.map(|mut c| {
+        // Object placement, depth, size, and light positions are all expressed in layer-scaled
+        // pixels (`* px`). Scale the camera eye position by `px` too so preview/draft renders
+        // (`px < 1.0`, used while dragging the camera) keep the exact same eye-to-object ratio
+        // and orbit pivot as full-resolution renders instead of shrinking objects.
+        c.position = [c.position[0] * px, c.position[1] * px, c.position[2] * px];
+        ViewXform::from(&c, img.h as f32)
+    });
     let la = fv(e, "light_angle", cx);
     let le = fv(e, "light_elevation", cx);
     // The scene's lights: placeable, coloured light objects. With none configured the classic
@@ -391,12 +398,6 @@ impl Buf {
         Some(Self { x0, y0, ss, w: w * ss, h: h * ss, px: vec![[0.0; 4]; n], z: vec![0.0; n] })
     }
 
-    /// The layer-pixel centre of a buffer sample.
-    fn centre(&self, x: usize, y: usize) -> (f32, f32) {
-        let s = self.ss as f32;
-        (self.x0 as f32 + (x as f32 + 0.5) / s, self.y0 as f32 + (y as f32 + 0.5) / s)
-    }
-
     /// The buffer range covering a layer-space rectangle.
     fn range(&self, x_lo: f32, x_hi: f32, y_lo: f32, y_hi: f32) -> Option<(usize, usize, usize, usize)> {
         let s = self.ss as f32;
@@ -409,23 +410,6 @@ impl Buf {
             return None;
         }
         Some((x0, x1 as usize, y0, y1 as usize))
-    }
-
-    fn put(&mut self, x: f32, y: f32, inv_z: f32, c: [f32; 4]) {
-        if inv_z <= 0.0 || c[3] <= 0.0 {
-            return;
-        }
-        let s = self.ss as f32;
-        let xi = ((x - self.x0 as f32) * s).floor() as i64;
-        let yi = ((y - self.y0 as f32) * s).floor() as i64;
-        if xi < 0 || yi < 0 || xi >= self.w as i64 || yi >= self.h as i64 {
-            return;
-        }
-        let i = yi as usize * self.w + xi as usize;
-        if inv_z > self.z[i] {
-            self.z[i] = inv_z;
-            self.px[i] = c;
-        }
     }
 
     /// Box-filter the samples down to layer pixels and mix them over the layer.
@@ -493,11 +477,18 @@ fn bounds(pts: &[V3], cam: (f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
 
 fn shade(n: V3, wp: V3, p: &Params, base: [f32; 3], alpha: f32) -> [f32; 4] {
     let n = n.norm();
-    // The camera looks down +z, so a visible face has a normal pointing back toward -z.
-    let n = if n.z > 0.0 { n.mul(-1.0) } else { n };
-    // Lights live in camera space: elevation lifts them toward the viewer (-z), so a front face
-    // is lit at the default 45° instead of being lit from behind and falling to ambient only.
-    let view = V3::new(0.0, 0.0, -1.0);
+    // Perspective eye ray in camera space (eye sits at the origin; fallback -Z if degenerate).
+    let view = {
+        let len2 = wp.x * wp.x + wp.y * wp.y + wp.z * wp.z;
+        if len2 > 1e-8 && len2.is_finite() {
+            wp.mul(-1.0 / len2.sqrt())
+        } else {
+            V3::new(0.0, 0.0, -1.0)
+        }
+    };
+    // Orient two-sided surface normals toward the perspective eye ray rather than testing `n.z`
+    // alone, which flipped off-axis front faces inside-out when orbiting/dragging the camera.
+    let n = if n.dot(view) < 0.0 { n.mul(-1.0) } else { n };
     let shin = 2.0 + (1.0 - p.rough) * 96.0;
     let mut diff = [0.0f32; 3];
     let mut spec = [0.0f32; 3];
@@ -577,16 +568,49 @@ fn tri(buf: &mut Buf, pts: [(f32, f32, f32); 3], cols: [[f32; 4]; 3]) {
     });
 }
 
-/// A triangle already in world space (rotated and placed), with a normal per corner.
+/// Clip a primitive `Vert` triangle against the near plane `z = 1.2` so faces straddling the
+/// camera while orbiting/zooming close are cleanly clipped instead of popping out whole.
+fn clip_near_vert(tri: [Vert; 3]) -> Vec<[Vert; 3]> {
+    const NEAR: f32 = 1.2;
+    let lerp_v = |a: Vert, b: Vert, t: f32| Vert {
+        p: a.p.add(b.p.sub(a.p).mul(t)),
+        n: a.n.add(b.n.sub(a.n).mul(t)).norm(),
+    };
+    let mut poly = Vec::with_capacity(4);
+    for i in 0..3 {
+        let cur = tri[i];
+        let nxt = tri[(i + 1) % 3];
+        let cin = cur.p.z >= NEAR;
+        let nin = nxt.p.z >= NEAR;
+        if cin {
+            poly.push(cur);
+        }
+        if cin != nin {
+            let denom = nxt.p.z - cur.p.z;
+            if denom.abs() > 1e-6 {
+                let t = ((NEAR - cur.p.z) / denom).clamp(0.0, 1.0);
+                poly.push(lerp_v(cur, nxt, t));
+            }
+        }
+    }
+    if poly.len() < 3 {
+        return Vec::new();
+    }
+    (1..poly.len() - 1).map(|i| [poly[0], poly[i], poly[i + 1]]).collect()
+}
+
+/// A triangle already in world/camera space (rotated and placed), with a normal per corner.
 fn draw_tri(buf: &mut Buf, v: [Vert; 3], p: &Params, base: [f32; 3], alpha: f32, cam: (f32, f32, f32)) {
     let (cx, cy, f) = cam;
-    let Some(a) = project(v[0].p, cx, cy, f) else { return };
-    let Some(b) = project(v[1].p, cx, cy, f) else { return };
-    let Some(d) = project(v[2].p, cx, cy, f) else { return };
-    // Two-sided lighting: parametric windings are not all outward, and the z-buffer already
-    // keeps the nearest surface; `shade` faces the visible side toward the camera.
-    let cols = [shade(v[0].n, v[0].p, p, base, alpha), shade(v[1].n, v[1].p, p, base, alpha), shade(v[2].n, v[2].p, p, base, alpha)];
-    tri(buf, [a, b, d], cols);
+    for cv in clip_near_vert(v) {
+        let Some(a) = project(cv[0].p, cx, cy, f) else { continue };
+        let Some(b) = project(cv[1].p, cx, cy, f) else { continue };
+        let Some(d) = project(cv[2].p, cx, cy, f) else { continue };
+        // Two-sided lighting: parametric windings are not all outward, and the z-buffer already
+        // keeps the nearest surface; `shade` faces the visible side toward the camera.
+        let cols = [shade(cv[0].n, cv[0].p, p, base, alpha), shade(cv[1].n, cv[1].p, p, base, alpha), shade(cv[2].n, cv[2].p, p, base, alpha)];
+        tri(buf, [a, b, d], cols);
+    }
 }
 
 /// A flat-shaded quad already in world space (text walls and bevels).
@@ -1281,11 +1305,21 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         let dz = if p.mesh == 5 { 0.0 } else if p.depth > 0.0 { p.depth * p.scale * 0.5 } else { k };
         let base = lin(p.color);
         let alpha = p.opacity * p.color[3].clamp(0.0, 1.0);
-        // Cut curves to the size they actually appear at, so a big sphere is round and a small
-        // one does not cost thousands of triangles.
-        let radius = k * cam.2 / p.z.max(1.0);
+        // Cut curves to the size they actually appear at from the active camera eye, so a sphere
+        // orbited/dollied close stays smooth instead of dropping subdivision count.
+        let view_dist = view
+            .map(|x| {
+                let vp = x.point(off);
+                (vp.x * vp.x + vp.y * vp.y + vp.z * vp.z).sqrt()
+            })
+            .unwrap_or(p.z)
+            .max(1.0);
+        let radius = k * cam.2 / view_dist;
         let tris: Vec<[Vert; 3]> = mesh_tris(p.mesh, k, dz, radius).into_iter().map(|t| [place(t[0]), place(t[1]), place(t[2])]).collect();
-        let pts: Vec<V3> = tris.iter().flat_map(|t| t.iter().map(|v| v.p)).collect();
+        let pts: Vec<V3> = tris
+            .iter()
+            .flat_map(|&t| clip_near_vert(t).into_iter().flat_map(|ct| [ct[0].p, ct[1].p, ct[2].p]))
+            .collect();
         let Some(b) = bounds(&pts, cam) else { return };
         let Some(mut buf) = Buf::new(img, b) else { return };
         for t in tris {
@@ -1571,5 +1605,89 @@ mod camera_translation_tests {
         assert!((anchor.0-position.0).abs()<0.001 && (anchor.1-position.1).abs()<0.001);
         let front=project(offset.add(V3::new(0.0,0.0,-200.0)),cam.0,cam.1,cam.2).expect("front");
         assert!(front.0>anchor.0 && front.1>anchor.1);
+    }
+
+    #[test]
+    fn scene_camera_drag_preserves_size_across_px_scales() {
+        struct CamEnv {
+            cam: filmcraft_project::SceneCamera3D,
+        }
+        impl crate::vfx::FxEnv for CamEnv {
+            fn frame(&self, _: f64, _: &EffectInstance) -> Option<Image> { None }
+            fn source_frame(&self, _: f64, _: f32) -> Option<Image> { None }
+            fn track(&self, _: usize) -> Option<Image> { None }
+            fn layer_to_output(&self) -> filmcraft_geom::Affine { filmcraft_geom::Affine::IDENTITY }
+            fn clip_seconds(&self) -> f64 { 5.0 }
+            fn clip_offset(&self) -> f64 { 0.0 }
+            fn frame_rate(&self) -> f64 { 30.0 }
+            fn media_timecode(&self) -> String { String::new() }
+            fn file_name(&self) -> String { String::new() }
+            fn sequence_name(&self) -> String { String::new() }
+            fn sequence_size(&self) -> (u32, u32) { (400, 400) }
+            fn source_size(&self) -> (u32, u32) { (400, 400) }
+            fn clip_key(&self) -> u64 { 1 }
+            fn scene_camera(&self) -> Option<filmcraft_project::SceneCamera3D> { Some(self.cam) }
+        }
+
+        // Orbit camera around pivot (0, 0, 700) by yaw = -32 deg, pitch = -20 deg, dist = 800
+        let env = CamEnv {
+            cam: filmcraft_project::SceneCamera3D {
+                position: [-398.0, -273.6, 56.0],
+                yaw: 32.0,
+                pitch: -20.0,
+                roll: 0.0,
+                fov: filmcraft_project::CLASSIC_FOV,
+            },
+        };
+        let mut e = filmcraft_project::find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(140.0);
+        e.params.get_mut("z").unwrap().value = filmcraft_project::ParamValue::Float(700.0);
+        e.params.get_mut("position").unwrap().value =
+            filmcraft_project::ParamValue::Vec2(filmcraft_geom::Vec2::new(200.0, 200.0));
+
+        let measure = |px_scale: f32| -> (f32, f32, f32, f32) {
+            let side = (400.0 * px_scale).round() as usize;
+            let mut img = Image::new(side, side);
+            let cx = FxCtx {
+                t: filmcraft_time::Tick::ZERO,
+                px_scale,
+                seconds: 0.0,
+                timecode: "",
+                clip_name: "",
+                project: None,
+                env: Some(&env),
+                frame_rate: 30.0,
+                working: filmcraft_color::WorkingSpace::Rec709,
+            };
+            apply(&mut img, &e, &cx);
+            let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+            for (i, p) in img.px.chunks(4).enumerate() {
+                if p[3] > 0.5 {
+                    let (x, y) = (i % side, i / side);
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+            }
+            assert!(x0 <= x1, "cube missing at px_scale={px_scale}");
+            (
+                (x0 + x1) as f32 * 0.5 / side as f32,
+                (y0 + y1) as f32 * 0.5 / side as f32,
+                (x1 - x0 + 1) as f32 / side as f32,
+                (y1 - y0 + 1) as f32 / side as f32,
+            )
+        };
+
+        let full = measure(1.0);
+        let draft = measure(0.25);
+        assert!(
+            (full.0 - draft.0).abs() < 0.025 && (full.1 - draft.1).abs() < 0.025,
+            "draft camera drag shifted object centre: full={full:?}, draft={draft:?}"
+        );
+        assert!(
+            (full.2 - draft.2).abs() < 0.03 && (full.3 - draft.3).abs() < 0.03,
+            "draft camera drag shrunk/warped object size: full={full:?}, draft={draft:?}"
+        );
     }
 }

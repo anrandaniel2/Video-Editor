@@ -1148,10 +1148,41 @@ class EditorController(
     var sceneShowVideo by mutableStateOf(false)
         private set
 
-    /** Re-read the scene camera from the engine. */
-    suspend fun loadSceneCamera() {
+    /** Active target inside the unified Keyframes panel: `null` = selected clip/3D object,
+     *  `"camera"` = 3D scene camera, `"light:<id>"` = 3D scene light. */
+    var keyframesTarget by mutableStateOf<String?>(null)
+    /** Remember when an inspector panel was opened from the 3D Scene bar so closing returns to 3D Scene. */
+    var returnToScene by mutableStateOf(false)
+
+    val all3DClips: List<ClipInfo>
+        get() = timeline?.lanes?.flatMap { l -> l.clips.filter { it.has3d } } ?: emptyList()
+
+    val canOpenKeyframes: Boolean
+        get() = selectedClip != null || sceneCamera != null || sceneLights.lights.isNotEmpty() || all3DClips.isNotEmpty()
+
+    fun openPanelFromScene(targetPanel: Panel, kfTarget: String? = null) {
+        returnToScene = true
+        if (targetPanel == Panel.Keyframes) keyframesTarget = kfTarget
+        panel = targetPanel
+    }
+
+    fun openSceneKeyframes(target: String? = null) {
+        if (panel == Panel.Scene) returnToScene = true
+        keyframesTarget = target
+        panel = Panel.Keyframes
+    }
+
+    fun closeInspectorPanel() {
+        val backToScene = returnToScene
+        returnToScene = false
+        panel = if (backToScene) Panel.Scene else null
+    }
+
+    /** Re-read the scene camera from the engine at `time`. */
+    suspend fun loadSceneCamera(time: Long = playhead) {
+        if (liveEditing) return
         sceneCamera = runCatching {
-            SceneCamera.from(engine.command { execute("scene.camera", "{}") })
+            SceneCamera.from(engine.command { execute("scene.camera", """{"time":$time}""") })
         }.getOrNull()
     }
 
@@ -1162,8 +1193,10 @@ class EditorController(
     fun setSceneCamera(cam: SceneCamera, merge: String? = null) {
         stop()
         sceneCameraRemoved = false
-        sceneCamera = cam
-        val body = cam.toJson(merge)
+        val at = playhead
+        val optimistic = if (cam.animated) cam else cam
+        sceneCamera = optimistic
+        val body = optimistic.toJson(merge, time = at)
         queueLiveEdit("scene-camera") { execute("scene.setCamera", body); Unit }
     }
 
@@ -1181,7 +1214,9 @@ class EditorController(
     /** Editor-only: point the preview's snapshot at the orbit camera (or clear it). */
     private fun pushOrbitCamera(r: Renderer) {
         val inScene = panel == Panel.Scene
-        val cam = if (inScene) sceneOrbit.toCamera(activeRenderCamera?.fov ?: CLASSIC_FOV).toNative() else null
+        // Keep the editor's third-person orbit camera at CLASSIC_FOV so adjusting the render
+        // camera's FOV changes the yellow camera frustum gizmo rather than shrinking the 3D scene.
+        val cam = if (inScene) sceneOrbit.toCamera(CLASSIC_FOV).toNative() else null
         runCatching { r.setScenePreviewCamera(cam) }
         runCatching { r.setSceneSolo3d(inScene && !sceneShowVideo) }
     }
@@ -1313,11 +1348,14 @@ class EditorController(
     suspend fun animationState(clip: ULong): JSONObject =
         JSONObject(engine.command { execute("animation.list", """{"clip":$clip}""") })
 
+    suspend fun sceneAnimationState(target: String): JSONObject =
+        JSONObject(engine.command { execute("animation.sceneList", JSONObject().put("target", target).toString()) })
+
     fun animationCommand(command: String, body: JSONObject) {
         stop()
         val json = body.toString()
         if (body.has("merge")) {
-            val key = listOf(command, body.opt("clip"), body.opt("effect"), body.opt("mask"), body.opt("param"), body.opt("mediaTime")).joinToString(":")
+            val key = listOf(command, body.opt("clip"), body.opt("target"), body.opt("effect"), body.opt("mask"), body.opt("param"), body.opt("mediaTime")).joinToString(":")
             queueLiveEdit(key) { execute(command, json); Unit }
             return
         }
@@ -1344,15 +1382,24 @@ class EditorController(
     }
 
     /** Add a light object of `kind` ("directional", "point" or "spot"); `onAdded` gets its id. */
-    fun addLight(kind: String, onAdded: (Long) -> Unit = {}) {
+    fun addLight(kind: String = "spot", onAdded: (Long) -> Unit = {}) {
         stop()
         scope.launch {
             try {
                 val at = playhead
+                val fw = timeline?.width?.toDouble() ?: 1080.0
+                val fh = timeline?.height?.toDouble() ?: 1920.0
+                // Spawn front-top-left of the z = 700 3D object stage, aimed directly toward
+                // (fw/2, fh/2, 700) (`angle = 225°, elevation = 42°`) so the 3D cone is clearly
+                // visible in both the 3D Scene orbit view and the main viewport.
                 val light = SceneLight(
                     name = "Light ${sceneLights.lights.size + 1}",
                     kind = kind,
-                    position = listOf((timeline?.width?.toDouble() ?: 1080.0) / 2, (timeline?.height?.toDouble() ?: 1920.0) / 2, 1500.0),
+                    position = listOf(fw * 0.5 - fw * 0.14, fh * 0.5 - fh * 0.10, 460.0),
+                    angle = 225.0,
+                    elevation = 42.0,
+                    cone = 34.0,
+                    softness = 0.35,
                 )
                 val out = engine.command { execute("lights.set", light.toJson(time = at)) }
                 sceneLights = SceneLightingState.from(out)

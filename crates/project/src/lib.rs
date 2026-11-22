@@ -391,6 +391,7 @@ impl Project {
             matchmove: None,
             scene_lighting: Default::default(),
             scene_camera: None,
+            scene_camera_tracks: Default::default(),
             split: SplitMarks::default(),
         };
         for i in 0..v {

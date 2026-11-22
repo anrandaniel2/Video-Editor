@@ -14,7 +14,7 @@ use filmcraft_media::{FrameRequest, SharedSource};
 use filmcraft_project::{ClipId, EffectInstance, ItemKind, ParamValue, Sequence, TrackItem, find_effect, graphic};
 use filmcraft_render::SourceProvider;
 use filmcraft_render::matchmove::{InputFrame, SolveError, SolveOptions, SolveReport, solve_camera};
-use filmcraft_render::track3d::{Gray, Tracker, crop_gray, view_rect};
+use filmcraft_render::track3d::{Gray, Tracker, view_rect};
 use filmcraft_time::Tick;
 use serde_json::json;
 
@@ -246,9 +246,10 @@ impl From<SceneCamera3d> for filmcraft_project::SceneCamera3D {
     }
 }
 
-/// The sequence's scene camera (absent = the classic fixed camera), for the editor to show.
+/// The sequence's scene camera at the playhead (absent = the classic fixed camera), for the editor to show.
 pub(crate) fn scene_camera_of(s: &Session) -> Option<SceneCamera3d> {
-    s.active_sequence().and_then(|seq| seq.scene_camera.map(Into::into))
+    let at = s.playhead();
+    s.active_sequence().and_then(|seq| seq.scene_camera_at(at).map(Into::into))
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -851,11 +852,11 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
     let provider = s.media.provider(s.project.clone(), s.services.clone());
     let source = provider.source(c.item).ok_or_else(|| MobileError::Command("The clip's media could not be opened.".into()))?;
     let (src_w, src_h) = source.info().video.as_ref().map(|v| (v.width, v.height)).unwrap_or((seq.settings.width, seq.settings.height));
-    let scale = (480.0f32 / src_w.max(src_h).max(1) as f32).min(1.0);
-    let patch = opts.patch_size.clamp(7, 41) as usize;
+    let scale = (640.0f32 / src_w.max(src_h).max(1) as f32).min(1.0);
+    let patch = opts.patch_size.clamp(9, 41) as usize;
     let max_disp = finite(opts.baseline, 64.0).clamp(4.0, 256.0) as f32;
-    // Streamed: one decoded frame and two pyramids at a time. Buffering a whole analysis was
-    // hundreds of megabytes on a phone for a few seconds of footage.
+    // Streamed directly to the GPU tracker (`Tracker::new_rgba` / `push_rgba`), keeping at most
+    // two pyramids in VRAM (or RAM fallback) at a time.
     let mut tracker: Option<Tracker> = None;
     let mut samples: Vec<filmcraft_project::TrackSample> = Vec::new();
     let mut t = start;
@@ -866,24 +867,25 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
         let st = c.source_time_at(t);
         let Ok(f) = source.video_frame(FrameRequest { time: st, scale }) else { break };
         let rgba = f.to_rgba8();
-        let g = Gray::from_rgba8(&rgba, f.width as usize, f.height as usize);
-        let (full_w, full_h) = (g.w.max(1), g.h.max(1));
-        let (vx, vy, vw, vh) = view_rect(opts.stereo.project(), g.w, g.h);
-        let left = crop_gray(&g, vx, vy, vw, vh);
-        let right = match opts.stereo {
+        let (full_w, full_h) = ((f.width as usize).max(1), (f.height as usize).max(1));
+        let (vx, vy, vw, vh) = view_rect(opts.stereo.project(), full_w, full_h);
+        let right_crop = match opts.stereo {
             StereoLayout::Mono => None,
-            StereoLayout::SideBySide => Some(crop_gray(&g, vx + vw, vy, vw, vh)),
-            StereoLayout::TopBottom => Some(crop_gray(&g, vx, vy + vh, vw, vh)),
+            StereoLayout::SideBySide => Some((vx + vw, vy, vw, vh)),
+            StereoLayout::TopBottom => Some((vx, vy + vh, vw, vh)),
         };
         let p = match &mut tracker {
             None => {
-                let target = ((finite(opts.target_x, 0.5).clamp(0.0, 1.0) * vw as f64) as f32, (finite(opts.target_y, 0.5).clamp(0.0, 1.0) * vh as f64) as f32);
-                let tr = Tracker::new(&left, target, patch, max_disp);
+                let target = (
+                    (finite(opts.target_x, 0.5).clamp(0.0, 1.0) * vw as f64) as f32,
+                    (finite(opts.target_y, 0.5).clamp(0.0, 1.0) * vh as f64) as f32,
+                );
+                let tr = Tracker::new_rgba(&rgba, full_w, full_h, (vx, vy, vw, vh), target, patch, max_disp);
                 let a = tr.anchor();
                 tracker = Some(tr);
                 a
             }
-            Some(tr) => tr.push(&left, right.as_ref()),
+            Some(tr) => tr.push_rgba(&rgba, full_w, full_h, (vx, vy, vw, vh), right_crop),
         };
         samples.push(filmcraft_project::TrackSample {
             time: t - c.start,
@@ -899,6 +901,7 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
     if samples.len() < 2 {
         return Err(MobileError::Command("Not enough frames to track.".into()));
     }
+    filmcraft_render::track3d::smooth_track_samples(&mut samples);
     let count = samples.len() as u32;
     let quality = f64::from(samples.iter().map(|s| s.confidence).sum::<f32>()) / f64::from(count) * 100.0;
     let lost = samples.iter().filter(|s| s.confidence <= 0.0).count() as u32;
@@ -1106,6 +1109,19 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
     let mut samples: Vec<filmcraft_project::TrackSample> = Vec::new();
     let mut t = args.win_start;
     let mut idx = 0usize;
+
+    // Peek a frame ~6 steps ahead so if the background is static while a 2D foreground subject moves,
+    // target selection prefers a high-contrast corner that actually exhibits motion.
+    let probe_t = (args.win_start + Tick(args.frame_step.0.saturating_mul(6))).min(args.win_end - args.frame_step);
+    let probe_gray = if probe_t > args.win_start {
+        args.source
+            .video_frame(FrameRequest { time: args.clip.source_time_at(probe_t), scale: args.scale })
+            .ok()
+            .map(|pf| Gray::from_rgba8(&pf.to_rgba8(), pf.width as usize, pf.height as usize))
+    } else {
+        None
+    };
+
     while t < args.win_end && samples.len() < 2000 {
         if job.cancelled() {
             return Err("cancelled".to_string());
@@ -1113,17 +1129,17 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
         let st = args.clip.source_time_at(t);
         let f = args.source.video_frame(FrameRequest { time: st, scale: args.scale }).map_err(|e| e.to_string())?;
         let rgba = f.to_rgba8();
-        let g = Gray::from_rgba8(&rgba, f.width as usize, f.height as usize);
-        let (full_w, full_h) = (g.w.max(1), g.h.max(1));
+        let (full_w, full_h) = ((f.width as usize).max(1), (f.height as usize).max(1));
         let p = match &mut tracker {
             None => {
-                let target = pick_2d_track_target(&g);
-                let tr = Tracker::new(&g, target, 17, 64.0);
+                let g0 = Gray::from_rgba8(&rgba, full_w, full_h);
+                let target = pick_2d_track_target_with_probe(&g0, probe_gray.as_ref());
+                let tr = Tracker::new_rgba(&rgba, full_w, full_h, (0, 0, full_w, full_h), target, 19, 64.0);
                 let a = tr.anchor();
                 tracker = Some(tr);
                 a
             }
-            Some(tr) => tr.push(&g, None),
+            Some(tr) => tr.push_rgba(&rgba, full_w, full_h, (0, 0, full_w, full_h), None),
         };
         samples.push(filmcraft_project::TrackSample {
             time: Tick(t.0.saturating_sub(args.clip.start.0)),
@@ -1141,7 +1157,59 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
     if samples.len() < 2 {
         return Err("Not enough frames to track.".to_string());
     }
+    filmcraft_render::track3d::smooth_track_samples(&mut samples);
     Ok(SolveWorkerOutcome::Track2D { clip: args.clip.id, clip_start: args.clip.start, samples })
+}
+
+fn pick_2d_track_target_with_probe(g: &Gray, probe: Option<&Gray>) -> (f32, f32) {
+    let base = pick_2d_track_target(g);
+    let Some(p) = probe.filter(|p| p.w == g.w && p.h == g.h) else { return base };
+    let (w, h) = (g.w, g.h);
+    if w < 16 || h < 16 {
+        return base;
+    }
+    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+    let norm = (cx * cx + cy * cy).max(1.0);
+    let x0 = (w / 6).max(3);
+    let x1 = ((w * 5) / 6).min(w.saturating_sub(4));
+    let y0 = (h / 6).max(3);
+    let y1 = ((h * 5) / 6).min(h.saturating_sub(4));
+    let mut best_moving = (0.0f32, base.0, base.1);
+    let mut y = y0;
+    while y <= y1 {
+        let mut x = x0;
+        while x <= x1 {
+            let (mut sxx, mut syy, mut sxy, mut temporal_diff) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for dy in -2i32..=2 {
+                let py = (y as i32 + dy) as usize;
+                for dx in -2i32..=2 {
+                    let px = (x as i32 + dx) as usize;
+                    let idx = py * w + px;
+                    let gx = 0.5 * (g.p[idx + 1] - g.p[idx - 1]);
+                    let gy = 0.5 * (g.p[idx + w] - g.p[idx - w]);
+                    sxx += gx * gx;
+                    syy += gy * gy;
+                    sxy += gx * gy;
+                    temporal_diff += (p.p[idx] - g.p[idx]).abs();
+                }
+            }
+            let mean_diff = temporal_diff / 25.0;
+            let tr = sxx + syy;
+            let det_disc = ((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy).sqrt();
+            let lambda_min = 0.5 * (tr - det_disc);
+            let rx = x as f32 - cx;
+            let ry = y as f32 - cy;
+            let center_w = 1.0 / (1.0 + 1.4 * ((rx * rx + ry * ry) / norm));
+            let motion_boost = if mean_diff > 0.025 { 1.0 + 3.5 * mean_diff.min(0.35) } else { 0.35 };
+            let score = lambda_min * center_w * motion_boost;
+            if score > best_moving.0 {
+                best_moving = (score, x as f32, y as f32);
+            }
+            x += 4;
+        }
+        y += 4;
+    }
+    if best_moving.0 > 1e-4 { (best_moving.1, best_moving.2) } else { base }
 }
 
 fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorkerOutcome, String> {

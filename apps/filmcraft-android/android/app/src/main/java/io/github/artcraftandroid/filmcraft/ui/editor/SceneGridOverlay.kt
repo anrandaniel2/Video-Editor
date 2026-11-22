@@ -46,10 +46,9 @@ internal fun SceneGridOverlay(
                 val matchmoveActive = ed.matchmoveActive
                 val sceneData = ed.matchmoveSceneData
                 val matchmovePose = ed.matchmovePose
-                val fov = cam?.fov ?: CLASSIC_FOV
                 val proj = ViewProjection(
                     GizmoVec(o.target[0], o.target[1], o.target[2]),
-                    o.yaw, o.pitch, 0.0, fov,
+                    o.yaw, o.pitch, 0.0, CLASSIC_FOV,
                     fw.toDouble(), fh.toDouble(),
                     size.width.toDouble(), size.height.toDouble(),
                     o.distance,

@@ -77,7 +77,7 @@ impl Light3D {
         "color", "intensity", "x", "y", "z", "angle", "elevation", "range", "cone", "softness",
     ];
 
-    fn static_param_value(&self, id: &str) -> Option<ParamValue> {
+    pub fn static_param_value(&self, id: &str) -> Option<ParamValue> {
         Some(match id {
             "color" => ParamValue::Color([self.color[0], self.color[1], self.color[2], 1.0]),
             "intensity" => ParamValue::Float(f64::from(self.intensity)),
@@ -91,6 +91,61 @@ impl Light3D {
             "softness" => ParamValue::Float(f64::from(self.softness)),
             _ => return None,
         })
+    }
+
+    /// Evaluate a single animatable parameter at `t`.
+    pub fn param_value_at(&self, id: &str, t: Tick) -> Option<ParamValue> {
+        if let Some(p) = self.tracks.get(id).filter(|p| p.is_animated()) {
+            return Some(p.value_at(t));
+        }
+        self.static_param_value(id)
+    }
+
+    /// Update a static light field from a `ParamValue`.
+    pub fn set_static_param(&mut self, id: &str, v: &ParamValue) -> bool {
+        match (id, v) {
+            ("color", ParamValue::Color(c)) => {
+                self.color = [c[0].clamp(0.0, 1.0), c[1].clamp(0.0, 1.0), c[2].clamp(0.0, 1.0)];
+                true
+            }
+            ("intensity", ParamValue::Float(x)) if x.is_finite() => {
+                self.intensity = (*x as f32).clamp(0.0, 20.0);
+                true
+            }
+            ("x", ParamValue::Float(x)) if x.is_finite() => {
+                self.position[0] = *x as f32;
+                true
+            }
+            ("y", ParamValue::Float(x)) if x.is_finite() => {
+                self.position[1] = *x as f32;
+                true
+            }
+            ("z", ParamValue::Float(x)) if x.is_finite() => {
+                self.position[2] = *x as f32;
+                true
+            }
+            ("angle", ParamValue::Float(x)) if x.is_finite() => {
+                self.angle = *x as f32;
+                true
+            }
+            ("elevation", ParamValue::Float(x)) if x.is_finite() => {
+                self.elevation = (*x as f32).clamp(-90.0, 90.0);
+                true
+            }
+            ("range", ParamValue::Float(x)) if x.is_finite() => {
+                self.range = (*x as f32).max(0.0);
+                true
+            }
+            ("cone", ParamValue::Float(x)) if x.is_finite() => {
+                self.cone = (*x as f32).clamp(1.0, 89.0);
+                true
+            }
+            ("softness", ParamValue::Float(x)) if x.is_finite() => {
+                self.softness = (*x as f32).clamp(0.0, 1.0);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn eval_float(&self, id: &str, fallback: f32, t: Tick) -> f32 {
@@ -372,6 +427,67 @@ impl Default for SceneCamera3D {
 }
 
 impl SceneCamera3D {
+    /// Parameter IDs animated when 3D scene camera keyframing is enabled.
+    pub const ANIMATED_PARAMS: &'static [&'static str] = &[
+        "x", "y", "z", "yaw", "pitch", "roll", "fov",
+    ];
+
+    pub fn static_param_value(&self, id: &str) -> Option<ParamValue> {
+        Some(ParamValue::Float(f64::from(match id {
+            "x" => self.position[0],
+            "y" => self.position[1],
+            "z" => self.position[2],
+            "yaw" => self.yaw,
+            "pitch" => self.pitch,
+            "roll" => self.roll,
+            "fov" => self.fov,
+            _ => return None,
+        })))
+    }
+
+    pub fn set_static_param(&mut self, id: &str, v: &ParamValue) -> bool {
+        let ParamValue::Float(x) = v else { return false };
+        if !x.is_finite() {
+            return false;
+        }
+        let xf = *x as f32;
+        match id {
+            "x" => self.position[0] = xf,
+            "y" => self.position[1] = xf,
+            "z" => self.position[2] = xf,
+            "yaw" => self.yaw = xf,
+            "pitch" => self.pitch = xf.clamp(-89.0, 89.0),
+            "roll" => self.roll = xf,
+            "fov" => self.fov = xf.clamp(1.0, 179.0),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Evaluate a `SceneCamera3D` against optional keyframe tracks at sequence timeline `t`.
+    pub fn evaluated_with_tracks(&self, tracks: &BTreeMap<String, Param>, t: Tick) -> Self {
+        if tracks.is_empty() || !tracks.values().any(Param::is_animated) {
+            return *self;
+        }
+        let eval = |id: &str, fallback: f32| -> f32 {
+            match tracks.get(id).filter(|p| p.is_animated()).map(|p| p.value_at(t)) {
+                Some(ParamValue::Float(v)) if v.is_finite() => v as f32,
+                _ => fallback,
+            }
+        };
+        Self {
+            position: [
+                eval("x", self.position[0]),
+                eval("y", self.position[1]),
+                eval("z", self.position[2]),
+            ],
+            yaw: eval("yaw", self.yaw),
+            pitch: eval("pitch", self.pitch).clamp(-89.0, 89.0),
+            roll: eval("roll", self.roll),
+            fov: eval("fov", self.fov).clamp(1.0, 179.0),
+        }
+    }
+
     /// Whether this camera renders exactly like the classic fixed camera.
     pub fn is_classic(&self) -> bool {
         *self == Self::default()

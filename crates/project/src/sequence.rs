@@ -182,6 +182,9 @@ pub struct Sequence {
     /// The camera the sequence's 3D layers render through. Absent = the classic fixed camera.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_camera: Option<crate::lighting::SceneCamera3D>,
+    /// Sequence-timeline keyframe tracks for `scene_camera` (`x`, `y`, `z`, `yaw`, `pitch`, `roll`, `fov`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub scene_camera_tracks: std::collections::BTreeMap<String, crate::keyframe::Param>,
     /// Split In/Out points (Markers ▸ Mark Split): per-channel overrides of `mark_in`/`mark_out`.
     #[serde(default, skip_serializing_if = "SplitMarks::is_empty")]
     pub split: SplitMarks,
@@ -278,6 +281,37 @@ impl Sequence {
         let start = self.find_item(solve.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
         let sample = solve.confident_sample_at(Tick(timeline.0.saturating_sub(start.0)))?;
         Some(mm.apply_to_sample(&sample))
+    }
+    /// Evaluate the sequence's manual 3D scene camera at timeline tick `t`, applying any active
+    /// camera keyframe tracks.
+    pub fn scene_camera_at(&self, t: Tick) -> Option<crate::lighting::SceneCamera3D> {
+        self.scene_camera.map(|c| c.evaluated_with_tracks(&self.scene_camera_tracks, t))
+    }
+    /// Update the manual 3D scene camera at timeline tick `t`. When camera keyframe tracks are
+    /// active, stamps/updates the changed parameters at `t`.
+    pub fn update_scene_camera_at(&mut self, cam: crate::lighting::SceneCamera3D, t: Tick) {
+        let prev_eval = self.scene_camera_at(t).unwrap_or(cam);
+        self.scene_camera = Some(cam);
+        if self.scene_camera_tracks.values().any(crate::keyframe::Param::is_animated) {
+            for &id in crate::lighting::SceneCamera3D::ANIMATED_PARAMS {
+                let Some(next_v) = cam.static_param_value(id) else { continue };
+                let prev_v = prev_eval.static_param_value(id);
+                let changed = match (&prev_v, &next_v) {
+                    (Some(crate::keyframe::ParamValue::Float(a)), crate::keyframe::ParamValue::Float(b)) => (a - b).abs() > 1e-5,
+                    _ => prev_v.as_ref() != Some(&next_v),
+                };
+                if let Some(track) = self.scene_camera_tracks.get_mut(id) {
+                    track.value = next_v.clone();
+                    if track.is_animated() && (changed || track.keyframes.iter().any(|k| k.time == t)) {
+                        track.put_keyframe(t, next_v);
+                    }
+                } else if changed {
+                    let mut p = crate::keyframe::Param::new(next_v.clone());
+                    p.put_keyframe(t, next_v);
+                    self.scene_camera_tracks.insert(id.to_string(), p);
+                }
+            }
+        }
     }
     /// Every sample of the active match-move solve mapped onto sequence timeline ticks and
     /// calibrated world coordinates, holding the last confident pose across lost frames.
