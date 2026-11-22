@@ -13,9 +13,9 @@ use super::linalg::{
 use super::tracks::{FeatureTrack, TrackedShot};
 
 const RANSAC_ITERS: usize = 2000;
-const HOMOGRAPHY_THRESH_PX: f64 = 2.5;
-const SAMPSON_THRESH_PX: f64 = 2.0;
-const PNP_INLIER_PX: f64 = 3.5;
+const HOMOGRAPHY_THRESH_PX: f64 = 3.2;
+const SAMPSON_THRESH_PX: f64 = 3.0;
+const PNP_INLIER_PX: f64 = 4.5;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CameraPose {
@@ -66,6 +66,7 @@ struct EssentialInit {
     median_parallax_deg: f64,
 }
 
+#[derive(Clone, Debug)]
 struct RotationInit {
     inliers: usize,
     median_err_px: f64,
@@ -80,7 +81,7 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: 
 
     let (f0, f1, matches) = match choose_initial_pair(shot) {
         Ok(triple) => triple,
-        Err(SolveError::InsufficientMotion) if is_mono && shot.tracks.len() >= 16 => {
+        Err(SolveError::InsufficientMotion) if is_mono && shot.tracks.len() >= 6 => {
             return Err(SolveError::Planar2DVideo);
         }
         Err(e) => return Err(e),
@@ -90,21 +91,29 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: 
     }
 
     let (h_mat, h_inliers) = ransac_homography(&matches);
-    let nat_rot = estimate_pair_rotation(&matches, h_mat, cx, cy, nominal_focal);
-    let seeds: &[f64] = if refine_focal { &[1.0, 0.88, 1.15, 0.80, 1.24] } else { &[1.0] };
+    let seeds: &[f64] = if refine_focal {
+        &[1.0, 0.86, 0.72, 0.60, 1.15, 1.28]
+    } else if shot.height > shot.width {
+        // Portrait 9:16 smartphone footage has physical focal length proportional to the short
+        // sensor axis (`~0.56..0.75 * nominal_focal`), not a 50mm telephoto along the tall axis.
+        &[1.0, 0.68, 0.58, 0.82]
+    } else {
+        &[1.0]
+    };
     let (focal, rot_cand, ess_cand) = best_focal_hypothesis(&matches, h_mat, (cx, cy, nominal_focal), seeds, cancel)?;
-    if is_mono && is_planar_2d_shot(shot, &matches, (cx, cy, nominal_focal), h_inliers, nat_rot.as_ref(), ess_cand.as_ref()) {
+    let nat_rot = rot_cand.clone().or_else(|| estimate_pair_rotation(&matches, h_mat, cx, cy, focal));
+    if is_mono && is_planar_2d_shot(shot, &matches, (cx, cy, focal), h_inliers, nat_rot.as_ref(), ess_cand.as_ref()) {
         return Err(SolveError::Planar2DVideo);
     }
     let n = matches.len();
     let h_dom = h_inliers * 100 >= n * 40 && h_inliers >= 40.min((n * 2) / 3);
 
     let use_rotation_only = match (&rot_cand, &ess_cand) {
-        (Some(rot), Some(ess)) => ess.median_parallax_deg < 1.0 || (h_dom && rot.inliers * 100 >= ess.inliers * 88 && rot.median_err_px <= 1.5),
+        (Some(rot), Some(ess)) => ess.median_parallax_deg < 1.0 || (h_dom && rot.inliers * 100 >= ess.inliers * 88 && rot.median_err_px <= 2.2),
         (Some(_), None) => true,
         (None, Some(_)) => false,
         (None, None) => {
-            return Err(if is_mono && shot.tracks.len() >= 16 {
+            return Err(if is_mono && shot.tracks.len() >= 6 {
                 SolveError::Planar2DVideo
             } else {
                 SolveError::InsufficientMotion
@@ -116,7 +125,7 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: 
         cx,
         cy,
         focal,
-        initial_focal: nominal_focal,
+        initial_focal: focal,
         rotation_only: use_rotation_only,
         ref_cam: f1,
         cameras: vec![CameraPose::default(); shot.times.len()],
@@ -136,8 +145,10 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: 
 
 fn choose_initial_pair(shot: &TrackedShot) -> Result<(usize, usize, Vec<PairMatch>), SolveError> {
     let nf = shot.times.len();
-    let step = (nf / 36).max(1);
-    let min_shared = 30.min(shot.tracks.len() / 2).max(12);
+    let step = (nf / 48).max(1);
+    let total_obs: usize = shot.tracks.iter().map(|t| t.pts.len()).sum();
+    let avg_active = total_obs / nf.max(1);
+    let min_shared = (avg_active / 3).clamp(8, 22).min(shot.tracks.len().max(8));
     let mut best_pair: Option<(usize, usize, f64)> = None;
 
     let mut f0 = 0usize;
@@ -152,8 +163,11 @@ fn choose_initial_pair(shot: &TrackedShot) -> Result<(usize, usize, Vec<PairMatc
             }
             if steps.len() >= min_shared {
                 let med = median_f64(&mut steps);
-                // Reward wide baseline while keeping rich feature overlap.
-                let score = med * (steps.len().min(140) as f64).sqrt();
+                // Saturate baseline benefit around ~85 px so long panning clips select a well-linked
+                // moderate frame span rather than starving intermediate PnP frames across the clip.
+                let eff_disp = med.min(85.0);
+                let span_penalty = 1.0 / (1.0 + ((f1 - f0) as f64 / 45.0).powi(2) * 0.25);
+                let score = eff_disp * (steps.len().min(140) as f64).sqrt() * span_penalty;
                 if best_pair.is_none_or(|(_, _, bs)| score > bs) {
                     best_pair = Some((f0, f1, score));
                 }
@@ -165,7 +179,7 @@ fn choose_initial_pair(shot: &TrackedShot) -> Result<(usize, usize, Vec<PairMatc
 
     let Some((i0, i1, _)) = best_pair else { return Err(SolveError::InsufficientMotion) };
     let matches: Vec<PairMatch> = shot.tracks.iter().filter_map(|tr| Some(PairMatch { p1: tr.at_frame(i0)?, p2: tr.at_frame(i1)? })).collect();
-    if matches.len() < 12 {
+    if matches.len() < 8 {
         return Err(SolveError::InsufficientMotion);
     }
     Ok((i0, i1, matches))
@@ -325,17 +339,17 @@ fn estimate_pair_rotation(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, c
         }
         let err = (cx + f * q[0] / q[2] - m.p2.0).hypot(cy + f * q[1] / q[2] - m.p2.1);
         all_errs.push(err);
-        if err <= 2.2 {
+        if err <= 3.0 {
             inliers += 1;
             errs.push(err);
         }
     }
-    if inliers < 12 {
+    if inliers < 8 {
         return None;
     }
     let median_err_px = median_f64(&mut errs);
     let all_median_err_px = median_f64(&mut all_errs);
-    (median_err_px <= 2.0).then_some(RotationInit { inliers, median_err_px, all_median_err_px })
+    (median_err_px <= 2.6).then_some(RotationInit { inliers, median_err_px, all_median_err_px })
 }
 
 /// Detect flat 2D footage (screen recordings, 2D Ken Burns pan/zoom/spin, or locked-off static
@@ -591,7 +605,7 @@ fn ransac_essential(matches: &[PairMatch], cx: f64, cy: f64, f: f64) -> Option<E
         }
     }
 
-    if best_count < 12 {
+    if best_count < 8 {
         return None;
     }
     let mut in1 = Vec::with_capacity(best_count);
@@ -702,8 +716,8 @@ fn select_cheiral_pose(e: Mat3, cal1: &[(f64, f64)], cal2: &[(f64, f64)], in_mat
                 }
             }
         }
-        // Cheirality check: at least 60% of Sampson inliers must triangulate with positive depth.
-        if good * 100 >= cal1.len() * 60 && good >= 12 && best.as_ref().is_none_or(|b| good > b.inliers) {
+        // Cheirality check: at least 50% of Sampson inliers must triangulate with positive depth.
+        if good * 100 >= cal1.len() * 50 && good >= 8 && best.as_ref().is_none_or(|b| good > b.inliers) {
             let median_parallax_deg = median_f64(&mut angles);
             best = Some(EssentialInit { r, t, inliers: good, median_parallax_deg });
         }
@@ -748,7 +762,7 @@ fn chain_rotations(model: &mut SceneModel, tracks: &[FeatureTrack]) -> Result<()
         }
     }
 
-    let min_inliers = 12.min(nf);
+    let min_inliers = 6.min(nf);
     let mut last_r = IDENT3;
     for f in 1..nf {
         let mut pairs: Vec<(Vec3, Vec3, (f64, f64))> = Vec::new();
@@ -819,7 +833,7 @@ fn solve_frame_rotation(pairs: &[(Vec3, Vec3, (f64, f64))], seed_r: Mat3, cx: f6
         .iter()
         .filter(|&&(dw, _, (u, v))| {
             let q = mat3_mul_vec(r, dw);
-            q[2] > 1e-5 && (cx + f * q[0] / q[2] - u).hypot(cy + f * q[1] / q[2] - v) <= 3.0
+            q[2] > 1e-5 && (cx + f * q[0] / q[2] - u).hypot(cy + f * q[1] / q[2] - v) <= 4.2
         })
         .count();
     Some((r, inliers))
@@ -837,10 +851,10 @@ fn chain_six_dof(
 ) -> Result<(), SolveError> {
     model.cameras[f0] = CameraPose { r_wc: IDENT3, t_wc: [0.0; 3], frozen: false, solved: true };
     model.cameras[f1] = CameraPose { r_wc: ess.r, t_wc: ess.t, frozen: false, solved: true };
-    triangulate_new_points(model, tracks, 0.5);
+    triangulate_new_points(model, tracks, 0.35);
 
     let nf = model.cameras.len();
-    let min_inliers = 12.min(nf);
+    let min_inliers = 8.min(nf);
     for step in 0..nf {
         if step.is_multiple_of(16) && cancel() {
             return Err(SolveError::Cancelled);
@@ -850,12 +864,10 @@ fn chain_six_dof(
         let seeds = neighbour_pose_seeds(&model.cameras, next_f);
         if let Some((pose, inliers)) = solve_pnp_frame(model, &corrs, &seeds)
             && inliers >= min_inliers.min(corrs.len())
-            && inliers >= 8
+            && inliers >= 6
         {
             model.cameras[next_f] = CameraPose { r_wc: pose.0, t_wc: pose.1, frozen: false, solved: true };
-            if step.is_multiple_of(2) || step + 3 >= nf {
-                triangulate_new_points(model, tracks, 0.7);
-            }
+            triangulate_new_points(model, tracks, 0.45);
         } else {
             let fallback = seeds.first().copied().unwrap_or((IDENT3, [0.0; 3]));
             model.cameras[next_f] = CameraPose { r_wc: fallback.0, t_wc: fallback.1, frozen: true, solved: false };

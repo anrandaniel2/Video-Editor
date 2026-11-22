@@ -7,13 +7,13 @@ use super::init::{CameraPose, SceneModel, normalize_gauge, refine_pnp_pose};
 use super::linalg::{Vec3, add3, mat3_mul, mat3_mul_vec, mat3_t_mul_vec, norm3, normalize3, project_to_so3, rodrigues_exp, solve_linear};
 use super::tracks::FeatureTrack;
 
-const HUBER_SIGMA_PX: f64 = 2.0;
-const HUBER_DELTA_PX: f64 = 1.5;
+const HUBER_SIGMA_PX: f64 = 2.5;
+const HUBER_DELTA_PX: f64 = 2.0;
 const MAX_BA_ITERS: usize = 40;
 const MAX_DENSE_ACTIVE_CAMS: usize = 80;
 const KEYFRAME_BUDGET: usize = 60;
-const FOCAL_CLAMP_RATIO: f64 = 0.25;
-const INLIER_GATE_PX: f64 = 3.0;
+const FOCAL_CLAMP_RATIO: f64 = 0.42;
+const INLIER_GATE_PX: f64 = 4.8;
 
 /// Analytic Jacobian of `(r_u, r_v)` wrt camera left-`SE(3)` perturbation `(δw, δt)`, 3D point `δX`, and focal `δf`.
 #[derive(Clone, Copy, Debug)]
@@ -71,7 +71,7 @@ struct PointBlock {
 /// Refine camera poses, 3D landmarks, and (optionally) focal length via Levenberg–Marquardt BA.
 pub(crate) fn run_bundle_adjustment(model: &mut SceneModel, tracks: &[FeatureTrack], refine_focal: bool, cancel: &dyn Fn() -> bool) -> Result<(), SolveError> {
     let layout = build_active_layout(model, tracks, refine_focal);
-    if layout.active_pts.len() < 6 {
+    if layout.active_pts.len() < 4 {
         return Err(SolveError::InsufficientMotion);
     }
 
@@ -462,15 +462,20 @@ fn polish_single_rotation(model: &mut SceneModel, tracks: &[FeatureTrack], frame
 
 fn freeze_weak_frames(model: &mut SceneModel, tracks: &[FeatureTrack]) {
     let total_3d = model.points.iter().flatten().count();
-    let min_inliers = 12.min(total_3d);
     for f in 0..model.cameras.len() {
-        let inliers = tracks
-            .iter()
-            .filter(|tr| {
-                let (Some(xw), Some(obs)) = (model.points[tr.id], tr.at_frame(f)) else { return false };
-                model.project_world(&model.cameras[f], xw).is_some_and(|(u, v)| (u - obs.0).hypot(v - obs.1) <= INLIER_GATE_PX)
-            })
-            .count();
+        let mut visible_3d = 0usize;
+        let mut inliers = 0usize;
+        for tr in tracks {
+            let (Some(xw), Some(obs)) = (model.points[tr.id], tr.at_frame(f)) else { continue };
+            visible_3d += 1;
+            if model
+                .project_world(&model.cameras[f], xw)
+                .is_some_and(|(u, v)| (u - obs.0).hypot(v - obs.1) <= INLIER_GATE_PX)
+            {
+                inliers += 1;
+            }
+        }
+        let min_inliers = 6.min(total_3d).min(visible_3d.div_ceil(2).max(3));
         if inliers < min_inliers {
             model.cameras[f].frozen = true;
             model.cameras[f].solved = false;

@@ -19,9 +19,9 @@ const PER_CELL_INITIAL: usize = 15;
 const MIN_SEPARATION_PX: f32 = 8.0;
 const BORDER_PX: usize = 12;
 const LK_PATCH_RADIUS: i32 = 6;
-const FWD_BWD_MAX_PX: f32 = 1.0;
-const RESEED_CADENCE: usize = 8;
-const MAX_MEDIAN_STEP_PX: f64 = 25.0;
+const FWD_BWD_MAX_PX: f32 = 1.85;
+const RESEED_CADENCE: usize = 6;
+const MAX_MEDIAN_STEP_PX: f64 = 55.0;
 
 fn pyramid_levels_for(w: usize, h: usize) -> usize {
     let min_dim = w.min(h);
@@ -62,6 +62,7 @@ struct RawTrack {
 
 struct StreamState {
     prev_pyr: Option<Vec<Level>>,
+    prev_left: Option<Gray>,
     gpu_prev_slot: Option<usize>,
     tracks: Vec<RawTrack>,
     active_ids: Vec<usize>,
@@ -222,7 +223,7 @@ fn init_stream(left: Gray, right: Option<&Gray>, opts: &SolveOptions) -> StreamS
         sample_stereo_disparities(&left, r_img, 0, &pairs, opts.stereo_baseline, &mut stereo_raw);
     }
     let prev_pyr = Some(left.pyramid(pyramid_levels_for(view_w, view_h)));
-    StreamState { prev_pyr, gpu_prev_slot: None, tracks, active_ids, since_seed: 0, view_w, view_h, stereo_raw }
+    StreamState { prev_pyr, prev_left: Some(left), gpu_prev_slot: None, tracks, active_ids, since_seed: 0, view_w, view_h, stereo_raw }
 }
 
 fn init_stream_gpu(
@@ -245,9 +246,30 @@ fn init_stream_gpu(
     if let Some(rs) = right_slot {
         sample_stereo_disparities_gpu(gpu, slot, rs, 0, &active_ids, &tracks, opts.stereo_baseline, &mut stereo_raw);
     }
-    StreamState { prev_pyr: None, gpu_prev_slot: Some(slot), tracks, active_ids, since_seed: 0, view_w, view_h, stereo_raw }
+    StreamState { prev_pyr: None, prev_left: Some(left), gpu_prev_slot: Some(slot), tracks, active_ids, since_seed: 0, view_w, view_h, stereo_raw }
 }
 
+fn dominant_velocity_guess(st: &StreamState) -> (f32, f32) {
+    let mut dxs = Vec::with_capacity(st.active_ids.len());
+    let mut dys = Vec::with_capacity(st.active_ids.len());
+    for &tid in &st.active_ids {
+        let pts = &st.tracks[tid].pts;
+        if pts.len() >= 2 {
+            let p_last = pts[pts.len() - 1];
+            let p_prev = pts[pts.len() - 2];
+            dxs.push(p_last.0 - p_prev.0);
+            dys.push(p_last.1 - p_prev.1);
+        }
+    }
+    if dxs.len() < 3 {
+        return (0.0, 0.0);
+    }
+    dxs.sort_by(|a, b| a.total_cmp(b));
+    dys.sort_by(|a, b| a.total_cmp(b));
+    (dxs[dxs.len() / 2], dys[dys.len() / 2])
+}
+
+#[allow(clippy::too_many_arguments)]
 fn step_stream_gpu(
     st: &mut StreamState,
     gpu: &'static dyn GpuTrackBackend,
@@ -259,9 +281,11 @@ fn step_stream_gpu(
     opts: &SolveOptions,
 ) {
     let Some(prev_slot) = st.gpu_prev_slot else {
-        st.prev_pyr = Some(left.pyramid(pyramid_levels_for(st.view_w, st.view_h)));
+        step_stream(st, frame_idx, left, None, candidate_cut, opts);
+        st.gpu_prev_slot = Some(curr_slot);
         return;
     };
+    let fallback_vel = dominant_velocity_guess(st);
     let mut surviving = Vec::with_capacity(st.active_ids.len());
     if !st.active_ids.is_empty() {
         let queries: Vec<GpuTrackQuery> = st
@@ -274,7 +298,7 @@ fn step_stream_gpu(
                     let prev = tr.pts[tr.pts.len() - 2];
                     (p.0 - prev.0, p.1 - prev.1)
                 } else {
-                    (0.0, 0.0)
+                    fallback_vel
                 };
                 GpuTrackQuery { pt: p, guess: vel }
             })
@@ -310,6 +334,11 @@ fn step_stream_gpu(
                     st.tracks[tid].active = false;
                 }
             }
+        } else {
+            // GPU LK readback failed mid-stream: seamlessly fall back to CPU pyramid tracking.
+            st.gpu_prev_slot = None;
+            step_stream(st, frame_idx, left, None, candidate_cut, opts);
+            return;
         }
     }
     st.active_ids = surviving;
@@ -335,6 +364,7 @@ fn step_stream_gpu(
     {
         sample_stereo_disparities_gpu(gpu, curr_slot, rs, frame_idx, &st.active_ids, &st.tracks, opts.stereo_baseline, &mut st.stereo_raw);
     }
+    st.prev_left = Some(left);
     st.gpu_prev_slot = Some(curr_slot);
 }
 
@@ -416,11 +446,19 @@ fn seed_grid_corners_gpu(
 }
 
 fn step_stream(st: &mut StreamState, frame_idx: usize, left: Gray, right: Option<&Gray>, candidate_cut: bool, opts: &SolveOptions) {
-    let curr_pyr = left.pyramid(pyramid_levels_for(st.view_w, st.view_h));
+    let levels = pyramid_levels_for(st.view_w, st.view_h);
+    if st.prev_pyr.is_none()
+        && let Some(ref prev_l) = st.prev_left
+    {
+        st.prev_pyr = Some(prev_l.pyramid(levels));
+    }
+    st.gpu_prev_slot = None;
+    let fallback_vel = dominant_velocity_guess(st);
+    let curr_pyr = left.pyramid(levels);
     let mut surviving = Vec::with_capacity(st.active_ids.len());
     if let Some(prev_pyr) = st.prev_pyr.as_ref() {
         for &tid in &st.active_ids {
-            if let Some(next_pt) = advance_track(prev_pyr, &curr_pyr, &st.tracks[tid], st.view_w, st.view_h) {
+            if let Some(next_pt) = advance_track(prev_pyr, &curr_pyr, &st.tracks[tid], fallback_vel, st.view_w, st.view_h) {
                 st.tracks[tid].pts.push(next_pt);
                 surviving.push(tid);
             } else {
@@ -453,16 +491,24 @@ fn step_stream(st: &mut StreamState, frame_idx: usize, left: Gray, right: Option
         sample_stereo_disparities(&left, r_img, frame_idx, &pairs, opts.stereo_baseline, &mut st.stereo_raw);
     }
     // Replace previous pyramid so at most two pyramids ever coexist during `step_stream`.
+    st.prev_left = Some(left);
     st.prev_pyr = Some(curr_pyr);
 }
 
-fn advance_track(prev_pyr: &[Level], curr_pyr: &[Level], tr: &RawTrack, w: usize, h: usize) -> Option<(f32, f32)> {
+fn advance_track(
+    prev_pyr: &[Level],
+    curr_pyr: &[Level],
+    tr: &RawTrack,
+    fallback_vel: (f32, f32),
+    w: usize,
+    h: usize,
+) -> Option<(f32, f32)> {
     let &p = tr.pts.last()?;
     let vel = if tr.pts.len() >= 2 {
         let prev = tr.pts[tr.pts.len() - 2];
         (p.0 - prev.0, p.1 - prev.1)
     } else {
-        (0.0, 0.0)
+        fallback_vel
     };
     let q = track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, vel)
         .or_else(|| if vel != (0.0, 0.0) { track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, (0.0, 0.0)) } else { None })?;
@@ -568,33 +614,56 @@ fn build_shot_tracks(st: StreamState, all_times: &[Tick], shot: std::ops::Range<
     if num_frames < 8 {
         return Err(SolveError::TooShort);
     }
-    let min_obs = 12.min(num_frames);
-    let mut tracks = Vec::new();
-    let mut raw_to_clean: Vec<Option<usize>> = vec![None; st.tracks.len()];
 
-    for (raw_id, rt) in st.tracks.iter().enumerate() {
-        let raw_end = rt.start_frame + rt.pts.len();
-        let seg_start = rt.start_frame.max(shot.start);
-        let seg_end = raw_end.min(shot.end);
-        if seg_end <= seg_start || seg_end - seg_start < min_obs {
-            continue;
+    let collect_with_min_obs = |min_obs_req: usize| -> (Vec<FeatureTrack>, Vec<Option<usize>>) {
+        let min_obs = min_obs_req.min(num_frames).max(3);
+        let mut tracks = Vec::new();
+        let mut raw_to_clean: Vec<Option<usize>> = vec![None; st.tracks.len()];
+
+        for (raw_id, rt) in st.tracks.iter().enumerate() {
+            let raw_end = rt.start_frame + rt.pts.len();
+            let seg_start = rt.start_frame.max(shot.start);
+            let seg_end = raw_end.min(shot.end);
+            if seg_end <= seg_start || seg_end - seg_start < min_obs {
+                continue;
+            }
+            let slice = &rt.pts[(seg_start - rt.start_frame)..(seg_end - rt.start_frame)];
+            if !passes_median_step(slice) {
+                continue;
+            }
+            let clean_id = tracks.len();
+            raw_to_clean[raw_id] = Some(clean_id);
+            let mut pts: Vec<(f64, f64)> = slice.iter().map(|&(x, y)| (f64::from(x), f64::from(y))).collect();
+            smooth_2d_feature_track(&mut pts);
+            tracks.push(FeatureTrack {
+                id: clean_id,
+                start_frame: seg_start - shot.start,
+                pts,
+            });
         }
-        let slice = &rt.pts[(seg_start - rt.start_frame)..(seg_end - rt.start_frame)];
-        if !passes_median_step(slice) {
-            continue;
+        (tracks, raw_to_clean)
+    };
+
+    // Prefer long 10+-frame tracks for stable multi-view bundle adjustment, while gracefully
+    // stepping down to 6-frame or 4-frame tracks on fast handheld smartphone pans so we retain
+    // continuous overlapping feature chains across the shot.
+    let (mut tracks, mut raw_to_clean) = collect_with_min_obs(10);
+    if tracks.len() < 28 {
+        let (t6, map6) = collect_with_min_obs(6);
+        if t6.len() > tracks.len() {
+            tracks = t6;
+            raw_to_clean = map6;
         }
-        let clean_id = tracks.len();
-        raw_to_clean[raw_id] = Some(clean_id);
-        let mut pts: Vec<(f64, f64)> = slice.iter().map(|&(x, y)| (f64::from(x), f64::from(y))).collect();
-        smooth_2d_feature_track(&mut pts);
-        tracks.push(FeatureTrack {
-            id: clean_id,
-            start_frame: seg_start - shot.start,
-            pts,
-        });
+    }
+    if tracks.len() < 16 {
+        let (t4, map4) = collect_with_min_obs(4);
+        if t4.len() > tracks.len() {
+            tracks = t4;
+            raw_to_clean = map4;
+        }
     }
 
-    if tracks.len() < 12 {
+    if tracks.len() < 6 {
         return Err(SolveError::InsufficientMotion);
     }
 

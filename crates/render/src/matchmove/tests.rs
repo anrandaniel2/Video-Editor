@@ -803,4 +803,134 @@ fn ac_pure_2d_pan_and_2d_with_static_hud_are_detected_as_planar_2d_video() {
     }
 }
 
+#[test]
+fn ac_portrait_smartphone_low_contrast_barrel_distortion_solves_3d() {
+    let (w, h) = (270usize, 480usize);
+    let mut landmarks = make_3d_constellation(170, 320.0, 1150.0, 520.0, 0x9160_2400);
+    // Compress landmark contrast to realistic indoor room lighting (~0.11..0.24 normalized delta).
+    for (i, lm) in landmarks.iter_mut().enumerate() {
+        lm.luma = 64.0 + (i % 5) as f64 * 8.0;
+        lm.radius = 2.4 + (i % 3) as f64 * 0.6;
+    }
+
+    let fov_deg = 74.0f64; // 24mm smartphone lens in 9:16 portrait orientation!
+    let focal = (h as f64 * 0.5) / (fov_deg.to_radians() * 0.5).tan();
+    let cx = w as f64 * 0.5;
+    let cy = h as f64 * 0.5;
+    let k1 = -0.09f64; // Typical uncalibrated smartphone wide-angle barrel distortion.
+
+    let mut frames = Vec::new();
+    for i in 0..24 {
+        let t = i as f32 / 23.0;
+        let cam = SceneCamera3D {
+            position: [-85.0 + 170.0 * t, 12.0 * (i as f32 * 0.35).sin(), -25.0 * t],
+            yaw: -6.0 + 12.0 * t,
+            pitch: 1.5 * (i as f32 * 0.25).cos(),
+            roll: 0.8 * (i as f32 * 0.3).sin(),
+            fov: fov_deg as f32,
+        };
+        let mut img = vec![0u8; w * h * 4];
+        for px in img.as_chunks_mut::<4>().0 {
+            px[0] = 34;
+            px[1] = 34;
+            px[2] = 34;
+            px[3] = 255;
+        }
+        let vr = cam.view_rotation().map(|r| r.map(f64::from));
+        let eye = cam.position.map(f64::from);
+        for lm in &landmarks {
+            let pc = mat3_mul_vec(vr, sub3(lm.pos, eye));
+            if pc[2] <= 10.0 {
+                continue;
+            }
+            let xn = pc[0] / pc[2];
+            let yn = pc[1] / pc[2];
+            let r2 = xn * xn + yn * yn;
+            let rad = 1.0 + k1 * r2;
+            // Include slight rolling-shutter horizontal shear proportional to scanline `yn`.
+            let u = cx + focal * (xn * rad + 0.008 * yn);
+            let v = cy + focal * (yn * rad);
+            if u >= -6.0 && u <= w as f64 + 6.0 && v >= -6.0 && v <= h as f64 + 6.0 {
+                splat_landmark(&mut img, w, h, u, v, lm);
+            }
+        }
+        frames.push(InputFrame { time: tick_for_frame(i, 30), width: w, height: h, rgba: img });
+    }
+
+    let opts = SolveOptions { refine_focal: true, ..SolveOptions::default() };
+    let rep = solve_frames(&opts, &frames, &|| false)
+        .expect("9:16 portrait low-contrast smartphone video with barrel distortion must solve cleanly in 3D");
+    assert_eq!(rep.solve.frames.len(), 24);
+    assert!(!rep.solve.rotation_only, "parallax portrait walk must solve 6-DOF translation");
+    assert!(rep.solve.points.len() >= 12, "expected solved 3D points, got {}", rep.solve.points.len());
+}
+
+#[test]
+fn ac_fast_handheld_pan_and_nonrigid_textured_fallback_never_fail_clean_motion() {
+    // Part 1: Fast 40-frame handheld pan (~11 px/frame) where Frame-0 features completely exit
+    // midway through the clip, testing `dominant_velocity_guess` + `choose_initial_pair`.
+    let (w, h) = (320usize, 180usize);
+    let landmarks = make_3d_constellation(220, 450.0, 1100.0, 950.0, 0xFA57_9A40);
+    let pan_frames: Vec<InputFrame> = (0..40)
+        .map(|i| {
+            let cam = SceneCamera3D {
+                yaw: -38.0 + i as f32 * 1.95,
+                pitch: 2.0 * (i as f32 * 0.22).sin(),
+                ..SceneCamera3D::default()
+            };
+            InputFrame {
+                time: tick_for_frame(i, 30),
+                width: w,
+                height: h,
+                rgba: render_synthetic_eye(w, h, &cam, &landmarks, [28, 28, 28]),
+            }
+        })
+        .collect();
+    let opts = SolveOptions { refine_focal: true, ..SolveOptions::default() };
+    let pan_res = solve_frames(&opts, &pan_frames, &|| false);
+    assert!(
+        pan_res.is_ok(),
+        "fast multi-reseed handheld pan must solve cleanly without InsufficientMotion, got: {:?}",
+        pan_res.err()
+    );
+
+    // Part 2: Non-rigid / chaotic moving foreground texture must route to `Planar2DVideo` (for 2D
+    // tracker fallback) rather than dead-ending on `InsufficientMotion` or `PoorQuality`.
+    let mut nonrigid_frames = Vec::new();
+    for f in 0..16 {
+        let mut rgba = vec![24u8; w * h * 4];
+        for px in rgba.as_chunks_mut::<4>().0 {
+            px[3] = 255;
+        }
+        for k in 0..36usize {
+            let bx = 36.0 + (k % 6) as f32 * 44.0;
+            let by = 28.0 + (k / 6) as f32 * 24.0;
+            // Independent non-rigid swirling motion per feature cluster!
+            let phase = k as f32 * 1.37 + f as f32 * 0.38;
+            let sx = (bx + 9.0 * phase.cos()).round() as i32;
+            let sy = (by + 8.0 * (phase * 1.3).sin()).round() as i32;
+            for dy in -2..=2 {
+                for dx in -2..=2 {
+                    let (px_x, px_y) = (sx + dx, sy + dy);
+                    if px_x >= 0 && px_x < w as i32 && px_y >= 0 && px_y < h as i32 {
+                        let off = (px_y as usize * w + px_x as usize) * 4;
+                        let lum = if dx == 0 || dy == 0 { 215u8 } else { 145u8 };
+                        rgba[off] = lum;
+                        rgba[off + 1] = lum;
+                        rgba[off + 2] = lum;
+                    }
+                }
+            }
+        }
+        nonrigid_frames.push(InputFrame { time: tick_for_frame(f, 24), width: w, height: h, rgba });
+    }
+    let nr_res = solve_frames(&opts, &nonrigid_frames, &|| false);
+    assert!(
+        matches!(nr_res, Err(SolveError::Planar2DVideo)),
+        "textured non-rigid footage must route to Planar2DVideo instead of clean-motion error, got: {:?}",
+        nr_res.map(|s| s.solve.frames.len())
+    );
+}
+
+
 

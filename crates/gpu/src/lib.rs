@@ -1370,7 +1370,7 @@ const UNIFORM_FLOATS: usize = 52;
 
 /// Poll a future once: wgpu's native error scopes resolve immediately. `None` if it is still
 /// pending (then the caller assumes the worst).
-fn poll_now<F: std::future::Future>(f: F) -> Option<F::Output> {
+pub(crate) fn poll_now<F: std::future::Future>(f: F) -> Option<F::Output> {
     let mut f = std::pin::pin!(f);
     match f.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
         std::task::Poll::Ready(v) => Some(v),

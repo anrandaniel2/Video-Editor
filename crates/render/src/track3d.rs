@@ -304,7 +304,7 @@ fn template(l: &Level, x: f32, y: f32, r: i32) -> Option<Template> {
     let det = gxx * gyy - gxy * gxy;
     let tr = gxx + gyy;
     let min_eig = (tr - (tr * tr - 4.0 * det).max(0.0).sqrt()) * 0.5 / count;
-    if det.abs() < 1e-8 || min_eig < 1e-4 {
+    if det.abs() < 1e-11 || min_eig < 6e-6 {
         return None;
     }
     t.h = [gyy / det, -gxy / det, -gxy / det, gxx / det];
@@ -369,12 +369,30 @@ pub(crate) fn track_point(prev: &[Level], next: &[Level], p: (f32, f32), r: i32,
     let mut guess = (initial.0 / top, initial.1 / top);
     let mut point = p;
     for l in (0..levels).rev() {
+        let is_coarse = l > 0;
+        let r_lvl = (r - l as i32).max(3).min(r.max(2));
         let s = (1usize << l) as f32;
         let (px, py) = (p.0 / s, p.1 / s);
-        let t = template(&prev[l], px, py, r.max(2))?;
-        let ((nx, ny), err) = lk_level(&next[l].img, &t, px, py, guess)?;
+        let Some(t) = template(&prev[l], px, py, r_lvl) else {
+            if is_coarse {
+                guess = (guess.0 * 2.0, guess.1 * 2.0);
+                continue;
+            }
+            return None;
+        };
+        let Some(((nx, ny), err)) = lk_level(&next[l].img, &t, px, py, guess) else {
+            if is_coarse {
+                guess = (guess.0 * 2.0, guess.1 * 2.0);
+                continue;
+            }
+            return None;
+        };
         // A patch that no longer looks like itself is not a match, however well it converged.
-        if err > 0.22 {
+        if err > 0.28 {
+            if is_coarse {
+                guess = (guess.0 * 2.0, guess.1 * 2.0);
+                continue;
+            }
             return None;
         }
         point = (nx * s, ny * s);
@@ -480,7 +498,7 @@ pub(crate) fn corners(img: &Gray, x: f32, y: f32, reach: f32, apart: f32, want: 
             let tr = gxx + gyy;
             let det = gxx * gyy - gxy * gxy;
             let min_eig = (tr - (tr * tr - 4.0 * det).max(0.0).sqrt()) * 0.5;
-            if min_eig > 1e-3 {
+            if min_eig > 8e-5 {
                 scored.push((min_eig, px as f32, py as f32));
             }
         }
@@ -780,6 +798,11 @@ impl Tracker {
     /// The first sample: the anchor everything else is relative to.
     pub fn anchor(&self) -> TrackPoint {
         TrackPoint { x: self.target.0, y: self.target.1, z: 0.0, scale: 1.0, rotation: 0.0, confidence: 1.0 }
+    }
+
+    /// True when the initial region contains trackable spatial gradients/corners.
+    pub fn has_features(&self) -> bool {
+        !self.feats.is_empty() || self.anchor_tpl.is_some()
     }
 
     /// Track every feature on the CPU with a starting guess, keeping forward-backward consistent matches.

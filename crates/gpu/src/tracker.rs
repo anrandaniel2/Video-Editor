@@ -148,11 +148,34 @@ fn compute_level_layout(w0: usize, h0: usize, max_levels: usize) -> (usize, [Lev
 }
 
 impl GpuTrackerEngine {
+    fn supported(device: &wgpu::Device) -> bool {
+        let lim = device.limits();
+        lim.max_storage_buffers_per_shader_stage >= 4
+            && lim.max_compute_invocations_per_workgroup >= 256
+            && lim.max_compute_workgroup_size_x >= 64
+            && lim.max_compute_workgroup_size_y >= 16
+            && lim.max_storage_buffer_binding_size >= (16 << 20)
+    }
+
     fn new() -> Option<Self> {
         let export = crate::ExportRenderer::new()?;
         let (device, queue) = export.graphics_device();
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("GPU tracker shader"),
+        if crate::export_renderer::device_failed() || !Self::supported(&device) {
+            return None;
+        }
+
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+        let shader_build = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("GPU tracker build shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("tracker_build.wgsl").into()),
+        });
+        let shader_corners = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("GPU tracker corners shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("tracker_corners.wgsl").into()),
+        });
+        let shader_lk = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("GPU tracker lk shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("tracker.wgsl").into()),
         });
 
@@ -198,27 +221,27 @@ impl GpuTrackerEngine {
             immediate_size: 0,
         });
 
-        let make_pipe = |pl: &wgpu::PipelineLayout, ep: &str| {
+        let make_pipe = |pl: &wgpu::PipelineLayout, module: &wgpu::ShaderModule, ep: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(ep),
                 layout: Some(pl),
-                module: &shader,
+                module,
                 entry_point: Some(ep),
                 compilation_options: Default::default(),
                 cache: None,
             })
         };
 
-        let pipe_rgba_to_luma = make_pipe(&pl_build, "cs_rgba_to_luma");
-        let pipe_pyr_down = make_pipe(&pl_build, "cs_pyr_down");
-        let pipe_scharr = make_pipe(&pl_build, "cs_scharr");
-        let pipe_corners = make_pipe(&pl_corners, "cs_corners");
-        let pipe_pyrlk_fb = make_pipe(&pl_lk, "cs_pyrlk_fb");
-        let pipe_zncc = make_pipe(&pl_lk, "cs_zncc_search");
-        let pipe_stereo = make_pipe(&pl_lk, "cs_stereo_disp");
+        let pipe_rgba_to_luma = make_pipe(&pl_build, &shader_build, "cs_rgba_to_luma");
+        let pipe_pyr_down = make_pipe(&pl_build, &shader_build, "cs_pyr_down");
+        let pipe_scharr = make_pipe(&pl_build, &shader_build, "cs_scharr");
+        let pipe_corners = make_pipe(&pl_corners, &shader_corners, "cs_corners");
+        let pipe_pyrlk_fb = make_pipe(&pl_lk, &shader_lk, "cs_pyrlk_fb");
+        let pipe_zncc = make_pipe(&pl_lk, &shader_lk, "cs_zncc_search");
+        let pipe_stereo = make_pipe(&pl_lk, &shader_lk, "cs_stereo_disp");
 
-        Some(Self {
-            device,
+        let mut engine = Self {
+            device: device.clone(),
             queue,
             bgl_build,
             bgl_corners,
@@ -232,7 +255,44 @@ impl GpuTrackerEngine {
             pipe_stereo,
             slots: [None, None, None, None],
             scratch_pyr: None,
-        })
+        };
+
+        // Run a live 32x32 RGBA -> pyramid -> corners -> LK readback self-test inside the
+        // validation error scope so broken mobile GLES/Vulkan drivers fall back cleanly to CPU
+        // without poisoning `DEVICE_FAILED` or returning silent all-zero luma buffers.
+        let self_test_ok = engine.run_hardware_self_test();
+        let scope_clean = matches!(super::poll_now(scope.pop()), Some(None));
+        if !self_test_ok || !scope_clean || crate::export_renderer::device_failed() {
+            return None;
+        }
+        engine.slots = [None, None, None, None];
+        engine.scratch_pyr = None;
+        Some(engine)
+    }
+
+    fn run_hardware_self_test(&mut self) -> bool {
+        let (w, h) = (32usize, 32usize);
+        let mut rgba = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let checker = if ((x / 5) + (y / 5)) % 2 == 0 { 220u8 } else { 35u8 };
+                let idx = (y * w + x) * 4;
+                rgba[idx] = checker;
+                rgba[idx + 1] = checker;
+                rgba[idx + 2] = checker;
+                rgba[idx + 3] = 255;
+            }
+        }
+        let Some(luma) = self.build_rgba_pyramid(0, &rgba, w, h, (0, 0, w, h), (w, h), 2, true) else {
+            return false;
+        };
+        if luma.len() != w * h || (luma[0] - 220.0 / 255.0).abs() > 0.05 || (luma[6] - 35.0 / 255.0).abs() > 0.05 {
+            return false;
+        }
+        let Some(corners) = self.detect_corners(0, (0, 0, w, h), 16) else {
+            return false;
+        };
+        !corners.is_empty()
     }
 
     fn init_buf(&self, label: &str, data: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
@@ -244,6 +304,9 @@ impl GpuTrackerEngine {
     }
 
     fn readback_bytes(&self, src_buf: &wgpu::Buffer, byte_len: u64, mut enc: wgpu::CommandEncoder) -> Option<Vec<u8>> {
+        if crate::export_renderer::device_failed() {
+            return None;
+        }
         if byte_len == 0 {
             self.queue.submit(Some(enc.finish()));
             return Some(Vec::new());
@@ -263,6 +326,9 @@ impl GpuTrackerEngine {
             let _ = tx.send(res);
         });
         super::wait_mapped(&self.device, &rx)?;
+        if crate::export_renderer::device_failed() {
+            return None;
+        }
         let data = slice.get_mapped_range().ok()?;
         let mut out = vec![0u8; byte_len as usize];
         crate::copy_mapped(&data, &mut out);
@@ -577,7 +643,7 @@ impl GpuTrackerEngine {
         let vecs = unpack_vec4_f32(&raw);
         let mut candidates: Vec<(f32, f32, f32)> = vecs
             .into_iter()
-            .filter(|v| v[3] > 0.5 && v[0] > 1e-3)
+            .filter(|v| v[3] > 0.5 && v[0] > 8e-5)
             .map(|v| (v[0], v[1], v[2]))
             .collect();
         candidates.sort_by(|a, b| b.0.total_cmp(&a.0));

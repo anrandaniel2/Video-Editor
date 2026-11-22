@@ -1103,6 +1103,19 @@ fn pick_2d_track_target(g: &Gray) -> (f32, f32) {
     (best.1, best.2)
 }
 
+fn clip_has_trackable_texture(args: &SolveWorkerArgs) -> bool {
+    let st = args.clip.source_time_at(args.win_start);
+    let Ok(f) = args.source.video_frame(FrameRequest { time: st, scale: args.scale }) else {
+        return false;
+    };
+    let rgba = f.to_rgba8();
+    let (w, h) = ((f.width as usize).max(1), (f.height as usize).max(1));
+    let g0 = Gray::from_rgba8(&rgba, w, h);
+    let target = pick_2d_track_target_with_probe(&g0, None);
+    let tr = Tracker::new_rgba(&rgba, w, h, (0, 0, w, h), target, 19, 64.0);
+    tr.has_features()
+}
+
 fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: usize) -> Result<SolveWorkerOutcome, String> {
     job.set(0.55, Some("2D footage detected — switching to 2D tracking…"));
     let mut tracker: Option<Tracker> = None;
@@ -1239,6 +1252,11 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorker
     match res {
         Ok(rep) => Ok(SolveWorkerOutcome::Camera3D(rep)),
         Err(SolveError::Planar2DVideo) => filmcraft_media::cancel::with_background(true, || run_fallback_2d_tracker(job, &args, est_frames)),
+        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. })
+            if args.opts.layout == filmcraft_project::StereoLayout::Mono && clip_has_trackable_texture(&args) =>
+        {
+            filmcraft_media::cancel::with_background(true, || run_fallback_2d_tracker(job, &args, est_frames))
+        }
         Err(SolveError::Cancelled) => Err("cancelled".to_string()),
         Err(other_err) => Err(other_err.to_string()),
     }

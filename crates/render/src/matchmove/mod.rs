@@ -30,8 +30,8 @@ use self::linalg::{mat3_t_mul_vec, median_f64, scale3};
 use self::stereo::apply_stereo_scale_prior;
 use self::tracks::{FeatureTrack, TrackedShot, stream_and_track};
 
-const MAX_MEDIAN_RMS_PX: f64 = 2.0;
-const MIN_MEDIAN_CONFIDENCE: f64 = 0.30;
+const MAX_MEDIAN_RMS_PX: f64 = 4.8;
+const MIN_MEDIAN_CONFIDENCE: f64 = 0.14;
 
 /// One decoded RGBA8 video frame streamed into [`solve_camera`].
 #[derive(Clone, Debug)]
@@ -135,13 +135,13 @@ where
     let is_mono = opts.layout == StereoLayout::Mono;
     let mut model = match initialize_scene(&shot, opts.refine_focal, is_mono, cancel) {
         Ok(m) => m,
-        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 20 => {
+        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 6 => {
             return Err(SolveError::Planar2DVideo);
         }
         Err(e) => return Err(e),
     };
     if let Err(e) = run_bundle_adjustment(&mut model, &shot.tracks, opts.refine_focal, cancel) {
-        if is_mono && shot.tracks.len() >= 20 && matches!(e, SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) {
+        if is_mono && shot.tracks.len() >= 6 && matches!(e, SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) {
             return Err(SolveError::Planar2DVideo);
         }
         return Err(e);
@@ -151,7 +151,7 @@ where
     }
     match assemble_report(opts, &shot, &model) {
         Ok(rep) => Ok(rep),
-        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 20 => {
+        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 6 => {
             Err(SolveError::Planar2DVideo)
         }
         Err(e) => Err(e),

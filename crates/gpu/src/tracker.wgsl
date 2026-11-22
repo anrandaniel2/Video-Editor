@@ -1,214 +1,6 @@
-// Full GPU compute tracking pipeline for FilmCraft (2D Motion Tracking & 3D Camera Match-Move).
-// Executes RGBA8 -> Rec.709 luma + crop/conform, 5x5 Gaussian pyramid downsampling, 3x3 Scharr
-// spatial gradients, dense Shi-Tomasi tiled corner detection, illumination-normalized coarse-to-fine
-// Inverse-Compositional Lucas-Kanade optical flow with forward-backward consistency check, coarse
-// ZNCC template recovery search, and horizontal stereo disparity estimation on the GPU.
-
-struct BuildParams {
-    src_w: u32,
-    src_h: u32,
-    crop_x: u32,
-    crop_y: u32,
-    crop_w: u32,
-    crop_h: u32,
-    dst_w: u32,
-    dst_h: u32,
-    src_off: u32,
-    dst_off: u32,
-    pad0: u32,
-    pad1: u32,
-}
-
-@group(0) @binding(0) var<uniform> ub: BuildParams;
-@group(0) @binding(1) var<storage, read> rgba_words: array<u32>;
-@group(0) @binding(2) var<storage, read> src_pyr: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> dst_pyr: array<vec4<f32>>;
-@group(0) @binding(4) var<storage, read_write> luma_out: array<f32>;
-
-fn unpack_luma(px: u32) -> f32 {
-    let r = f32(px & 255u);
-    let g = f32((px >> 8u) & 255u);
-    let b = f32((px >> 16u) & 255u);
-    return (0.2126 * r + 0.7152 * g + 0.0722 * b) * (1.0 / 255.0);
-}
-
-fn rgba_luma_clamped(ix: i32, iy: i32) -> f32 {
-    let cx = clamp(ix, 0, i32(ub.src_w) - 1);
-    let cy = clamp(iy, 0, i32(ub.src_h) - 1);
-    let idx = u32(cy) * ub.src_w + u32(cx);
-    return unpack_luma(rgba_words[idx]);
-}
-
-@compute @workgroup_size(16, 16, 1)
-fn cs_rgba_to_luma(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= ub.dst_w || gid.y >= ub.dst_h {
-        return;
-    }
-    var luma: f32 = 0.0;
-    if ub.crop_w == ub.dst_w && ub.crop_h == ub.dst_h {
-        luma = rgba_luma_clamped(i32(ub.crop_x + gid.x), i32(ub.crop_y + gid.y));
-    } else {
-        let sx = f32(ub.crop_x) + f32(gid.x) * f32(max(ub.crop_w, 1u) - 1u) / f32(max(ub.dst_w, 2u) - 1u);
-        let sy = f32(ub.crop_y) + f32(gid.y) * f32(max(ub.crop_h, 1u) - 1u) / f32(max(ub.dst_h, 2u) - 1u);
-        let x0 = i32(floor(sx));
-        let y0 = i32(floor(sy));
-        let fx = sx - f32(x0);
-        let fy = sy - f32(y0);
-        let a = rgba_luma_clamped(x0, y0) * (1.0 - fx) + rgba_luma_clamped(x0 + 1, y0) * fx;
-        let b = rgba_luma_clamped(x0, y0 + 1) * (1.0 - fx) + rgba_luma_clamped(x0 + 1, y0 + 1) * fx;
-        luma = a * (1.0 - fy) + b * fy;
-    }
-    let out_i = gid.y * ub.dst_w + gid.x;
-    dst_pyr[ub.dst_off + out_i] = vec4<f32>(luma, 0.0, 0.0, 0.0);
-    luma_out[out_i] = luma;
-}
-
-fn tap5(k: i32) -> f32 {
-    let ak = abs(k);
-    if ak == 0 { return 6.0; }
-    if ak == 1 { return 4.0; }
-    return 1.0;
-}
-
-@compute @workgroup_size(16, 16, 1)
-fn cs_pyr_down(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= ub.dst_w || gid.y >= ub.dst_h {
-        return;
-    }
-    let sw = i32(ub.src_w);
-    let sh = i32(ub.src_h);
-    let cx = i32(gid.x * 2u);
-    let cy = i32(gid.y * 2u);
-    var sum: f32 = 0.0;
-    var wsum: f32 = 0.0;
-    for (var ky: i32 = -2; ky <= 2; ky = ky + 1) {
-        let wy = tap5(ky);
-        let sy = clamp(cy + ky, 0, sh - 1);
-        let row = ub.src_off + u32(sy) * ub.src_w;
-        for (var kx: i32 = -2; kx <= 2; kx = kx + 1) {
-            let w = wy * tap5(kx);
-            let sx = clamp(cx + kx, 0, sw - 1);
-            sum = sum + w * src_pyr[row + u32(sx)].x;
-            wsum = wsum + w;
-        }
-    }
-    let out_i = ub.dst_off + gid.y * ub.dst_w + gid.x;
-    dst_pyr[out_i] = vec4<f32>(sum / max(wsum, 1.0), 0.0, 0.0, 0.0);
-}
-
-@compute @workgroup_size(16, 16, 1)
-fn cs_scharr(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= ub.dst_w || gid.y >= ub.dst_h {
-        return;
-    }
-    let w = ub.dst_w;
-    let h = ub.dst_h;
-    let idx = ub.src_off + gid.y * w + gid.x;
-    let center = src_pyr[idx].x;
-    if gid.x == 0u || gid.y == 0u || gid.x + 1u >= w || gid.y + 1u >= h {
-        dst_pyr[idx] = vec4<f32>(center, 0.0, 0.0, 0.0);
-        return;
-    }
-    let r0 = ub.src_off + (gid.y - 1u) * w;
-    let r1 = ub.src_off + gid.y * w;
-    let r2 = ub.src_off + (gid.y + 1u) * w;
-    let p00 = src_pyr[r0 + gid.x - 1u].x;
-    let p01 = src_pyr[r0 + gid.x].x;
-    let p02 = src_pyr[r0 + gid.x + 1u].x;
-    let p10 = src_pyr[r1 + gid.x - 1u].x;
-    let p12 = src_pyr[r1 + gid.x + 1u].x;
-    let p20 = src_pyr[r2 + gid.x - 1u].x;
-    let p21 = src_pyr[r2 + gid.x].x;
-    let p22 = src_pyr[r2 + gid.x + 1u].x;
-    let ix = (3.0 * (p02 - p00) + 10.0 * (p12 - p10) + 3.0 * (p22 - p20)) * (1.0 / 32.0);
-    let iy = (3.0 * (p20 - p00) + 10.0 * (p21 - p01) + 3.0 * (p22 - p02)) * (1.0 / 32.0);
-    dst_pyr[idx] = vec4<f32>(center, ix, iy, 0.0);
-}
-
-// ---------------- Shi-Tomasi tiled corner detector ----------------
-
-struct CornerParams {
-    img_w: u32,
-    img_h: u32,
-    roi_x0: u32,
-    roi_y0: u32,
-    roi_x1: u32,
-    roi_y1: u32,
-    cell: u32,
-    tiles_x: u32,
-    tiles_y: u32,
-    lvl_off: u32,
-    pad0: u32,
-    pad1: u32,
-}
-
-@group(0) @binding(0) var<uniform> uc: CornerParams;
-@group(0) @binding(1) var<storage, read> corner_pyr: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read_write> out_corners: array<vec4<f32>>;
-
-@compute @workgroup_size(64, 1, 1)
-fn cs_corners(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let total_tiles = uc.tiles_x * uc.tiles_y;
-    let tid = gid.x;
-    if tid >= total_tiles {
-        return;
-    }
-    let tx = tid % uc.tiles_x;
-    let ty = tid / uc.tiles_x;
-    let x_start = uc.roi_x0 + tx * uc.cell;
-    let y_start = uc.roi_y0 + ty * uc.cell;
-    let x_end = min(x_start + uc.cell, uc.roi_x1);
-    let y_end = min(y_start + uc.cell, uc.roi_y1);
-
-    var best_eig: f32 = 0.0;
-    var best_x: f32 = 0.0;
-    var best_y: f32 = 0.0;
-
-    let win: i32 = 3;
-    let max_px = i32(uc.img_w) - 1 - win;
-    let max_py = i32(uc.img_h) - 1 - win;
-
-    for (var py_u: u32 = y_start; py_u < y_end; py_u = py_u + 1u) {
-        let py = i32(py_u);
-        if py < win + 1 || py >= max_py {
-            continue;
-        }
-        for (var px_u: u32 = x_start; px_u < x_end; px_u = px_u + 1u) {
-            let px = i32(px_u);
-            if px < win + 1 || px >= max_px {
-                continue;
-            }
-            var gxx: f32 = 0.0;
-            var gyy: f32 = 0.0;
-            var gxy: f32 = 0.0;
-            for (var oy: i32 = -win; oy <= win; oy = oy + 1) {
-                let row = uc.lvl_off + u32(py + oy) * uc.img_w;
-                for (var ox: i32 = -win; ox <= win; ox = ox + 1) {
-                    let g = corner_pyr[row + u32(px + ox)];
-                    gxx = gxx + g.y * g.y;
-                    gyy = gyy + g.z * g.z;
-                    gxy = gxy + g.y * g.z;
-                }
-            }
-            let tr = gxx + gyy;
-            let det = gxx * gyy - gxy * gxy;
-            let disc = sqrt(max(tr * tr - 4.0 * det, 0.0));
-            let min_eig = (tr - disc) * 0.5;
-            if min_eig > best_eig {
-                best_eig = min_eig;
-                best_x = f32(px);
-                best_y = f32(py);
-            }
-        }
-    }
-    if best_eig > 1e-3 {
-        out_corners[tid] = vec4<f32>(best_eig, best_x, best_y, 1.0);
-    } else {
-        out_corners[tid] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-}
-
-// ---------------- Batched Pyramidal IC-LK + ZNCC + Stereo Disparity ----------------
+// Module 3 of 3 for GPU motion tracking: illumination-normalized coarse-to-fine
+// Inverse-Compositional Lucas-Kanade optical flow with forward-backward consistency check,
+// coarse ZNCC template recovery search, and horizontal stereo disparity estimation.
 
 struct LkParams {
     // Each vec4<u32> holds (offset, width, height, 0) for pyramid levels 0..3.
@@ -251,9 +43,9 @@ fn sample_prev(meta: vec4<u32>, x: f32, y: f32) -> vec4<f32> {
     let fy = clamp(y - f32(y0), 0.0, 1.0);
     let r0 = meta.x + u32(y0) * meta.y + u32(x0);
     let r1 = r0 + meta.y;
-    let a = mix(prev_pyr[r0], prev_pyr[r0 + 1u], fx);
-    let b = mix(prev_pyr[r1], prev_pyr[r1 + 1u], fx);
-    let v = mix(a, b, fy);
+    let a = prev_pyr[r0] * (1.0 - fx) + prev_pyr[r0 + 1u] * fx;
+    let b = prev_pyr[r1] * (1.0 - fx) + prev_pyr[r1 + 1u] * fx;
+    let v = a * (1.0 - fy) + b * fy;
     return vec4<f32>(v.xyz, 1.0);
 }
 
@@ -269,9 +61,9 @@ fn sample_curr(meta: vec4<u32>, x: f32, y: f32) -> vec4<f32> {
     let fy = clamp(y - f32(y0), 0.0, 1.0);
     let r0 = meta.x + u32(y0) * meta.y + u32(x0);
     let r1 = r0 + meta.y;
-    let a = mix(curr_pyr[r0], curr_pyr[r0 + 1u], fx);
-    let b = mix(curr_pyr[r1], curr_pyr[r1 + 1u], fx);
-    let v = mix(a, b, fy);
+    let a = curr_pyr[r0] * (1.0 - fx) + curr_pyr[r0 + 1u] * fx;
+    let b = curr_pyr[r1] * (1.0 - fx) + curr_pyr[r1 + 1u] * fx;
+    let v = a * (1.0 - fy) + b * fy;
     return vec4<f32>(v.xyz, 1.0);
 }
 
@@ -290,14 +82,13 @@ fn fetch_tgt(meta: vec4<u32>, x: f32, y: f32, forward: bool) -> vec4<f32> {
 }
 
 // Single-direction pyramidal mean-normalized IC-LK: `forward = true` tracks `prev -> curr`;
-// `forward = false` tracks `curr -> prev`. Returns (nx, ny, 1.0) on convergence or (0, 0, -1.0).
-fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec3<f32> {
+// `forward = false` tracks `curr -> prev`. Coarse levels (`l > 0`) smoothly pass their scaled
+// velocity guess down to finer levels if near the image border or over-blurred rather than
+// prematurely killing valid natural-contrast features.
+fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r_base: i32, forward: bool) -> vec3<f32> {
     if ulk.levels == 0u {
         return vec3<f32>(0.0, 0.0, -1.0);
     }
-    let rf = f32(r);
-    let side = 2 * r + 1;
-    let inv_n = 1.0 / f32(side * side);
     let top_scale = f32(1u << (ulk.levels - 1u));
     var guess = initial / top_scale;
     var point = p;
@@ -308,11 +99,21 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
             break;
         }
         l_iter = l_iter - 1u;
+        let is_coarse = l_iter > 0u;
+        let r = max(r_base - i32(l_iter), 3);
+        let rf = f32(r);
+        let side = 2 * r + 1;
+        let inv_n = 1.0 / f32(side * side);
         let meta = level_meta(l_iter);
         let s = f32(1u << l_iter);
         let px = p.x / s;
         let py = p.y / s;
+
         if px - rf < 1.0 || py - rf < 1.0 || px + rf >= f32(meta.y) - 1.0 || py + rf >= f32(meta.z) - 1.0 {
+            if is_coarse {
+                guess = guess * 2.0;
+                continue;
+            }
             return vec3<f32>(0.0, 0.0, -1.0);
         }
 
@@ -322,23 +123,29 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
         var gxy: f32 = 0.0;
         var sum_ix: f32 = 0.0;
         var sum_iy: f32 = 0.0;
+        var tpl_oob = false;
         for (var oy: i32 = -r; oy <= r; oy = oy + 1) {
             for (var ox: i32 = -r; ox <= r; ox = ox + 1) {
                 let s_tpl = fetch_tpl(meta, px + f32(ox), py + f32(oy), forward);
                 if s_tpl.w < 0.0 {
-                    return vec3<f32>(0.0, 0.0, -1.0);
+                    tpl_oob = true;
+                } else {
+                    gxx = gxx + s_tpl.y * s_tpl.y;
+                    gyy = gyy + s_tpl.z * s_tpl.z;
+                    gxy = gxy + s_tpl.y * s_tpl.z;
+                    sum_ix = sum_ix + s_tpl.y;
+                    sum_iy = sum_iy + s_tpl.z;
                 }
-                gxx = gxx + s_tpl.y * s_tpl.y;
-                gyy = gyy + s_tpl.z * s_tpl.z;
-                gxy = gxy + s_tpl.y * s_tpl.z;
-                sum_ix = sum_ix + s_tpl.y;
-                sum_iy = sum_iy + s_tpl.z;
             }
         }
         let det = gxx * gyy - gxy * gxy;
         let tr = gxx + gyy;
         let min_eig = (tr - sqrt(max(tr * tr - 4.0 * det, 0.0))) * 0.5 * inv_n;
-        if abs(det) < 1e-8 || min_eig < 1e-4 {
+        if tpl_oob || abs(det) < 1e-11 || min_eig < 6e-6 {
+            if is_coarse {
+                guess = guess * 2.0;
+                continue;
+            }
             return vec3<f32>(0.0, 0.0, -1.0);
         }
         let h00 = gyy / det;
@@ -347,6 +154,7 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
 
         var gx = guess.x;
         var gy = guess.y;
+        var diverged = false;
         for (var it: u32 = 0u; it < 18u; it = it + 1u) {
             var raw_bx: f32 = 0.0;
             var raw_by: f32 = 0.0;
@@ -358,13 +166,20 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
                     let s_tpl = fetch_tpl(meta, tx, ty, forward);
                     let s_tgt = fetch_tgt(meta, tx + gx, ty + gy, forward);
                     if s_tgt.w < 0.0 {
-                        return vec3<f32>(0.0, 0.0, -1.0);
+                        diverged = true;
+                        break;
                     }
                     let d = s_tgt.x - s_tpl.x;
                     sum_diff = sum_diff + d;
                     raw_bx = raw_bx + s_tpl.y * d;
                     raw_by = raw_by + s_tpl.z * d;
                 }
+                if diverged {
+                    break;
+                }
+            }
+            if diverged {
+                break;
             }
             let mean_d = sum_diff * inv_n;
             let bx = raw_bx - mean_d * sum_ix;
@@ -372,7 +187,8 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
             let vx = -(h00 * bx + h01 * by);
             let vy = -(h01 * bx + h11 * by);
             if abs(vx) > 16.0 || abs(vy) > 16.0 {
-                return vec3<f32>(0.0, 0.0, -1.0);
+                diverged = true;
+                break;
             }
             gx = gx + vx;
             gy = gy + vy;
@@ -380,9 +196,17 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
                 break;
             }
         }
+        if diverged {
+            if is_coarse {
+                guess = guess * 2.0;
+                continue;
+            }
+            return vec3<f32>(0.0, 0.0, -1.0);
+        }
 
         // Verify mean-normalized patch residual at converged offset.
         var sum_d: f32 = 0.0;
+        var res_oob = false;
         for (var oy: i32 = -r; oy <= r; oy = oy + 1) {
             for (var ox: i32 = -r; ox <= r; ox = ox + 1) {
                 let tx = px + f32(ox);
@@ -390,10 +214,21 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
                 let s_tpl = fetch_tpl(meta, tx, ty, forward);
                 let s_tgt = fetch_tgt(meta, tx + gx, ty + gy, forward);
                 if s_tgt.w < 0.0 {
-                    return vec3<f32>(0.0, 0.0, -1.0);
+                    res_oob = true;
+                    break;
                 }
                 sum_d = sum_d + (s_tgt.x - s_tpl.x);
             }
+            if res_oob {
+                break;
+            }
+        }
+        if res_oob {
+            if is_coarse {
+                guess = guess * 2.0;
+                continue;
+            }
+            return vec3<f32>(0.0, 0.0, -1.0);
         }
         let mean_d = sum_d * inv_n;
         var mad: f32 = 0.0;
@@ -406,7 +241,11 @@ fn track_one_dir(p: vec2<f32>, initial: vec2<f32>, r: i32, forward: bool) -> vec
                 mad = mad + abs((s_tgt.x - s_tpl.x) - mean_d);
             }
         }
-        if mad * inv_n > 0.22 {
+        if mad * inv_n > 0.28 {
+            if is_coarse {
+                guess = guess * 2.0;
+                continue;
+            }
             return vec3<f32>(0.0, 0.0, -1.0);
         }
         let nx = px + gx;
