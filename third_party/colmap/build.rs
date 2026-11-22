@@ -23,11 +23,9 @@ fn configure_common(b: &mut cc::Build, root: &Path) {
         .include(root.join("eigen"))
         .include(root.join("poselib"))
         .include(root.join("ceres/include"))
-        .include(root.join("ceres/config"))
         .include(root.join("ceres/internal"))
         .include(root.join("ceres/internal/ceres/miniglog"))
         .include(root.join("colmap/src"))
-        .include(root.join("colmap/src/thirdparty/VLFeat"))
         .include(root.join("bridge"))
         .define("COLMAP_GPU_ENABLED", None)
         .define("COLMAP_OPENGL_ENABLED", None)
@@ -83,6 +81,8 @@ fn main() {
             let mut c_build = cc::Build::new();
             configure_common(&mut c_build, root);
             c_build.flag_if_supported("-std=gnu11");
+            c_build.flag("-iquote");
+            c_build.flag(root.join("colmap/src/thirdparty/VLFeat").to_string_lossy().as_ref());
             c_build.files(&vlfeat_c);
             c_build.compile("colmap_vlfeat");
         });
