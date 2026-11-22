@@ -1223,6 +1223,9 @@ impl SolveJob {
 }
 
 struct SolveWorkerArgs {
+    seq: Sequence,
+    src_size: (u32, u32),
+    src_par: Option<(u32, u32)>,
     clip: TrackItem,
     source: SharedSource,
     win_start: Tick,
@@ -1233,12 +1236,97 @@ struct SolveWorkerArgs {
     opts: SolveOptions,
 }
 
+fn frame_rgba_in_sequence_space(
+    seq: &Sequence,
+    clip: &TrackItem,
+    src_size: (u32, u32),
+    src_par: Option<(u32, u32)>,
+    t: Tick,
+    working_side: usize,
+    raw: (usize, usize, Vec<u8>),
+) -> (usize, usize, Vec<u8>) {
+    let (lw, lh, rgba) = raw;
+    if lw == 0 || lh == 0 {
+        return (lw, lh, rgba);
+    }
+    let sw = seq.settings.width.max(1) as f64;
+    let sh = seq.settings.height.max(1) as f64;
+    let seq_scale = (working_side as f64 / sw.max(sh)).min(1.0);
+    let out_w = ((sw * seq_scale).round() as usize).max(2) & !1;
+    let out_h = ((sh * seq_scale).round() as usize).max(2) & !1;
+
+    let mt = clip.effect_time_at(t);
+    let motion = filmcraft_render::motion_matrix(seq, clip, src_size, src_par, mt);
+    let sx = lw as f64 / src_size.0.max(1) as f64;
+    let sy = lh as f64 / src_size.1.max(1) as f64;
+    let out_sx = out_w as f64 / sw;
+    let out_sy = out_h as f64 / sh;
+    // Map `raw` layer pixels -> full source pixels -> sequence pixels -> working sequence canvas pixels.
+    let layer_to_out = filmcraft_geom::Affine::scale(out_sx, out_sy)
+        .then_apply(&motion)
+        .then_apply(&filmcraft_geom::Affine::scale(1.0 / sx, 1.0 / sy));
+
+    let is_identity = lw == out_w
+        && lh == out_h
+        && (layer_to_out.a - 1.0).abs() < 1e-3
+        && (layer_to_out.d - 1.0).abs() < 1e-3
+        && layer_to_out.b.abs() < 1e-3
+        && layer_to_out.c.abs() < 1e-3
+        && layer_to_out.e.abs() < 0.5
+        && layer_to_out.f.abs() < 0.5;
+    if is_identity {
+        return (lw, lh, rgba);
+    }
+
+    let Some(out_to_layer) = layer_to_out.inverse() else {
+        return (lw, lh, rgba);
+    };
+
+    let mut out = vec![0u8; out_w * out_h * 4];
+    let max_x = (lw - 1) as f64;
+    let max_y = (lh - 1) as f64;
+    for oy in 0..out_h {
+        let py = oy as f64 + 0.5;
+        let row_x = out_to_layer.c * py + out_to_layer.e;
+        let row_y = out_to_layer.d * py + out_to_layer.f;
+        for ox in 0..out_w {
+            let px = ox as f64 + 0.5;
+            let lx = out_to_layer.a * px + row_x - 0.5;
+            let ly = out_to_layer.b * px + row_y - 0.5;
+            let dst_off = (oy * out_w + ox) * 4;
+            if lx < -0.5 || ly < -0.5 || lx > max_x + 0.5 || ly > max_y + 0.5 {
+                out[dst_off + 3] = 255;
+                continue;
+            }
+            let cx = lx.clamp(0.0, max_x);
+            let cy = ly.clamp(0.0, max_y);
+            let x0 = cx.floor() as usize;
+            let y0 = cy.floor() as usize;
+            let x1 = (x0 + 1).min(lw - 1);
+            let y1 = (y0 + 1).min(lh - 1);
+            let wx = (cx - x0 as f64) as f32;
+            let wy = (cy - y0 as f64) as f32;
+            let i00 = (y0 * lw + x0) * 4;
+            let i10 = (y0 * lw + x1) * 4;
+            let i01 = (y1 * lw + x0) * 4;
+            let i11 = (y1 * lw + x1) * 4;
+            for ch in 0..3 {
+                let top = rgba[i00 + ch] as f32 * (1.0 - wx) + rgba[i10 + ch] as f32 * wx;
+                let bot = rgba[i01 + ch] as f32 * (1.0 - wx) + rgba[i11 + ch] as f32 * wx;
+                out[dst_off + ch] = (top * (1.0 - wy) + bot * wy).round().clamp(0.0, 255.0) as u8;
+            }
+            out[dst_off + 3] = 255;
+        }
+    }
+    (out_w, out_h, out)
+}
+
 fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveReport, String> {
     let est_frames = (((args.win_end - args.win_start).0 / args.frame_step.0.max(1)).max(1) as usize + 1)
         .min(filmcraft_project::CameraSolve::MAX_FRAMES);
     let working_side = match args.opts.layout {
-        filmcraft_project::StereoLayout::Mono => 640,
-        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1280,
+        filmcraft_project::StereoLayout::Mono => 840,
+        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1440,
     };
     let fps_label = format!("Sampling frames ({:.0} fps)…", args.opts.clamped_sample_fps());
     job.set(0.02, Some(&fps_label));
@@ -1277,7 +1365,20 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveReport
                 .source
                 .video_frame(FrameRequest { time: st, scale: args.scale })
                 .map_err(|e| SolveError::Decode(e.to_string()))?;
-            let (w, h, rgba) = f.to_rgba8_max_side(working_side);
+            let raw = f.to_rgba8_max_side(working_side);
+            let (w, h, rgba) = if args.opts.layout == filmcraft_project::StereoLayout::Mono {
+                frame_rgba_in_sequence_space(
+                    &args.seq,
+                    &args.clip,
+                    args.src_size,
+                    args.src_par,
+                    cur,
+                    working_side,
+                    raw,
+                )
+            } else {
+                raw
+            };
             decoded += 1;
             job.set(0.46 * (decoded as f64 / est_frames as f64).clamp(0.0, 1.0), None);
             Ok(Some(InputFrame {
@@ -1376,10 +1477,15 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
         (ws, (ws + max_ticks).min(c.end()))
     };
 
-    let (src_w, src_h) = source.info().video.as_ref().map(|v| (v.width, v.height)).unwrap_or((seq.settings.width, seq.settings.height));
+    let (src_w, src_h) = s
+        .project
+        .source_size(c.item)
+        .or_else(|| source.info().video.as_ref().map(|v| (v.width, v.height)))
+        .unwrap_or((seq.settings.width, seq.settings.height));
+    let src_par = s.project.source_par(c.item);
     let target_long = match opts.stereo {
-        StereoLayout::Mono => 640.0f32,
-        StereoLayout::SideBySide | StereoLayout::TopBottom => 1280.0f32,
+        StereoLayout::Mono => 840.0f32,
+        StereoLayout::SideBySide | StereoLayout::TopBottom => 1440.0f32,
     };
     let scale = (target_long / src_w.max(src_h).max(1) as f32).min(1.0);
     let solve_opts = SolveOptions {
@@ -1404,6 +1510,9 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
     });
     let worker_job = job.clone();
     let args = SolveWorkerArgs {
+        seq: seq.clone(),
+        src_size: (src_w, src_h),
+        src_par,
         clip: c,
         source,
         win_start,

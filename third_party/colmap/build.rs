@@ -62,6 +62,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=bridge/colmap_matchmove_c.h");
     println!("cargo:rerun-if-changed=bridge/colmap_matchmove_c.cc");
+    println!("cargo:rerun-if-changed=colmap/src/colmap/util/opengl_utils.cc");
 
     let mut vlfeat_c = Vec::new();
     collect_ext(&manifest_dir.join("colmap/src/thirdparty/VLFeat"), "c", &mut vlfeat_c);

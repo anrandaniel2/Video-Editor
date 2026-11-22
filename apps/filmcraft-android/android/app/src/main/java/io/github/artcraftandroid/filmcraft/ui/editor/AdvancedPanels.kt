@@ -540,7 +540,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
 
     var stereo by remember { mutableStateOf(StereoLayout.MONO) }
     var baseline by remember { mutableDoubleStateOf(64.0) }
-    var refineFocal by remember { mutableStateOf(true) }
+    var refineFocal by remember { mutableStateOf(false) }
     var sampleFps by remember { mutableDoubleStateOf(10.0) }
     var maxSeconds by remember { mutableDoubleStateOf(15.0) }
 

@@ -372,7 +372,7 @@ impl Sequence {
         let mut kf_roll = Vec::with_capacity(est);
         let mut kf_fov = Vec::with_capacity(est);
 
-        let mut prev_angles: Option<(f64, f64)> = None;
+        let mut prev_angles: Option<(f64, f64, f64)> = None;
         let mut first_cam: Option<crate::lighting::SceneCamera3D> = None;
 
         let mut push_sample = |t: Tick, cam: crate::lighting::SceneCamera3D| {
@@ -380,17 +380,22 @@ impl Sequence {
                 first_cam = Some(cam);
             }
             let raw_yaw = f64::from(cam.yaw);
+            let raw_pitch = f64::from(cam.pitch);
             let raw_roll = f64::from(cam.roll);
-            let (yaw, roll) = match prev_angles {
-                Some((py, pr)) => (unwrap_deg(py, raw_yaw), unwrap_deg(pr, raw_roll)),
-                None => (raw_yaw, raw_roll),
+            let (yaw, pitch, roll) = match prev_angles {
+                Some((py, pp, pr)) => (
+                    unwrap_deg(py, raw_yaw),
+                    unwrap_deg(pp, raw_pitch),
+                    unwrap_deg(pr, raw_roll),
+                ),
+                None => (raw_yaw, raw_pitch, raw_roll),
             };
-            prev_angles = Some((yaw, roll));
+            prev_angles = Some((yaw, pitch, roll));
             kf_x.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(f64::from(cam.position[0]))));
             kf_y.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(f64::from(cam.position[1]))));
             kf_z.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(f64::from(cam.position[2]))));
             kf_yaw.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(yaw)));
-            kf_pitch.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(f64::from(cam.pitch))));
+            kf_pitch.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(pitch)));
             kf_roll.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(roll)));
             kf_fov.push(crate::keyframe::Keyframe::new(t, crate::keyframe::ParamValue::Float(f64::from(cam.fov))));
         };

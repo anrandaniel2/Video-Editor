@@ -3,6 +3,8 @@
 
 #include "colmap/util/logging.h"
 
+#include <Eigen/LU>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -506,7 +508,8 @@ bool OpenGLSiftEngine::Extract(const uint8_t* gray,
   int oh = height;
   std::vector<float> oct_base = std::move(base);
   const float edge_ratio = ((edge_threshold + 1.0f) * (edge_threshold + 1.0f)) / edge_threshold;
-  const float contrast_thr = 0.5f * peak_threshold;
+  const float vl_peak_thr = peak_threshold / static_cast<float>(S);
+  const float pre_thr = 0.8f * vl_peak_thr;
 
   for (int o = 0; o < octaves && ow >= 24 && oh >= 24; ++o) {
     std::vector<std::vector<float>> gauss(n_gauss);
@@ -535,13 +538,11 @@ bool OpenGLSiftEngine::Extract(const uint8_t* gray,
       const auto& dm = dog[s - 1];
       const auto& dc = dog[s];
       const auto& dp = dog[s + 1];
-      const auto& img = gauss[s];
-      const float sigma_oct = sigma0 * std::pow(k_step, s);
 
       for (int y = 4; y < oh - 4; ++y) {
         for (int x = 4; x < ow - 4; ++x) {
           const float v = dc[y * ow + x];
-          if (std::fabs(v) < contrast_thr) continue;
+          if (std::fabs(v) < pre_thr) continue;
           bool is_max = v > 0.0f;
           bool is_min = v < 0.0f;
           for (int dz = -1; dz <= 1 && (is_max || is_min); ++dz) {
@@ -557,104 +558,183 @@ bool OpenGLSiftEngine::Extract(const uint8_t* gray,
           }
           if (!is_max && !is_min) continue;
 
-          // Subpixel offset + Hessian edge rejection
-          const float dxx = dc[y * ow + x + 1] + dc[y * ow + x - 1] - 2.0f * v;
-          const float dyy = dc[(y + 1) * ow + x] + dc[(y - 1) * ow + x] - 2.0f * v;
-          const float dxy = 0.25f * (dc[(y + 1) * ow + x + 1] - dc[(y + 1) * ow + x - 1] -
-                                     dc[(y - 1) * ow + x + 1] + dc[(y - 1) * ow + x - 1]);
+          // 3D (x, y, s) subpixel refinement + Hessian edge rejection (Lowe 2004 / VLFeat)
+          int rx_i = x;
+          int ry_i = y;
+          int rs_i = s;
+          float ox = 0.0f, oy = 0.0f, os = 0.0f;
+          bool converged = false;
+          for (int iter = 0; iter < 5; ++iter) {
+            const auto& d_m = dog[rs_i - 1];
+            const auto& d_c = dog[rs_i];
+            const auto& d_p = dog[rs_i + 1];
+            const float vc = d_c[ry_i * ow + rx_i];
+            const float gx = 0.5f * (d_c[ry_i * ow + rx_i + 1] - d_c[ry_i * ow + rx_i - 1]);
+            const float gy = 0.5f * (d_c[(ry_i + 1) * ow + rx_i] - d_c[(ry_i - 1) * ow + rx_i]);
+            const float gs = 0.5f * (d_p[ry_i * ow + rx_i] - d_m[ry_i * ow + rx_i]);
+            const float hxx = d_c[ry_i * ow + rx_i + 1] + d_c[ry_i * ow + rx_i - 1] - 2.0f * vc;
+            const float hyy = d_c[(ry_i + 1) * ow + rx_i] + d_c[(ry_i - 1) * ow + rx_i] - 2.0f * vc;
+            const float hss = d_p[ry_i * ow + rx_i] + d_m[ry_i * ow + rx_i] - 2.0f * vc;
+            const float hxy = 0.25f * (d_c[(ry_i + 1) * ow + rx_i + 1] - d_c[(ry_i + 1) * ow + rx_i - 1] -
+                                       d_c[(ry_i - 1) * ow + rx_i + 1] + d_c[(ry_i - 1) * ow + rx_i - 1]);
+            const float hxs = 0.25f * (d_p[ry_i * ow + rx_i + 1] - d_p[ry_i * ow + rx_i - 1] -
+                                       d_m[ry_i * ow + rx_i + 1] + d_m[ry_i * ow + rx_i - 1]);
+            const float hys = 0.25f * (d_p[(ry_i + 1) * ow + rx_i] - d_p[(ry_i - 1) * ow + rx_i] -
+                                       d_m[(ry_i + 1) * ow + rx_i] + d_m[(ry_i - 1) * ow + rx_i]);
+            Eigen::Matrix3f H3;
+            H3 << hxx, hxy, hxs, hxy, hyy, hys, hxs, hys, hss;
+            const float det3 = H3.determinant();
+            if (std::fabs(det3) < 1e-12f) break;
+            const Eigen::Vector3f step = -H3.inverse() * Eigen::Vector3f(gx, gy, gs);
+            ox = step.x();
+            oy = step.y();
+            os = step.z();
+            if (std::fabs(ox) < 0.6f && std::fabs(oy) < 0.6f && std::fabs(os) < 0.6f) {
+              converged = true;
+              break;
+            }
+            const int nx = rx_i + (ox > 0.6f ? 1 : (ox < -0.6f ? -1 : 0));
+            const int ny = ry_i + (oy > 0.6f ? 1 : (oy < -0.6f ? -1 : 0));
+            const int ns = rs_i + (os > 0.6f ? 1 : (os < -0.6f ? -1 : 0));
+            if (nx < 4 || nx >= ow - 4 || ny < 4 || ny >= oh - 4 || ns < 1 || ns > S) break;
+            if (nx == rx_i && ny == ry_i && ns == rs_i) {
+              converged = true;
+              break;
+            }
+            rx_i = nx;
+            ry_i = ny;
+            rs_i = ns;
+          }
+          if (!converged || std::fabs(ox) > 1.5f || std::fabs(oy) > 1.5f || std::fabs(os) > 1.5f) {
+            continue;
+          }
+
+          const auto& d_m = dog[rs_i - 1];
+          const auto& d_c = dog[rs_i];
+          const auto& d_p = dog[rs_i + 1];
+          const float vc = d_c[ry_i * ow + rx_i];
+          const float gx = 0.5f * (d_c[ry_i * ow + rx_i + 1] - d_c[ry_i * ow + rx_i - 1]);
+          const float gy = 0.5f * (d_c[(ry_i + 1) * ow + rx_i] - d_c[(ry_i - 1) * ow + rx_i]);
+          const float gs = 0.5f * (d_p[ry_i * ow + rx_i] - d_m[ry_i * ow + rx_i]);
+          const float resp = vc + 0.5f * (gx * ox + gy * oy + gs * os);
+          if (std::fabs(resp) < vl_peak_thr) continue;
+
+          const float dxx = d_c[ry_i * ow + rx_i + 1] + d_c[ry_i * ow + rx_i - 1] - 2.0f * vc;
+          const float dyy = d_c[(ry_i + 1) * ow + rx_i] + d_c[(ry_i - 1) * ow + rx_i] - 2.0f * vc;
+          const float dxy = 0.25f * (d_c[(ry_i + 1) * ow + rx_i + 1] - d_c[(ry_i + 1) * ow + rx_i - 1] -
+                                     d_c[(ry_i - 1) * ow + rx_i + 1] + d_c[(ry_i - 1) * ow + rx_i - 1]);
           const float tr = dxx + dyy;
           const float det = dxx * dyy - dxy * dxy;
           if (det <= 1e-9f || (tr * tr) / det >= edge_ratio) continue;
 
-          const float dx = 0.5f * (dc[y * ow + x + 1] - dc[y * ow + x - 1]);
-          const float dy = 0.5f * (dc[(y + 1) * ow + x] - dc[(y - 1) * ow + x]);
-          const float ox = std::clamp(-(dyy * dx - dxy * dy) / det, -0.6f, 0.6f);
-          const float oy = std::clamp(-(dxx * dy - dxy * dx) / det, -0.6f, 0.6f);
-          const float fx = x + ox;
-          const float fy = y + oy;
+          const float fx = rx_i + ox;
+          const float fy = ry_i + oy;
+          const float sigma_oct = sigma0 * std::pow(k_step, static_cast<float>(rs_i) + os);
+          const auto& img = gauss[rs_i];
 
-          // Dominant orientation (36-bin Gaussian-weighted gradient histogram)
+          // Dominant orientations (36-bin Gaussian-weighted histogram + 6x box smooth + parabolic peak)
           float hist[36] = {0.0f};
-          const int ori_rad = std::clamp(static_cast<int>(std::round(3.0f * 1.5f * sigma_oct)), 2, 12);
+          const int ori_rad = std::clamp(static_cast<int>(std::round(3.0f * 1.5f * sigma_oct)), 2, 14);
           const float exp_den = 2.0f * (1.5f * sigma_oct) * (1.5f * sigma_oct);
-          for (int yy = std::max(1, y - ori_rad); yy <= std::min(oh - 2, y + ori_rad); ++yy) {
-            for (int xx = std::max(1, x - ori_rad); xx <= std::min(ow - 2, x + ori_rad); ++xx) {
-              const float gx = img[yy * ow + xx + 1] - img[yy * ow + xx - 1];
-              const float gy = img[(yy + 1) * ow + xx] - img[(yy - 1) * ow + xx];
-              const float mag = std::hypot(gx, gy);
+          for (int yy = std::max(1, ry_i - ori_rad); yy <= std::min(oh - 2, ry_i + ori_rad); ++yy) {
+            for (int xx = std::max(1, rx_i - ori_rad); xx <= std::min(ow - 2, rx_i + ori_rad); ++xx) {
+              const float igx = img[yy * ow + xx + 1] - img[yy * ow + xx - 1];
+              const float igy = img[(yy + 1) * ow + xx] - img[(yy - 1) * ow + xx];
+              const float mag = std::hypot(igx, igy);
               const float wgt = std::exp(-((xx - fx) * (xx - fx) + (yy - fy) * (yy - fy)) / exp_den);
-              float ang = std::atan2(gy, gx);
+              float ang = std::atan2(igy, igx);
               if (ang < 0.0f) ang += 6.283185307f;
-              const int bin = static_cast<int>(ang * (36.0f / 6.283185307f)) % 36;
-              hist[bin] += mag * wgt;
+              const float fbin = ang * (36.0f / 6.283185307f) - 0.5f;
+              const int b0 = (static_cast<int>(std::floor(fbin)) % 36 + 36) % 36;
+              const float wb = fbin - std::floor(fbin);
+              hist[b0] += mag * wgt * (1.0f - wb);
+              hist[(b0 + 1) % 36] += mag * wgt * wb;
             }
           }
-          int best_bin = 0;
-          for (int b = 1; b < 36; ++b) {
-            if (hist[b] > hist[best_bin]) best_bin = b;
+          for (int pass = 0; pass < 6; ++pass) {
+            float tmp[36];
+            for (int b = 0; b < 36; ++b) {
+              tmp[b] = (hist[(b + 35) % 36] + hist[b] + hist[(b + 1) % 36]) * (1.0f / 3.0f);
+            }
+            std::memcpy(hist, tmp, sizeof(hist));
           }
-          const float angle = (best_bin + 0.5f) * (6.283185307f / 36.0f);
-          const float cos_t = std::cos(angle);
-          const float sin_t = std::sin(angle);
+          float max_h = 0.0f;
+          for (int b = 0; b < 36; ++b) max_h = std::max(max_h, hist[b]);
+          if (max_h <= 1e-12f) continue;
 
-          // 4x4x8 = 128D SIFT descriptor in UBC bin ordering
-          RawKp kp{};
-          kp.x = (fx + 0.5f) * oct_scale;
-          kp.y = (fy + 0.5f) * oct_scale;
-          kp.scale = sigma_oct * oct_scale;
-          kp.angle = angle;
-          kp.response = std::fabs(v);
-          kp.octave = o;
-          kp.level = s;
-          kp.desc.fill(0.0f);
+          for (int b = 0; b < 36; ++b) {
+            const float hm = hist[(b + 35) % 36];
+            const float hc = hist[b];
+            const float hp = hist[(b + 1) % 36];
+            if (hc < 0.8f * max_h || hc < hm || hc < hp) continue;
+            const float denom = hm - 2.0f * hc + hp;
+            const float di = (std::fabs(denom) > 1e-9f) ? std::clamp(0.5f * (hm - hp) / denom, -0.5f, 0.5f) : 0.0f;
+            float angle = (static_cast<float>(b) + 0.5f + di) * (6.283185307f / 36.0f);
+            if (angle < 0.0f) angle += 6.283185307f;
+            if (angle >= 6.283185307f) angle -= 6.283185307f;
 
-          const float hist_width = 3.0f * sigma_oct;
-          const int desc_rad = std::clamp(
-              static_cast<int>(std::ceil(hist_width * 1.41421356f * 2.5f)), 3, 18);
-          for (int dy_i = -desc_rad; dy_i <= desc_rad; ++dy_i) {
-            const int yy = y + dy_i;
-            if (yy < 1 || yy >= oh - 1) continue;
-            for (int dx_i = -desc_rad; dx_i <= desc_rad; ++dx_i) {
-              const int xx = x + dx_i;
-              if (xx < 1 || xx >= ow - 1) continue;
-              const float rx = ((xx - fx) * cos_t + (yy - fy) * sin_t) / hist_width;
-              const float ry = (-(xx - fx) * sin_t + (yy - fy) * cos_t) / hist_width;
-              const float bx = rx + 1.5f;
-              const float by = ry + 1.5f;
-              if (bx <= -1.0f || bx >= 4.0f || by <= -1.0f || by >= 4.0f) continue;
+            const float cos_t = std::cos(angle);
+            const float sin_t = std::sin(angle);
 
-              const float gx = img[yy * ow + xx + 1] - img[yy * ow + xx - 1];
-              const float gy = img[(yy + 1) * ow + xx] - img[(yy - 1) * ow + xx];
-              float rot_ang = std::atan2(gy, gx) - angle;
-              while (rot_ang < 0.0f) rot_ang += 6.283185307f;
-              while (rot_ang >= 6.283185307f) rot_ang -= 6.283185307f;
-              const float bo = rot_ang * (8.0f / 6.283185307f);
-              const float mag = std::hypot(gx, gy) * std::exp(-0.125f * (rx * rx + ry * ry));
+            // 4x4x8 = 128D SIFT descriptor in UBC bin ordering
+            RawKp kp{};
+            kp.x = (fx + 0.5f) * oct_scale;
+            kp.y = (fy + 0.5f) * oct_scale;
+            kp.scale = sigma_oct * oct_scale;
+            kp.angle = angle;
+            kp.response = std::fabs(resp);
+            kp.octave = o;
+            kp.level = rs_i;
+            kp.desc.fill(0.0f);
 
-              const int x0 = static_cast<int>(std::floor(bx));
-              const int y0 = static_cast<int>(std::floor(by));
-              const int o0 = static_cast<int>(std::floor(bo));
-              const float wx = bx - x0;
-              const float wy = by - y0;
-              const float wo = bo - o0;
-              for (int iy = 0; iy < 2; ++iy) {
-                const int cy = y0 + iy;
-                if (cy < 0 || cy >= 4) continue;
-                const float v_y = mag * (iy == 0 ? (1.0f - wy) : wy);
-                for (int ix = 0; ix < 2; ++ix) {
-                  const int cx = x0 + ix;
-                  if (cx < 0 || cx >= 4) continue;
-                  const float v_xy = v_y * (ix == 0 ? (1.0f - wx) : wx);
-                  for (int io = 0; io < 2; ++io) {
-                    const int co = (o0 + io) & 7;
-                    const float v_xyo = v_xy * (io == 0 ? (1.0f - wo) : wo);
-                    kp.desc[(cy * 4 + cx) * 8 + co] += v_xyo;
+            const float hist_width = 3.0f * sigma_oct;
+            const int desc_rad = std::clamp(
+                static_cast<int>(std::ceil(hist_width * 1.41421356f * 2.5f)), 3, 18);
+            for (int dy_i = -desc_rad; dy_i <= desc_rad; ++dy_i) {
+              const int yy = ry_i + dy_i;
+              if (yy < 1 || yy >= oh - 1) continue;
+              for (int dx_i = -desc_rad; dx_i <= desc_rad; ++dx_i) {
+                const int xx = rx_i + dx_i;
+                if (xx < 1 || xx >= ow - 1) continue;
+                const float rx = ((xx - fx) * cos_t + (yy - fy) * sin_t) / hist_width;
+                const float ry = (-(xx - fx) * sin_t + (yy - fy) * cos_t) / hist_width;
+                const float bx = rx + 1.5f;
+                const float by = ry + 1.5f;
+                if (bx <= -1.0f || bx >= 4.0f || by <= -1.0f || by >= 4.0f) continue;
+
+                const float dgx = img[yy * ow + xx + 1] - img[yy * ow + xx - 1];
+                const float dgy = img[(yy + 1) * ow + xx] - img[(yy - 1) * ow + xx];
+                float rot_ang = std::atan2(dgy, dgx) - angle;
+                while (rot_ang < 0.0f) rot_ang += 6.283185307f;
+                while (rot_ang >= 6.283185307f) rot_ang -= 6.283185307f;
+                const float bo = rot_ang * (8.0f / 6.283185307f);
+                const float mag = std::hypot(dgx, dgy) * std::exp(-0.125f * (rx * rx + ry * ry));
+
+                const int x0 = static_cast<int>(std::floor(bx));
+                const int y0 = static_cast<int>(std::floor(by));
+                const int o0 = static_cast<int>(std::floor(bo));
+                const float wx = bx - x0;
+                const float wy = by - y0;
+                const float wo = bo - o0;
+                for (int iy = 0; iy < 2; ++iy) {
+                  const int cy = y0 + iy;
+                  if (cy < 0 || cy >= 4) continue;
+                  const float v_y = mag * (iy == 0 ? (1.0f - wy) : wy);
+                  for (int ix = 0; ix < 2; ++ix) {
+                    const int cx = x0 + ix;
+                    if (cx < 0 || cx >= 4) continue;
+                    const float v_xy = v_y * (ix == 0 ? (1.0f - wx) : wx);
+                    for (int io = 0; io < 2; ++io) {
+                      const int co = (o0 + io) & 7;
+                      const float v_xyo = v_xy * (io == 0 ? (1.0f - wo) : wo);
+                      kp.desc[(cy * 4 + cx) * 8 + co] += v_xyo;
+                    }
                   }
                 }
               }
             }
+            candidates.push_back(kp);
           }
-          candidates.push_back(kp);
         }
       }
     }
@@ -678,7 +758,30 @@ bool OpenGLSiftEngine::Extract(const uint8_t* gray,
   std::sort(candidates.begin(), candidates.end(),
             [](const RawKp& a, const RawKp& b) { return a.response > b.response; });
   if (static_cast<int>(candidates.size()) > max_features) {
-    candidates.resize(static_cast<size_t>(max_features));
+    // Spatial 4x4 grid bucketing so strong texture in one corner doesn't starve the rest of the frame.
+    constexpr int kGridX = 4;
+    constexpr int kGridY = 4;
+    const int per_cell = std::max(1, max_features / (kGridX * kGridY));
+    int cell_counts[kGridX * kGridY] = {0};
+    std::vector<RawKp> kept;
+    kept.reserve(static_cast<size_t>(max_features));
+    std::vector<RawKp> overflow;
+    for (const auto& c : candidates) {
+      const int gx = std::clamp(static_cast<int>((c.x / std::max(1, width)) * kGridX), 0, kGridX - 1);
+      const int gy = std::clamp(static_cast<int>((c.y / std::max(1, height)) * kGridY), 0, kGridY - 1);
+      const int cell = gy * kGridX + gx;
+      if (cell_counts[cell] < per_cell && static_cast<int>(kept.size()) < max_features) {
+        kept.push_back(c);
+        ++cell_counts[cell];
+      } else {
+        overflow.push_back(c);
+      }
+    }
+    for (const auto& c : overflow) {
+      if (static_cast<int>(kept.size()) >= max_features) break;
+      kept.push_back(c);
+    }
+    candidates = std::move(kept);
   }
 
   keypoints->resize(candidates.size());

@@ -9,7 +9,7 @@
 
 use filmcraft_colmap::{GrayFrame, SolveConfig, solve_sequence};
 use filmcraft_project::{
-    CLASSIC_FOV, CameraSolve, ClipId, SolvedFrame, SolvedPoint, StereoLayout,
+    CameraSolve, ClipId, SolvedFrame, SolvedPoint, StereoLayout,
     euler_from_view_rotation,
 };
 use filmcraft_time::Tick;
@@ -24,7 +24,7 @@ pub const MIN_SOLVER_FPS: f64 = 1.0;
 /// Maximum configurable solver sampling rate (frames per second).
 pub const MAX_SOLVER_FPS: f64 = 60.0;
 
-const MAX_WORKING_SIDE: usize = 640;
+const MAX_WORKING_SIDE: usize = 840;
 
 /// One decoded RGBA8 video frame streamed into [`solve_camera`].
 #[derive(Clone, Debug)]
@@ -64,7 +64,7 @@ impl Default for SolveOptions {
             playhead: Tick::ZERO,
             max_seconds: 15.0,
             sample_fps: DEFAULT_SOLVER_FPS,
-            refine_focal: true,
+            refine_focal: false,
             layout: StereoLayout::Mono,
             stereo_baseline: 48.0,
         }
@@ -369,8 +369,11 @@ where
         return Err(SolveError::Cancelled);
     }
 
+    let work_w = shot_frames[0].width.max(1) as f64;
     let work_h = shot_frames[0].height.max(1) as f64;
-    let classic_focal = work_h / (2.0 * (f64::from(CLASSIC_FOV) * 0.5).to_radians().tan());
+    // Standard smartphone main-camera focal prior (`0.90 * max(w, h)` ~ 26mm eq, ~56 deg HFOV / ~34 deg VFOV in 16:9
+    // and ~56 deg VFOV in 9:16 portrait), avoiding the 62% portrait focal underestimate of fixed `CLASSIC_FOV`.
+    let prior_focal = 0.90 * work_w.max(work_h);
 
     let colmap_inputs: Vec<GrayFrame<'_>> = shot_frames
         .iter()
@@ -383,7 +386,7 @@ where
         .collect();
 
     let cfg = SolveConfig {
-        initial_focal_px: classic_focal,
+        initial_focal_px: prior_focal,
         lock_fov: !opts.refine_focal,
         max_features: 2048,
         use_opengl: true,
@@ -453,10 +456,11 @@ where
         raw_eyes[i] = rel;
     }
 
-    let rotation_only = pos_depths.is_empty() && max_baseline <= 1e-5;
-    let depth_scale = if !pos_depths.is_empty() {
+    let min_3d_landmarks = if shot_frames.len() >= 6 { 12usize } else { 6usize };
+    let rotation_only = pos_depths.len() < min_3d_landmarks || max_baseline <= 1e-5;
+    let depth_scale = if !rotation_only && !pos_depths.is_empty() {
         median_f64(&mut pos_depths).max(1e-4)
-    } else if max_baseline > 1e-5 {
+    } else if !rotation_only && max_baseline > 1e-5 {
         (max_baseline * 4.0).max(1e-4)
     } else {
         1.0
@@ -465,13 +469,9 @@ where
     let solved_focal = if recon.focal_px.is_finite() && recon.focal_px > 10.0 {
         recon.focal_px
     } else {
-        classic_focal
+        prior_focal
     };
-    let fov_deg = if opts.refine_focal {
-        (2.0 * ((work_h * 0.5) / solved_focal).atan().to_degrees()).clamp(10.0, 140.0) as f32
-    } else {
-        CLASSIC_FOV
-    };
+    let fov_deg = (2.0 * ((work_h * 0.5) / solved_focal).atan().to_degrees()).clamp(10.0, 140.0) as f32;
     let mean_rms = if recon.mean_reproj_px.is_finite() && recon.mean_reproj_px >= 0.0 {
         recon.mean_reproj_px as f32
     } else {
@@ -563,28 +563,53 @@ where
         solved_frames.push(interp_sf);
     }
 
-    // Rank and normalize up to MAX_POINTS sparse 3D landmarks for ground-plane leveling & snapping.
-    let mut scored_pts: Vec<(f64, SolvedPoint)> = Vec::new();
-    for (xr, obs, err) in ref_points {
-        let nx = (xr[0] / depth_scale) as f32;
-        let ny = (xr[1] / depth_scale) as f32;
-        let nz = (xr[2] / depth_scale) as f32;
-        if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() || nz <= 0.02 || nz > 50.0 {
-            continue;
-        }
-        let rms_p = if err.is_finite() && err >= 0.0 { err as f32 } else { mean_rms };
-        let score = f64::from(obs.max(1)) / (1.0 + f64::from(rms_p).powi(2));
-        let sp = SolvedPoint {
-            position: [nx, ny, nz],
-            observations: obs.max(2),
-            rms_px: rms_p,
-        };
-        if sp.is_finite() && score.is_finite() {
-            scored_pts.push((score, sp));
+    // Light zero-phase Savitzky-Golay / geodesic smoothing across interior frames while keeping
+    // the playhead anchor frame (`ref_idx`) and clip endpoints exact so 3D object locking is drift-free.
+    if solved_frames.len() >= 5 {
+        let raw_sf = solved_frames.clone();
+        for i in 1..(raw_sf.len() - 1) {
+            if i == ref_idx {
+                continue;
+            }
+            let mid_neighbors = SolvedFrame::lerp(raw_sf[i - 1], raw_sf[i + 1], 0.5);
+            let mut sm = SolvedFrame::lerp(raw_sf[i], mid_neighbors, 0.30);
+            sm.time = raw_sf[i].time;
+            sm.fov = raw_sf[i].fov;
+            sm.rms_px = raw_sf[i].rms_px;
+            sm.confidence = raw_sf[i].confidence;
+            if rotation_only {
+                sm.position = [0.0; 3];
+            }
+            if sm.is_finite() {
+                solved_frames[i] = sm;
+            }
         }
     }
-    scored_pts.sort_by(|a, b| b.0.total_cmp(&a.0));
-    scored_pts.truncate(CameraSolve::MAX_POINTS);
+
+    // Rank and normalize up to MAX_POINTS sparse 3D landmarks for ground-plane leveling & snapping.
+    let mut scored_pts: Vec<(f64, SolvedPoint)> = Vec::new();
+    if !rotation_only {
+        for (xr, obs, err) in ref_points {
+            let nx = (xr[0] / depth_scale) as f32;
+            let ny = (xr[1] / depth_scale) as f32;
+            let nz = (xr[2] / depth_scale) as f32;
+            if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() || nz <= 0.02 || nz > 50.0 {
+                continue;
+            }
+            let rms_p = if err.is_finite() && err >= 0.0 { err as f32 } else { mean_rms };
+            let score = f64::from(obs.max(1)) / (1.0 + f64::from(rms_p).powi(2));
+            let sp = SolvedPoint {
+                position: [nx, ny, nz],
+                observations: obs.max(2),
+                rms_px: rms_p,
+            };
+            if sp.is_finite() && score.is_finite() {
+                scored_pts.push((score, sp));
+            }
+        }
+        scored_pts.sort_by(|a, b| b.0.total_cmp(&a.0));
+        scored_pts.truncate(CameraSolve::MAX_POINTS);
+    }
     let points: Vec<SolvedPoint> = scored_pts.into_iter().map(|(_, p)| p).collect();
 
     let solve = CameraSolve {

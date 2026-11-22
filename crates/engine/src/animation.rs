@@ -185,7 +185,7 @@ fn camera_param_defs() -> Vec<ParamDef> {
         float_def("y", "Position Y", -20_000.0, 20_000.0, -2500.0, 2500.0, "px", 0, 0.0),
         float_def("z", "Position Z", -20_000.0, 20_000.0, -1500.0, 3500.0, "px", 0, 0.0),
         ParamDef { id: "yaw", label: "Yaw", kind: ParamKind::Angle, default: ParamValue::Float(0.0), animatable: true, group: None },
-        float_def("pitch", "Pitch", -89.0, 89.0, -89.0, 89.0, "°", 1, 0.0),
+        float_def("pitch", "Pitch", -3600.0, 3600.0, -90.0, 90.0, "°", 1, 0.0),
         ParamDef { id: "roll", label: "Roll", kind: ParamKind::Angle, default: ParamValue::Float(0.0), animatable: true, group: None },
         float_def("fov", "Field of View", 5.0, 170.0, 15.0, 120.0, "°", 1, f64::from(filmcraft_project::CLASSIC_FOV)),
     ]
