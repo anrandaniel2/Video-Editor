@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
+import io.github.artcraftandroid.filmcraft.core.ClipKind
 import io.github.artcraftandroid.filmcraft.core.FontFamily
 import io.github.artcraftandroid.filmcraft.core.MatchMoveSettings
 import io.github.artcraftandroid.filmcraft.core.ModelInfo
@@ -531,14 +532,16 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             }
         },
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            SelectChip("Point track", false, { ed.panel = Panel.Tracking }, tag = "matchmove_mode_point")
-            SelectChip("3D Camera Match-Move", true, {}, tag = "matchmove_mode_camera")
+        if (ed.selectedClip?.kind == ClipKind.VIDEO) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SelectChip("Point track", false, { ed.panel = Panel.Tracking }, tag = "matchmove_mode_point")
+                SelectChip("3D Camera Match-Move", true, {}, tag = "matchmove_mode_camera")
+            }
+            Spacer(Modifier.height(6.dp))
         }
-        Spacer(Modifier.height(6.dp))
         Text(
             "Solves real 3D camera motion and scene landmarks so 3D objects and lights lock naturally into handheld or moving-camera footage.",
             style = FcType.Caption, color = Fc.Detail,

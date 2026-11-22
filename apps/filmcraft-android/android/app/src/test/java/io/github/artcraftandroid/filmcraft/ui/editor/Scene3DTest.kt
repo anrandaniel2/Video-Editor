@@ -88,4 +88,27 @@ class Scene3DTest {
         assertNull(frameNormalizedAtTap(500f, 900f, 1000f, 1000f, 1920f, 1080f))
         assertNull(frameNormalizedAtTap(10f, 10f, 0f, 1000f, 1920f, 1080f))
     }
+
+    @Test
+    fun sceneOrbitDragAndPinchPanMoveViewPredictably() {
+        val base = SceneOrbit.DEFAULT
+        val orbited = base.orbitBy(dx = 100f, dy = -40f)
+        assertEquals(base.yaw + 35.0, orbited.yaw, 1e-6)
+        assertEquals(base.pitch + 14.0, orbited.pitch, 1e-6)
+
+        val clamped = base.orbitBy(dx = 0f, dy = 1000f)
+        assertEquals(-85.0, clamped.pitch, 1e-6)
+
+        // Straight-on orbit (yaw = 0, pitch = 0) at distance 700, CLASSIC_FOV, viewHeight = 700:
+        // worldPerPx = 2 * 700 * 0.5 / 700 = 1.0, so panning (+50, -30) shifts target by (-50, +30, 0).
+        val aligned = SceneOrbit(target = listOf(0.0, 0.0, 700.0), yaw = 0.0, pitch = 0.0, distance = 700.0)
+        val panned = aligned.dollyAndPanBy(zoom = 1f, panX = 50f, panY = -30f, fov = CLASSIC_FOV, viewHeightPx = 700f)
+        assertEquals(700.0, panned.distance, 1e-6)
+        assertEquals(-50.0, panned.target[0], 1e-3)
+        assertEquals(30.0, panned.target[1], 1e-3)
+        assertEquals(700.0, panned.target[2], 1e-3)
+
+        val zoomedIn = aligned.dollyAndPanBy(zoom = 2f, panX = 0f, panY = 0f, fov = CLASSIC_FOV, viewHeightPx = 700f)
+        assertEquals(350.0, zoomedIn.distance, 1e-6)
+    }
 }

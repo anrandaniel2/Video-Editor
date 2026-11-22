@@ -156,3 +156,38 @@ data class SceneOrbit(
         val DEFAULT = SceneOrbit()
     }
 }
+
+/** Update [SceneOrbit] from a single-finger drag `(dx, dy)` in screen pixels. */
+internal fun SceneOrbit.orbitBy(dx: Float, dy: Float): SceneOrbit = copy(
+    yaw = yaw + dx * 0.35,
+    pitch = (pitch - dy * 0.35).coerceIn(-85.0, 85.0),
+)
+
+/** Update [SceneOrbit] from a two-finger pinch [zoom] and screen-space [panX]/[panY] (view height [viewHeightPx]). */
+internal fun SceneOrbit.dollyAndPanBy(
+    zoom: Float,
+    panX: Float,
+    panY: Float,
+    fov: Double,
+    viewHeightPx: Float,
+): SceneOrbit {
+    val nextDist = if (zoom > 0f && zoom.isFinite()) {
+        (distance / zoom).coerceIn(150.0, 6000.0)
+    } else {
+        distance
+    }
+    val vh = viewHeightPx.coerceAtLeast(1f).toDouble()
+    val worldPerPx = (2.0 * nextDist * kotlin.math.tan(Math.toRadians(fov) / 2.0)) / vh
+    val right = GizmoVec(1.0, 0.0, 0.0).rotate(pitch, yaw, 0.0)
+    val downAxis = GizmoVec(0.0, 1.0, 0.0).rotate(pitch, yaw, 0.0)
+    val shift = right * (-panX * worldPerPx) + downAxis * (-panY * worldPerPx)
+    return copy(
+        target = listOf(
+            (target[0] + shift.x).coerceIn(-4000.0, 4000.0),
+            (target[1] + shift.y).coerceIn(-4000.0, 4000.0),
+            (target[2] + shift.z).coerceIn(-4000.0, 6000.0),
+        ),
+        distance = nextDist,
+    )
+}
+

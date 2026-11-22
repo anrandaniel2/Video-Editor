@@ -91,7 +91,7 @@ keeps the clip's masks.
 
 ## 3D Camera Match-Move
 
-Select a video clip and open **Match-Move** (or open **3D Scene › Match-Move**). FilmCraft tracks dense
+Open **3D Scene › Match-Move** on a timeline with footage. FilmCraft tracks dense
 optical-flow features across the shot, isolates hard cuts around the playhead, automatically selects
 between full 6-DoF epipolar reconstruction and rotation-only tripod pan/tilt, estimates focal length
 when requested, and refines camera poses and 3D landmarks with sparse Huber bundle adjustment.

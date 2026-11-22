@@ -63,6 +63,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -279,7 +280,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     val masking = ed.panel == Panel.Mask && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
     val advanced = (ed.panel == Panel.Background || ed.panel == Panel.Tracking) && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
     val object3d = sel?.has3d == true
-    val movable = !object3d && sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D
+    val movable = !object3d && sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D && ed.panel != Panel.Scene
     var placement by remember { mutableStateOf<Placement?>(null) }
     LaunchedEffect(sel?.id, t?.revision, ed.playhead, movable) {
         placement = if ((movable || object3d) && sel != null) ed.placementOf(sel.id) else null
@@ -298,132 +299,208 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
         val empty = (t?.duration ?: 0L) == 0L
         val boxW = if (empty) maxWidth else min(maxWidth.value, maxHeight.value * aspect).dp
         val boxH = if (empty) maxHeight else boxW / aspect
+        val currentBoxHPx by rememberUpdatedState(with(density) { boxH.toPx() })
         val px = with(density) { max(boxW.toPx(), boxH.toPx()) }
         LaunchedEffect(px) { ed.previewSide = px.roundToInt() }
         Box(
             Modifier
-                .size(boxW, boxH)
-                .clipToBounds()
-                .border(1.dp, Fc.Raised)
-                .pointerInput(sel?.id, movable, object3d, ed.panel, t?.width, t?.height) {
-                    if (masking || advanced || ed.panel == Panel.Lights || ed.panel == Panel.Scene || ed.panel is Panel.TextInput) return@pointerInput
-                    val frameW = t?.width?.toFloat() ?: return@pointerInput
-                    val k = size.width / frameW
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        var handledByChild = down.isConsumed
-                        var p = placement
-                        var moved = false
-                        var edited = false
-                        var multi = false
-                        var count = 1
-                        var pendingPan = Offset.Zero
-                        var pendingZoom = 1f
-                        val rotation = RotationGate()
-                        while (true) {
-                            val ev = awaitPointerEvent()
-                            val fingers = ev.changes.count { it.pressed }
-                            if (ev.changes.any { it.isConsumed }) handledByChild = true
-                            if (fingers == 0) break
-                            if (ev.changes.any { it.isConsumed }) continue
-                            if (fingers != count) {
-                                count = fingers
-                                multi = multi || fingers >= 2
-                                pendingPan = Offset.Zero; pendingZoom = 1f; rotation.reset()
-                                continue // Rebase on every pointer change: no centroid jumps.
-                            }
-                            val pan = if (fingers == 1 && !multi) ev.calculatePan() else Offset.Zero
-                            val zoom = if (fingers >= 2) ev.calculateZoom() else 1f
-                            val rot = if (fingers >= 2) rotation.update(ev.calculateRotation()) else 0f
-                            pendingPan += pan
-                            pendingZoom *= zoom
-                            if (!moved) moved = pendingPan.getDistance() > viewConfiguration.touchSlop || abs(pendingZoom - 1f) > 0.015f || rot != 0f
-                            if (moved && movable && p != null && sel != null) {
-                                ed.stop()
-                                val delta = if (!edited) pendingPan else pan
-                                val scale = if (!edited) pendingZoom else zoom
-                                val next = Placement(
-                                    x = p.x + delta.x / k, y = p.y + delta.y / k,
-                                    width = p.width, height = p.height,
-                                    scale = (p.scale * scale).coerceIn(0.001, 100.0), rotation = p.rotation + rot,
-                                )
-                                placement = next; p = next
-                                ed.setPlacement(sel.id, next, merge = edited)
-                                edited = true
-                                ev.changes.forEach { it.consume() }
-                            } else if (moved && !object3d) ev.changes.forEach { it.consume() }
-                        }
-                        if (!moved && !multi && !handledByChild) {
-                            val point = down.position / k
-                            val tolerance = 8.dp.toPx() / k
-                            scope.launch {
-                                val hit = ed.pickPreview(point, tolerance.toDouble())
-                                if (hit != null) { ed.stop(); if (ed.selectedClip?.id != hit) ed.select(hit) }
-                                else ed.togglePlay()
-                            }
-                        }
-                    }
-                }
-                .semantics { contentDescription = "Preview" },
+                .fillMaxSize()
+                .sceneOrbitPointerInput(ed, enabled = ed.panel == Panel.Scene, viewHeightPx = { currentBoxHPx }),
+            contentAlignment = Alignment.Center,
         ) {
-            ed.picture?.let { Image(it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
-            val showMatchMove = ed.panel == Panel.MatchMove || (ed.matchmoveActive && ed.matchmovePose?.lost == true)
-            if (showMatchMove && t != null) {
-                MatchMoveOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
-            }
-            // the text being typed, where the new clip will put it
-            if (ed.typing.isNotBlank() && t != null) {
-                val k = with(density) { boxW.toPx() } / t.width.toFloat()
-                val px = minOf(t.width, t.height).toFloat() * 0.1f * k
-                Text(
-                    ed.typing,
-                    style = androidx.compose.ui.text.TextStyle(
-                        fontFamily = io.github.artcraftandroid.filmcraft.ui.Inter,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                        fontSize = with(density) { px.toSp() },
-                        color = Color.White,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    ),
-                    modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
-                )
-            }
-            val pl = placement
-            if (movable && pl != null && t != null) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val k = size.width / t.width.toFloat()
-                    val w = (pl.width * pl.scale * k).toFloat()
-                    val h = (pl.height * pl.scale * k).toFloat()
-                    val cx = (pl.x * k).toFloat()
-                    val cy = (pl.y * k).toFloat()
-                    val a = Math.toRadians(pl.rotation).toFloat()
-                    val corners = listOf(-w / 2 to -h / 2, w / 2 to -h / 2, w / 2 to h / 2, -w / 2 to h / 2).map { (x, y) ->
-                        Offset(cx + x * cos(a) - y * sin(a), cy + x * sin(a) + y * cos(a))
+            Box(
+                Modifier
+                    .size(boxW, boxH)
+                    .clipToBounds()
+                    .border(1.dp, Fc.Raised)
+                    .pointerInput(sel?.id, movable, object3d, ed.panel, t?.width, t?.height) {
+                        if (masking || advanced || ed.panel == Panel.Lights || ed.panel == Panel.Scene || ed.panel is Panel.TextInput) return@pointerInput
+                        val frameW = t?.width?.toFloat() ?: return@pointerInput
+                        val k = size.width / frameW
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var handledByChild = down.isConsumed
+                            var p = placement
+                            var moved = false
+                            var edited = false
+                            var multi = false
+                            var count = 1
+                            var pendingPan = Offset.Zero
+                            var pendingZoom = 1f
+                            val rotation = RotationGate()
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val fingers = ev.changes.count { it.pressed }
+                                if (ev.changes.any { it.isConsumed }) handledByChild = true
+                                if (fingers == 0) break
+                                if (ev.changes.any { it.isConsumed }) continue
+                                if (fingers != count) {
+                                    count = fingers
+                                    multi = multi || fingers >= 2
+                                    pendingPan = Offset.Zero; pendingZoom = 1f; rotation.reset()
+                                    continue // Rebase on every pointer change: no centroid jumps.
+                                }
+                                val pan = if (fingers == 1 && !multi) ev.calculatePan() else Offset.Zero
+                                val zoom = if (fingers >= 2) ev.calculateZoom() else 1f
+                                val rot = if (fingers >= 2) rotation.update(ev.calculateRotation()) else 0f
+                                pendingPan += pan
+                                pendingZoom *= zoom
+                                if (!moved) moved = pendingPan.getDistance() > viewConfiguration.touchSlop || abs(pendingZoom - 1f) > 0.015f || rot != 0f
+                                if (moved && movable && p != null && sel != null) {
+                                    ed.stop()
+                                    val delta = if (!edited) pendingPan else pan
+                                    val scale = if (!edited) pendingZoom else zoom
+                                    val next = Placement(
+                                        x = p.x + delta.x / k, y = p.y + delta.y / k,
+                                        width = p.width, height = p.height,
+                                        scale = (p.scale * scale).coerceIn(0.001, 100.0), rotation = p.rotation + rot,
+                                    )
+                                    placement = next; p = next
+                                    ed.setPlacement(sel.id, next, merge = edited)
+                                    edited = true
+                                    ev.changes.forEach { it.consume() }
+                                } else if (moved && !object3d) ev.changes.forEach { it.consume() }
+                            }
+                            if (!moved && !multi && !handledByChild) {
+                                val point = down.position / k
+                                val tolerance = 8.dp.toPx() / k
+                                scope.launch {
+                                    val hit = ed.pickPreview(point, tolerance.toDouble())
+                                    if (hit != null) { ed.stop(); if (ed.selectedClip?.id != hit) ed.select(hit) }
+                                    else ed.togglePlay()
+                                }
+                            }
+                        }
                     }
-                    val path = Path().apply {
-                        moveTo(corners[0].x, corners[0].y)
-                        for (c in corners.drop(1)) lineTo(c.x, c.y)
-                        close()
+                    .semantics { contentDescription = "Preview" },
+            ) {
+                ed.picture?.let { Image(it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+                val showMatchMove = ed.panel == Panel.MatchMove || (ed.panel != Panel.Scene && ed.matchmoveActive && ed.matchmovePose?.lost == true)
+                if (showMatchMove && t != null) {
+                    MatchMoveOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
+                }
+                // the text being typed, where the new clip will put it
+                if (ed.typing.isNotBlank() && t != null) {
+                    val k = with(density) { boxW.toPx() } / t.width.toFloat()
+                    val px = minOf(t.width, t.height).toFloat() * 0.1f * k
+                    Text(
+                        ed.typing,
+                        style = androidx.compose.ui.text.TextStyle(
+                            fontFamily = io.github.artcraftandroid.filmcraft.ui.Inter,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            fontSize = with(density) { px.toSp() },
+                            color = Color.White,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        ),
+                        modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
+                    )
+                }
+                val pl = placement
+                if (movable && pl != null && t != null) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val k = size.width / t.width.toFloat()
+                        val w = (pl.width * pl.scale * k).toFloat()
+                        val h = (pl.height * pl.scale * k).toFloat()
+                        val cx = (pl.x * k).toFloat()
+                        val cy = (pl.y * k).toFloat()
+                        val a = Math.toRadians(pl.rotation).toFloat()
+                        val corners = listOf(-w / 2 to -h / 2, w / 2 to -h / 2, w / 2 to h / 2, -w / 2 to h / 2).map { (x, y) ->
+                            Offset(cx + x * cos(a) - y * sin(a), cy + x * sin(a) + y * cos(a))
+                        }
+                        val path = Path().apply {
+                            moveTo(corners[0].x, corners[0].y)
+                            for (c in corners.drop(1)) lineTo(c.x, c.y)
+                            close()
+                        }
+                        drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
                     }
-                    drawPath(path, Color.White, style = Stroke(2.dp.toPx()))
+                }
+                if (ed.panel == Panel.Scene && t != null) {
+                    SceneGridOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize()) {
+                        CameraGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize()) {
+                            LightGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat())
+                        }
+                    }
+                }
+                if (object3d && ed.panel != Panel.Scene && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
+                    ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
+                }
+                if (ed.panel == Panel.Lights && t != null) {
+                    LightGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat())
+                }
+                val maskState = ed.maskState
+                if (masking && maskState != null && t != null) {
+                    MaskOverlay(ed, maskState, t.width.toFloat(), Modifier.fillMaxSize())
+                }
+                if (advanced && t != null) {
+                    AdvancedOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
                 }
             }
-            if (ed.panel == Panel.Scene && t != null) {
-                SceneGridOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
-                CameraGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
+        }
+    }
+}
+
+/**
+ * Orbit, dolly, and two-finger pan the 3D Scene viewport when no child gizmo handle consumes
+ * the initial touch. Attached on an ancestor of all scene gizmo overlays so sibling Compose
+ * `pointerInput` modifiers cannot block hit-testing.
+ */
+private fun Modifier.sceneOrbitPointerInput(
+    ed: EditorController,
+    enabled: Boolean,
+    viewHeightPx: () -> Float,
+): Modifier {
+    if (!enabled) return this
+    return pointerInput(ed) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            if (down.isConsumed) return@awaitEachGesture
+            ed.stop()
+            down.consume()
+            var cur = ed.sceneOrbit
+            var previous = down.position
+            var count = 1
+            var multi = false
+            var moved = false
+            while (true) {
+                val event = awaitPointerEvent()
+                val pressed = event.changes.filter { it.pressed }
+                if (pressed.isEmpty()) break
+                if (pressed.size != count) {
+                    count = pressed.size
+                    if (count >= 2) multi = true
+                    if (count == 1) previous = pressed[0].position
+                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                    continue
+                }
+                if (count >= 2) {
+                    val zoom = event.calculateZoom()
+                    val pan = event.calculatePan()
+                    if (zoom != 1f || pan != Offset.Zero) {
+                        val fov = ed.activeRenderCamera?.fov ?: CLASSIC_FOV
+                        cur = cur.dollyAndPanBy(zoom, pan.x, pan.y, fov, viewHeightPx())
+                        ed.setSceneOrbit(cur)
+                        moved = true
+                    }
+                    event.changes.forEach { it.consume() }
+                    continue
+                }
+                if (multi) {
+                    multi = false
+                    previous = pressed[0].position
+                    continue
+                }
+                val change = pressed[0]
+                val delta = change.position - previous
+                previous = change.position
+                if (delta != Offset.Zero) {
+                    cur = cur.orbitBy(delta.x, delta.y)
+                    ed.setSceneOrbit(cur)
+                    moved = true
+                    change.consume()
+                }
             }
-            if (object3d && ed.panel != Panel.Scene && !masking && !advanced && ed.panel != Panel.Lights && ed.panel !is Panel.TextInput && t != null) {
-                ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
-            }
-            if ((ed.panel == Panel.Lights || ed.panel == Panel.Scene) && t != null) {
-                LightGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat())
-            }
-            val maskState = ed.maskState
-            if (masking && maskState != null && t != null) {
-                MaskOverlay(ed, maskState, t.width.toFloat(), Modifier.fillMaxSize())
-            }
-            if (advanced && t != null) {
-                AdvancedOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
-            }
+            if (moved) ed.applyScenePreviewCamera()
         }
     }
 }

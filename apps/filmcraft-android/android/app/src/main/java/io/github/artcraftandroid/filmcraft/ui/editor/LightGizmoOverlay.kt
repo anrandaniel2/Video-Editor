@@ -35,13 +35,12 @@ internal fun LightGizmoOverlay(ed: EditorController, fw: Float, fh: Float) {
             fun g(light: SceneLight) = geometry(light, size.width.toDouble(), size.height.toDouble(), minOf(62.dp.toPx(), minOf(size.width, size.height) * .28f).toDouble())
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
+                if (down.isConsumed || lights.isEmpty()) return@awaitEachGesture
                 val selected = lights.firstOrNull { it.id == ed.selectedLightId }
                 val hitAxis = selected?.let { g(it).hitGizmo(down.position, 16.dp.toPx()) }
-                val hit = if (hitAxis != null) selected else lights.minByOrNull { (g(it).centre - down.position).getDistance() }
-                    ?.takeIf { (g(it).centre - down.position).getDistance() < 22.dp.toPx() }
-                if (hit != null) {
-                    ed.stop(); ed.selectedLightId = hit.id; down.consume(); active = hitAxis
-                    var current: SceneLight = requireNotNull(hit); var previous = down.position
+                if (hitAxis != null && selected != null) {
+                    ed.stop(); ed.selectedLightId = selected.id; down.consume(); active = hitAxis
+                    var current: SceneLight = selected; var previous = down.position
                     var total = Offset.Zero; var changed = false
                     val token = "light-gizmo:${java.util.UUID.randomUUID()}"
                     while (true) {
@@ -50,28 +49,45 @@ internal fun LightGizmoOverlay(ed: EditorController, fw: Float, fh: Float) {
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) { change.consume(); break }
                         val delta = change.position - previous; previous = change.position; total += delta
-                        // The light body selects only; translation/rotation requires a real handle.
-                        val hitKind = hitAxis?.kind ?: break
-                        val axis = hitAxis.axis
                         if (!changed && total.getDistance() < viewConfiguration.touchSlop) continue
                         val drag = if (changed) delta else total
                         val geo = g(current)
-                        if (hitKind == GizmoMode.Move) {
-                            val tangent = geo.tangent(axis); val length = tangent.x * tangent.x + tangent.y * tangent.y
+                        if (hitAxis.kind == GizmoMode.Move) {
+                            val tangent = geo.tangent(hitAxis.axis); val length = tangent.x * tangent.x + tangent.y * tangent.y
                             val amount = if (length > .0001f) ((drag.x * tangent.x + drag.y * tangent.y) / length).toDouble() else -drag.y * geo.radius / 64.0
-                            val p = current.position.toMutableList(); p[axis] += amount
-                            if (axis == 2) p[2] = p[2].coerceAtLeast(1.0)
+                            val p = current.position.toMutableList(); p[hitAxis.axis] += amount
+                            if (hitAxis.axis == 2) p[hitAxis.axis] = p[hitAxis.axis].coerceAtLeast(1.0)
                             current = current.copy(position = p)
                         } else {
-                            val degrees = geo.rotationDelta(axis, change.position - drag, drag)
+                            val degrees = geo.rotationDelta(hitAxis.axis, change.position - drag, drag)
                             val a = Math.toRadians(current.angle); val e = Math.toRadians(current.elevation)
                             val toward = GizmoVec(cos(a) * cos(e), sin(a) * cos(e), -sin(e))
-                                .rotate(if (axis == 0) degrees else 0.0, if (axis == 1) degrees else 0.0, if (axis == 2) degrees else 0.0).unit()
+                                .rotate(if (hitAxis.axis == 0) degrees else 0.0, if (hitAxis.axis == 1) degrees else 0.0, if (hitAxis.axis == 2) degrees else 0.0).unit()
                             current = current.copy(angle = Math.toDegrees(atan2(toward.y, toward.x)), elevation = Math.toDegrees(asin((-toward.z).coerceIn(-1.0, 1.0))))
                         }
                         ed.setLight(current, token); changed = true; change.consume()
                     }
                     active = null
+                } else {
+                    val hitBody = lights.minByOrNull { (g(it).centre - down.position).getDistance() }
+                        ?.takeIf { (g(it).centre - down.position).getDistance() < 22.dp.toPx() }
+                        ?: return@awaitEachGesture
+                    var previous = down.position
+                    var total = Offset.Zero
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.count { it.pressed } > 1) break
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            ed.stop()
+                            ed.selectedLightId = hitBody.id
+                            change.consume()
+                            break
+                        }
+                        total += change.position - previous
+                        previous = change.position
+                        if (total.getDistance() >= viewConfiguration.touchSlop) break
+                    }
                 }
             }
         }) {
