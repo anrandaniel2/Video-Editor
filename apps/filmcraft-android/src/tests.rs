@@ -2076,3 +2076,45 @@ fn phase9_planar_2d_autoswitch_and_animated_lights_rendering() {
     );
 }
 
+#[test]
+fn phase10_2d_camera_space_lock_playhead_rebase_and_foreground_occlusion() {
+    let d = tmp();
+    let clip_2d = synthetic_planar_2d_mp4(&d, "planar_2d_lock.mp4", 28);
+    let m = MobileSession::new();
+    m.new_project("Phase10".into(), 320, 180, 24).unwrap();
+    let cid = m.add_media(vec![clip_2d]).unwrap()[0];
+
+    // Seek to mid-clip BEFORE adding the 3D object and solving: the 3D object must stay right at
+    // (160, 90) at mid-clip (no anchor jump!) and move smoothly with the 2D background across frames.
+    let mid_t = SEC / 2;
+    m.set_playhead(mid_t).unwrap();
+    let cube = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+
+    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st = poll_camera_solve(&m, job);
+    assert!(st.error.is_none(), "2D solve must succeed: {st:?}");
+    assert!(st.switched_to_motion_track.is_some(), "must auto-switch to 2D track: {st:?}");
+
+    let obj_mid = m.object3d_state(cube).unwrap();
+    assert!(obj_mid.settings.follow_track, "existing 3D object must auto-follow 2D track");
+    assert!(obj_mid.settings.behind_foreground, "existing 3D object must auto-enable behind_foreground");
+    assert!(
+        (obj_mid.tracked_x - 160.0).abs() < 1.5 && (obj_mid.tracked_y - 90.0).abs() < 1.5,
+        "3D object must stay rebased at (160, 90) at playhead instead of jumping: got ({}, {})",
+        obj_mid.tracked_x,
+        obj_mid.tracked_y
+    );
+
+    let r = m.renderer().unwrap();
+    let obj_start = r.object3d_state_at(cube, 0).unwrap();
+    let obj_end = r.object3d_state_at(cube, SEC).unwrap();
+    // synthetic_planar_2d_mp4 pans left (`tx = -34 * u`), so tracked_x must move significantly left from t=0 to t=1s!
+    assert!(
+        obj_end.tracked_x < obj_start.tracked_x - 12.0,
+        "3D object must follow 2D background pan left across the clip (start_x={}, end_x={})",
+        obj_start.tracked_x,
+        obj_end.tracked_x
+    );
+}
+
+

@@ -843,6 +843,8 @@ fn build_effects() -> Vec<EffectDef> {
                 ParamDef { animatable: false, ..b("follow_track", "Follow Motion Track", false) },
                 ParamDef { animatable: false, ..f("track_id", "Motion Track", 0.0, 0.0, 9_000_000_000_000_000.0, "") },
                 fs("track_depth", "Track Depth", 240.0, (-5000.0, 5000.0), (-1000.0, 1000.0), "", 1),
+                ParamDef { animatable: false, ..b("behind_foreground", "Behind Foreground", false) },
+                fs("foreground_occlusion", "Foreground Sensitivity", 55.0, (0.0, 100.0), (0.0, 100.0), "%", 0),
                 ParamDef { animatable: false, ..txt("model_path", "Model File") },
                 ParamDef { animatable: false, ..fs("model_anim", "Animation", -1.0, (-1.0, 4096.0), (-1.0, 64.0), "", 0) },
                 fs("model_time", "Animation Time", 0.0, (0.0, 86_400.0), (0.0, 60.0), "s", 3),

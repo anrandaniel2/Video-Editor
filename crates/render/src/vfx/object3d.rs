@@ -236,14 +236,25 @@ fn read_params(e: &EffectInstance, cx: &FxCtx, img: &Image) -> Params {
     let track_id = fv(e, "track_id", cx).max(0.0) as u64;
     if bv(e, "follow_track") && track_id != 0 {
         if let Some((s, anchor)) = cx.env.and_then(|env| env.motion_track(track_id, cx.t)) {
-            // Follow the tracked motion as a delta from the track's anchor: the object stays
-            // where the user placed it and rides along with the movement in the shot. (Taking
-            // the tracked point as an absolute position snapped the object onto it.)
-            pos.x += (s.x - anchor.x) as f64 * img.w as f64;
-            pos.y += (s.y - anchor.y) as f64 * img.h as f64;
-            z += s.z * fv(e, "track_depth", cx) * px;
-            scale *= s.scale.max(0.01);
-            rz += s.rotation;
+            // Project the user's anchor-space placement through the full 2D similarity delta
+            // `(pan, zoom, rotation)` from `anchor` to `s` so the 3D object stays glued to its
+            // exact spot in 2D background space — including radial motion under zoom, orbit
+            // under 2D camera roll, and smooth off-screen scrolling past [0, 1].
+            let rel_scale = f64::from(s.scale.max(0.01) / anchor.scale.max(0.01));
+            let dtheta = f64::from(s.rotation - anchor.rotation);
+            let rad = dtheta.to_radians();
+            let (cos_t, sin_t) = (rad.cos(), rad.sin());
+            let ax = f64::from(anchor.x) * img.w as f64;
+            let ay = f64::from(anchor.y) * img.h as f64;
+            let sx = f64::from(s.x) * img.w as f64;
+            let sy = f64::from(s.y) * img.h as f64;
+            let du = pos.x - ax;
+            let dv = pos.y - ay;
+            pos.x = sx + rel_scale * (cos_t * du - sin_t * dv);
+            pos.y = sy + rel_scale * (sin_t * du + cos_t * dv);
+            z += (s.z - anchor.z) * fv(e, "track_depth", cx) * px;
+            scale *= rel_scale as f32;
+            rz += dtheta as f32;
         }
     }
     let view_cam = cx.env.and_then(|env| env.scene_camera());
@@ -1247,13 +1258,268 @@ fn draw_model(img: &mut Image, _e: &EffectInstance, p: &Params, cx: &FxCtx, cam:
     buf.composite(img);
 }
 
-pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
-    if img.w == 0 || img.h == 0 {
+fn smoothstep01(lo: f32, hi: f32, v: f32) -> f32 {
+    if hi <= lo + 1e-6 {
+        return if v >= hi { 1.0 } else { 0.0 };
+    }
+    let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn perceptual_rgb(px: &[f32]) -> [f32; 3] {
+    let a = px.get(3).copied().unwrap_or(1.0);
+    let inv_a = if a > 1e-4 { 1.0 / a } else { 0.0 };
+    [
+        (px.first().copied().unwrap_or(0.0) * inv_a).clamp(0.0, 1.0).sqrt(),
+        (px.get(1).copied().unwrap_or(0.0) * inv_a).clamp(0.0, 1.0).sqrt(),
+        (px.get(2).copied().unwrap_or(0.0) * inv_a).clamp(0.0, 1.0).sqrt(),
+    ]
+}
+
+fn rgb_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let dr = a[0] - b[0];
+    let dg = a[1] - b[1];
+    let db = a[2] - b[2];
+    (0.30 * dr * dr + 0.44 * dg * dg + 0.26 * db * db).sqrt()
+}
+
+fn fit_bg_palette(samples: &[[f32; 3]]) -> (Vec<[f32; 3]>, f32) {
+    if samples.is_empty() {
+        return (vec![[0.5, 0.5, 0.5]], 0.12);
+    }
+    let k = 6usize.min(samples.len());
+    let mut centres: Vec<[f32; 3]> = (0..k).map(|i| samples[(i * samples.len()) / k]).collect();
+    for _ in 0..5 {
+        let mut sums = vec![[0.0f32; 3]; k];
+        let mut counts = vec![0u32; k];
+        for &s in samples {
+            let mut best = 0usize;
+            let mut best_d = f32::MAX;
+            for (ci, &c) in centres.iter().enumerate() {
+                let d = rgb_dist(s, c);
+                if d < best_d {
+                    best_d = d;
+                    best = ci;
+                }
+            }
+            sums[best][0] += s[0];
+            sums[best][1] += s[1];
+            sums[best][2] += s[2];
+            counts[best] += 1;
+        }
+        for ci in 0..k {
+            if counts[ci] > 0 {
+                let inv = 1.0 / counts[ci] as f32;
+                centres[ci] = [sums[ci][0] * inv, sums[ci][1] * inv, sums[ci][2] * inv];
+            }
+        }
+    }
+    let mut dists: Vec<f32> = samples
+        .iter()
+        .map(|&s| centres.iter().map(|&c| rgb_dist(s, c)).fold(f32::MAX, f32::min))
+        .collect();
+    dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let spread = dists
+        .get((dists.len() * 82) / 100)
+        .copied()
+        .unwrap_or(0.08)
+        .clamp(0.035, 0.28);
+    (centres, spread)
+}
+
+fn feather_matte(matte: &mut [f32], bw: usize, bh: usize) {
+    if bw < 3 || bh < 3 {
         return;
     }
-    let p = read_params(e, cx, img);
+    let mut tmp = vec![0.0f32; bw * bh];
+    for _ in 0..2 {
+        for y in 0..bh {
+            let row = y * bw;
+            for x in 0..bw {
+                let xm = x.saturating_sub(1);
+                let xp = (x + 1).min(bw - 1);
+                tmp[row + x] = 0.25 * matte[row + xm] + 0.5 * matte[row + x] + 0.25 * matte[row + xp];
+            }
+        }
+        for y in 0..bh {
+            let ym = y.saturating_sub(1);
+            let yp = (y + 1).min(bh - 1);
+            for x in 0..bw {
+                matte[y * bw + x] = 0.25 * tmp[ym * bw + x] + 0.5 * tmp[y * bw + x] + 0.25 * tmp[yp * bw + x];
+            }
+        }
+    }
+}
+
+/// Attenuates `layer` where foreground subjects in the underlying video track sit in front of the
+/// solved 2D/3D background (combining warped temporal clean-plate difference + spatial background
+/// ring color clustering).
+fn occlude_behind_foreground(layer: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let Some(env) = cx.env else { return };
+    let (w, h) = (layer.w, layer.h);
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
+    for (i, p) in layer.px.chunks_exact(4).enumerate() {
+        if p[3] > 1e-3 {
+            let (x, y) = (i % w, i / w);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+    }
+    if x0 > x1 || y0 > y1 {
+        return;
+    }
+    let Some(curr_bg) = env.underlying_video() else { return };
+    if curr_bg.w != w || curr_bg.h != h {
+        return;
+    }
+
+    let sens = (fv(e, "foreground_occlusion", cx) / 100.0).clamp(0.0, 1.0);
+    let follow = bv(e, "follow_track");
+    let track_id = fv(e, "track_id", cx).max(0.0) as u64;
+    let tid = follow.then_some(track_id).filter(|&id| id != 0);
+
+    let w_prev = env
+        .underlying_video_warped(-0.34, tid)
+        .or_else(|| env.underlying_video_warped(-0.68, tid))
+        .filter(|im| im.w == w && im.h == h);
+    let w_next = env
+        .underlying_video_warped(0.34, tid)
+        .or_else(|| env.underlying_video_warped(0.68, tid))
+        .filter(|im| im.w == w && im.h == h);
+
+    // Sample surrounding background ring + frame borders to model background palette.
+    let pad = (w.min(h) / 10).clamp(12, 42);
+    let rx0 = x0.saturating_sub(pad);
+    let ry0 = y0.saturating_sub(pad);
+    let rx1 = (x1 + pad).min(w - 1);
+    let ry1 = (y1 + pad).min(h - 1);
+    let step = ((rx1 - rx0 + 1).max(ry1 - ry0 + 1) / 36).max(2);
+    let mut ring_samples: Vec<[f32; 3]> = Vec::with_capacity(256);
+    for sy in (ry0..=ry1).step_by(step) {
+        for sx in (rx0..=rx1).step_by(step) {
+            let inside_obj = sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1 && layer.px[(sy * w + sx) * 4 + 3] > 0.05;
+            if inside_obj {
+                continue;
+            }
+            let idx = (sy * w + sx) * 4;
+            if let Some(px) = curr_bg.px.get(idx..idx + 4) {
+                if px[3] > 0.5 {
+                    ring_samples.push(perceptual_rgb(px));
+                }
+            }
+        }
+    }
+    if ring_samples.len() < 16 {
+        let bstep = (w.max(h) / 32).max(2);
+        for sx in (0..w).step_by(bstep) {
+            for sy in [2usize.min(h - 1), h.saturating_sub(3)] {
+                let idx = (sy * w + sx) * 4;
+                if let Some(px) = curr_bg.px.get(idx..idx + 4)
+                    && px[3] > 0.5
+                {
+                    ring_samples.push(perceptual_rgb(px));
+                }
+            }
+        }
+    }
+    let (palette, bg_spread) = fit_bg_palette(&ring_samples);
+    let min_pal_dist = |c: [f32; 3]| -> f32 {
+        palette.iter().map(|&p| rgb_dist(c, p)).fold(f32::MAX, f32::min)
+    };
+
+    let low_temp = (0.145 - 0.085 * sens).clamp(0.045, 0.16);
+    let high_temp = low_temp + 0.095;
+    let sp_lo = (0.34 - 0.19 * sens).max(bg_spread * 1.55);
+    let sp_hi = sp_lo + 0.12;
+
+    let bw = x1 - x0 + 1;
+    let bh = y1 - y0 + 1;
+    let mut matte = vec![0.0f32; bw * bh];
+
+    for by in 0..bh {
+        let y = y0 + by;
+        for bx in 0..bw {
+            let x = x0 + bx;
+            let idx = (y * w + x) * 4;
+            let Some(c_slice) = curr_bg.px.get(idx..idx + 4) else { continue };
+            if c_slice[3] <= 0.1 {
+                continue;
+            }
+            let c_now = perceptual_rgb(c_slice);
+            let d_bg = min_pal_dist(c_now);
+
+            let prev_rgb = w_prev.as_ref().and_then(|im| {
+                let s = im.px.get(idx..idx + 4)?;
+                (s[3] > 0.65).then(|| perceptual_rgb(s))
+            });
+            let next_rgb = w_next.as_ref().and_then(|im| {
+                let s = im.px.get(idx..idx + 4)?;
+                (s[3] > 0.65).then(|| perceptual_rgb(s))
+            });
+
+            let mut temporal_occ = 0.0f32;
+            let mut confirmed_bg_motion = false;
+            match (prev_rgb, next_rgb) {
+                (Some(pp), Some(np)) => {
+                    let dp = rgb_dist(c_now, pp);
+                    let dn = rgb_dist(c_now, np);
+                    let d_plate = rgb_dist(pp, np);
+                    if dp.min(dn) < low_temp * 0.72 {
+                        confirmed_bg_motion = true;
+                    }
+                    if d_plate < low_temp * 1.15 && 0.5 * (dp + dn) > low_temp {
+                        // Clean plate uncovered at both t - dt and t + dt; moving subject in front at t!
+                        temporal_occ = smoothstep01(low_temp, high_temp, 0.5 * (dp + dn));
+                    } else if dp > low_temp && min_pal_dist(pp) + 0.04 < d_bg {
+                        temporal_occ = smoothstep01(low_temp, high_temp, dp);
+                    } else if dn > low_temp && min_pal_dist(np) + 0.04 < d_bg {
+                        temporal_occ = smoothstep01(low_temp, high_temp, dn);
+                    }
+                }
+                (Some(rp), None) | (None, Some(rp)) => {
+                    let dr = rgb_dist(c_now, rp);
+                    if dr < low_temp * 0.72 {
+                        confirmed_bg_motion = true;
+                    } else if dr > low_temp && min_pal_dist(rp) <= d_bg + 0.025 {
+                        temporal_occ = smoothstep01(low_temp, high_temp, dr);
+                    }
+                }
+                (None, None) => {}
+            }
+
+            let mut spatial_occ = smoothstep01(sp_lo, sp_hi, d_bg);
+            if confirmed_bg_motion && temporal_occ <= 0.01 {
+                spatial_occ *= 0.25;
+            }
+            matte[by * bw + bx] = temporal_occ.max(spatial_occ).clamp(0.0, 1.0);
+        }
+    }
+
+    feather_matte(&mut matte, bw, bh);
+
+    for by in 0..bh {
+        let y = y0 + by;
+        for bx in 0..bw {
+            let occ = matte[by * bw + bx];
+            if occ <= 1e-3 {
+                continue;
+            }
+            let vis = (1.0 - occ).clamp(0.0, 1.0);
+            let idx = (y * w + (x0 + bx)) * 4;
+            if let Some(px) = layer.px.get_mut(idx..idx + 4) {
+                for c in px {
+                    *c *= vis;
+                }
+            }
+        }
+    }
+}
+
+fn render_object_into(img: &mut Image, e: &EffectInstance, p: &Params, cx: &FxCtx) {
     if crate::scene3d::available() {
-        if let Some(layer) = gpu_scene(img, &p, cx).and_then(|scene| crate::scene3d::render(&scene)) {
+        if let Some(layer) = gpu_scene(img, p, cx).and_then(|scene| crate::scene3d::render(&scene)) {
             crate::blend::composite(img, &layer, 1.0, crate::Blend::Normal);
             return;
         }
@@ -1261,13 +1527,10 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     if p.opacity <= 0.0 || p.scale <= 0.0 {
         return;
     }
-    // Fixed principal point; position moves vertices in camera space, so the visible sides
-    // change off-axis. Convert the screen-space anchor to world coordinates at object depth.
-    // A scene camera moves everything into its own view space instead (see `cam_of`).
-    let cam = cam_of(&p, img.w as f32, img.h as f32);
+    let cam = cam_of(p, img.w as f32, img.h as f32);
     let off = p.translation;
     if p.mesh == 7 {
-        draw_model(img, e, &p, cx, cam);
+        draw_model(img, e, p, cx, cam);
         return;
     }
     let view = p.view;
@@ -1281,7 +1544,7 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         Vert { p: vp, n: vn }
     };
     if p.mesh == 6 {
-        let cs = text_contours(&p);
+        let cs = text_contours(p);
         if cs.is_empty() {
             return;
         }
@@ -1298,15 +1561,13 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             .collect();
         let Some(b) = bounds(&pts, cam) else { return };
         let Some(mut buf) = Buf::new(img, b) else { return };
-        draw_text(&mut buf, &p, cam, &cs);
+        draw_text(&mut buf, p, cam, &cs);
         buf.composite(img);
     } else {
         let k = p.size * p.scale * 0.5;
         let dz = if p.mesh == 5 { 0.0 } else if p.depth > 0.0 { p.depth * p.scale * 0.5 } else { k };
         let base = lin(p.color);
         let alpha = p.opacity * p.color[3].clamp(0.0, 1.0);
-        // Cut curves to the size they actually appear at from the active camera eye, so a sphere
-        // orbited/dollied close stays smooth instead of dropping subdivision count.
         let view_dist = view
             .map(|x| {
                 let vp = x.point(off);
@@ -1323,9 +1584,24 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         let Some(b) = bounds(&pts, cam) else { return };
         let Some(mut buf) = Buf::new(img, b) else { return };
         for t in tris {
-            draw_tri(&mut buf, t, &p, base, alpha, cam);
+            draw_tri(&mut buf, t, p, base, alpha, cam);
         }
         buf.composite(img);
+    }
+}
+
+pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    if img.w == 0 || img.h == 0 {
+        return;
+    }
+    let p = read_params(e, cx, img);
+    if bv(e, "behind_foreground") && cx.env.is_some() {
+        let mut layer = Image::new(img.w, img.h);
+        render_object_into(&mut layer, e, &p, cx);
+        occlude_behind_foreground(&mut layer, e, cx);
+        crate::blend::composite(img, &layer, 1.0, crate::Blend::Normal);
+    } else {
+        render_object_into(img, e, &p, cx);
     }
 }
 
@@ -1592,6 +1868,105 @@ mod tests {
         let (cx, cy) = box_centre(&img);
         // placement (30, 30) plus the tracked delta ((0.75−0.5)·256, (0.6−0.5)·256) = (94, 55.6)
         assert!((cx - 94.0).abs() < 2.0 && (cy - 55.6).abs() < 2.0, "followed to ({cx}, {cy}), wanted (94, 55.6)");
+    }
+
+    #[test]
+    fn follow_track_scales_and_rotates_offset_in_2d_camera_space() {
+        struct ZoomEnv;
+        impl crate::vfx::FxEnv for ZoomEnv {
+            fn frame(&self, _: f64, _: &EffectInstance) -> Option<Image> { None }
+            fn source_frame(&self, _: f64, _: f32) -> Option<Image> { None }
+            fn track(&self, _: usize) -> Option<Image> { None }
+            fn layer_to_output(&self) -> filmcraft_geom::Affine { filmcraft_geom::Affine::IDENTITY }
+            fn clip_seconds(&self) -> f64 { 10.0 }
+            fn clip_offset(&self) -> f64 { 0.0 }
+            fn frame_rate(&self) -> f64 { 30.0 }
+            fn media_timecode(&self) -> String { String::new() }
+            fn file_name(&self) -> String { String::new() }
+            fn sequence_name(&self) -> String { String::new() }
+            fn sequence_size(&self) -> (u32, u32) { (256, 256) }
+            fn source_size(&self) -> (u32, u32) { (256, 256) }
+            fn clip_key(&self) -> u64 { 2 }
+            fn motion_track(&self, _id: u64, _t: Tick) -> Option<(filmcraft_project::TrackSample, filmcraft_project::TrackSample)> {
+                let anchor = filmcraft_project::TrackSample {
+                    time: Tick::ZERO,
+                    x: 0.5,
+                    y: 0.5,
+                    z: 0.0,
+                    scale: 1.0,
+                    rotation: 0.0,
+                    confidence: 1.0,
+                };
+                // 1.5x zoom + 90 deg rotation around (128, 128)
+                let now = filmcraft_project::TrackSample { scale: 1.5, rotation: 90.0, ..anchor };
+                Some((now, anchor))
+            }
+        }
+        let mut e = find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(36.0);
+        // Offset (+40, 0) from (128, 128) -> under 1.5x zoom & +90 deg rot -> (128, 128 + 60) = (128, 188)!
+        e.params.get_mut("position").unwrap().value =
+            filmcraft_project::ParamValue::Vec2(filmcraft_geom::Vec2::new(168.0, 128.0));
+        e.params.get_mut("follow_track").unwrap().value = filmcraft_project::ParamValue::Bool(true);
+        e.params.get_mut("track_id").unwrap().value = filmcraft_project::ParamValue::Float(1.0);
+        let env = ZoomEnv;
+        let mut img = Image::new(256, 256);
+        apply(&mut img, &e, &FxCtx { env: Some(&env), ..ctx() });
+        let (cx, cy) = box_centre(&img);
+        assert!((cx - 128.0).abs() < 4.0 && (cy - 188.0).abs() < 4.0, "got ({cx}, {cy}), wanted (128, 188)");
+    }
+
+    #[test]
+    fn behind_foreground_occludes_3d_object_under_foreground_subject() {
+        struct OccEnv;
+        impl crate::vfx::FxEnv for OccEnv {
+            fn frame(&self, _: f64, _: &EffectInstance) -> Option<Image> { None }
+            fn source_frame(&self, _: f64, _: f32) -> Option<Image> { None }
+            fn track(&self, _: usize) -> Option<Image> { None }
+            fn layer_to_output(&self) -> filmcraft_geom::Affine { filmcraft_geom::Affine::IDENTITY }
+            fn clip_seconds(&self) -> f64 { 10.0 }
+            fn clip_offset(&self) -> f64 { 1.0 }
+            fn frame_rate(&self) -> f64 { 30.0 }
+            fn media_timecode(&self) -> String { String::new() }
+            fn file_name(&self) -> String { String::new() }
+            fn sequence_name(&self) -> String { String::new() }
+            fn sequence_size(&self) -> (u32, u32) { (256, 256) }
+            fn source_size(&self) -> (u32, u32) { (256, 256) }
+            fn clip_key(&self) -> u64 { 3 }
+            fn underlying_video(&self) -> Option<Image> {
+                let mut bg = Image::new(256, 256);
+                for y in 0..256 {
+                    for x in 0..256 {
+                        let i = (y * 256 + x) * 4;
+                        // Sky-blue background with a bright crimson foreground character column across x in 124..164!
+                        if (124..164).contains(&x) && (60..200).contains(&y) {
+                            bg.px[i..i + 4].copy_from_slice(&[0.85, 0.04, 0.04, 1.0]);
+                        } else {
+                            bg.px[i..i + 4].copy_from_slice(&[0.06, 0.22, 0.65, 1.0]);
+                        }
+                    }
+                }
+                Some(bg)
+            }
+            fn underlying_video_warped(&self, _dt: f64, _tid: Option<u64>) -> Option<Image> {
+                // Uncovered sky-blue clean plate in neighbor frames!
+                let mut plate = Image::new(256, 256);
+                for px in plate.px.chunks_exact_mut(4) {
+                    px.copy_from_slice(&[0.06, 0.22, 0.65, 1.0]);
+                }
+                Some(plate)
+            }
+        }
+        let mut e = find_effect("object_3d").unwrap().instance();
+        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(110.0);
+        e.params.get_mut("behind_foreground").unwrap().value = filmcraft_project::ParamValue::Bool(true);
+        let env = OccEnv;
+        let mut img = Image::new(256, 256);
+        apply(&mut img, &e, &FxCtx { env: Some(&env), ..ctx() });
+        let unoccluded_alpha = img.px[(128 * 256 + 100) * 4 + 3];
+        let occluded_alpha = img.px[(128 * 256 + 140) * 4 + 3];
+        assert!(unoccluded_alpha > 0.85, "background side of 3D cube should stay visible, got {unoccluded_alpha}");
+        assert!(occluded_alpha < 0.15, "foreground subject column should occlude 3D cube, got {occluded_alpha}");
     }
 }
 

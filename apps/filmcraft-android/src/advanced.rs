@@ -13,8 +13,9 @@ use filmcraft_engine::{EngineError, Session};
 use filmcraft_media::{FrameRequest, SharedSource};
 use filmcraft_project::{ClipId, EffectInstance, ItemKind, ParamValue, Sequence, TrackItem, find_effect, graphic};
 use filmcraft_render::SourceProvider;
+use filmcraft_render::camera2d::{Camera2DError, Camera2DOptions, solve_2d_camera_space};
 use filmcraft_render::matchmove::{InputFrame, SolveError, SolveOptions, SolveReport, solve_camera};
-use filmcraft_render::track3d::{Gray, Tracker, view_rect};
+use filmcraft_render::track3d::{Tracker, view_rect};
 use filmcraft_time::Tick;
 use serde_json::json;
 
@@ -135,6 +136,8 @@ pub struct Object3DSettings {
     pub follow_track: bool,
     pub track_id: u64,
     pub track_depth: f64,
+    pub behind_foreground: bool,
+    pub foreground_occlusion: f64,
     pub model_path: String,
     /// -1 = rest pose; otherwise an index into the file's animation list.
     pub model_anim: i32,
@@ -185,6 +188,8 @@ impl Default for Object3DSettings {
             follow_track: false,
             track_id: 0,
             track_depth: 240.0,
+            behind_foreground: false,
+            foreground_occlusion: 55.0,
             model_path: String::new(),
             model_anim: -1,
             model_time: 0.0,
@@ -258,6 +263,13 @@ pub struct Object3DState {
     pub has_object: bool,
     pub animated: bool,
     pub settings: Object3DSettings,
+    /// Effective screen-space pose at the current playhead after applying `follow_track` (when
+    /// enabled), so 3D gizmos stay locked onto the tracked object on every frame.
+    pub tracked_x: f64,
+    pub tracked_y: f64,
+    pub tracked_z: f64,
+    pub tracked_scale: f64,
+    pub tracked_rotation_z: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -573,6 +585,8 @@ fn object_settings(e: &EffectInstance, t: Tick, center: (f64, f64)) -> Object3DS
         follow_track: e.param("follow_track").and_then(|p| p.value.as_bool()).unwrap_or(false),
         track_id: f_at(e, "track_id", t, 0.0).max(0.0) as u64,
         track_depth: f_at(e, "track_depth", t, d.track_depth),
+        behind_foreground: bool_at(e, "behind_foreground", false),
+        foreground_occlusion: f_at(e, "foreground_occlusion", t, d.foreground_occlusion),
         model_path: text_at(e, "model_path", t),
         model_anim: f_at(e, "model_anim", t, -1.0).round().clamp(-1.0, 4096.0) as i32,
         model_time: f_at(e, "model_time", t, 0.0).max(0.0),
@@ -624,6 +638,8 @@ fn write_object(e: &mut EffectInstance, st: &Object3DSettings, t: Tick) {
     set_bool(e, "follow_track", st.follow_track);
     set_f(e, "track_id", st.track_id as f64, t);
     set_f(e, "track_depth", st.track_depth.clamp(-5000.0, 5000.0), t);
+    set_bool(e, "behind_foreground", st.behind_foreground);
+    set_f(e, "foreground_occlusion", st.foreground_occlusion.clamp(0.0, 100.0), t);
     set_text(e, "model_path", &st.model_path);
     set_f(e, "model_anim", st.model_anim.clamp(-1, 4096) as f64, t);
     set_f(e, "model_time", finite(st.model_time, 0.0).clamp(0.0, 86_400.0), t);
@@ -745,24 +761,181 @@ fn add_object_with_path(s: &mut Session, mesh: Object3DMesh, model_path: Option<
     Ok(clip)
 }
 
+fn track_2d_pair_at(
+    seq: &Sequence,
+    track_id: u64,
+    playhead: Tick,
+) -> Option<(filmcraft_project::TrackSample, filmcraft_project::TrackSample)> {
+    if track_id == 0 {
+        return None;
+    }
+    let tr = seq.motion_tracks.iter().find(|t| t.id == track_id)?;
+    let start = seq.find_item(tr.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
+    let anchor = *tr.samples.first()?;
+    let now = tr.sample_at(playhead - start)?;
+    Some((now, anchor))
+}
+
+/// Forward 2D camera-space transform: maps anchor-space `(x, y, z, scale, rotation_z)` to
+/// effective screen-space values at `playhead`.
+fn forward_track_2d(
+    seq: &Sequence,
+    track_id: u64,
+    playhead: Tick,
+    pose: (f64, f64, f64, f64, f64),
+    track_depth: f64,
+) -> (f64, f64, f64, f64, f64) {
+    let Some((s, anchor)) = track_2d_pair_at(seq, track_id, playhead) else {
+        return pose;
+    };
+    let (x, y, z, scale, rz) = pose;
+    let fw = f64::from(seq.settings.width.max(1));
+    let fh = f64::from(seq.settings.height.max(1));
+    let rel_scale = f64::from(s.scale.max(0.01) / anchor.scale.max(0.01));
+    let dtheta = f64::from(s.rotation - anchor.rotation);
+    let rad = dtheta.to_radians();
+    let (cos_t, sin_t) = (rad.cos(), rad.sin());
+    let ax = f64::from(anchor.x) * fw;
+    let ay = f64::from(anchor.y) * fh;
+    let sx = f64::from(s.x) * fw;
+    let sy = f64::from(s.y) * fh;
+    let (du, dv) = (x - ax, y - ay);
+    (
+        sx + rel_scale * (cos_t * du - sin_t * dv),
+        sy + rel_scale * (sin_t * du + cos_t * dv),
+        z + f64::from(s.z - anchor.z) * track_depth,
+        scale * rel_scale,
+        rz + dtheta,
+    )
+}
+
+/// Inverse 2D camera-space transform: converts a desired screen-space pose at `playhead` into
+/// anchor-space parameters so enabling `follow_track` never causes the 3D object to jump.
+fn inverse_track_2d(
+    seq: &Sequence,
+    track_id: u64,
+    playhead: Tick,
+    screen_pose: (f64, f64, f64, f64, f64),
+    track_depth: f64,
+) -> (f64, f64, f64, f64, f64) {
+    let Some((s, anchor)) = track_2d_pair_at(seq, track_id, playhead) else {
+        return screen_pose;
+    };
+    let (sx_in, sy_in, sz_in, sc_in, rz_in) = screen_pose;
+    let fw = f64::from(seq.settings.width.max(1));
+    let fh = f64::from(seq.settings.height.max(1));
+    let rel_scale = f64::from(s.scale.max(0.01) / anchor.scale.max(0.01));
+    let dtheta = f64::from(s.rotation - anchor.rotation);
+    let rad = dtheta.to_radians();
+    let (cos_t, sin_t) = (rad.cos(), rad.sin());
+    let ax = f64::from(anchor.x) * fw;
+    let ay = f64::from(anchor.y) * fh;
+    let sx = f64::from(s.x) * fw;
+    let sy = f64::from(s.y) * fh;
+    let rx = (sx_in - sx) / rel_scale;
+    let ry = (sy_in - sy) / rel_scale;
+    let du = cos_t * rx + sin_t * ry;
+    let dv = -sin_t * rx + cos_t * ry;
+    (
+        ax + du,
+        ay + dv,
+        (sz_in - f64::from(s.z - anchor.z) * track_depth).clamp(20.0, 20_000.0),
+        (sc_in / rel_scale).clamp(1.0, 10_000.0),
+        rz_in - dtheta,
+    )
+}
+
+pub(crate) fn object_state_at(seq: &Sequence, id: u64, ph: Tick) -> Option<Object3DState> {
+    let c = seq.find_item(ClipId(id)).map(|(_, c)| c)?;
+    let t = c.effect_time_at(ph);
+    let center = (f64::from(seq.settings.width) / 2.0, f64::from(seq.settings.height) / 2.0);
+    Some(match c.effects.iter().find(|e| e.effect == OBJECT3D) {
+        Some(e) => {
+            let st = object_settings(e, t, center);
+            let (tx, ty, tz, tsc, trz) = if st.follow_track && st.track_id != 0 {
+                forward_track_2d(seq, st.track_id, ph, (st.x, st.y, st.z, st.scale, st.rotation_z), st.track_depth)
+            } else {
+                (st.x, st.y, st.z, st.scale, st.rotation_z)
+            };
+            Object3DState {
+                clip: id,
+                has_object: true,
+                animated: object_animated(e),
+                settings: st,
+                tracked_x: tx,
+                tracked_y: ty,
+                tracked_z: tz,
+                tracked_scale: tsc,
+                tracked_rotation_z: trz,
+            }
+        }
+        None => {
+            let d = Object3DSettings::default();
+            Object3DState {
+                clip: id,
+                has_object: false,
+                animated: false,
+                tracked_x: d.x,
+                tracked_y: d.y,
+                tracked_z: d.z,
+                tracked_scale: d.scale,
+                tracked_rotation_z: d.rotation_z,
+                settings: d,
+            }
+        }
+    })
+}
+
 pub(crate) fn object_state(s: &Session, id: u64) -> Result<Object3DState, MobileError> {
     let (_, seq) = model::sequence(s)?;
-    let c = seq.find_item(ClipId(id)).map(|(_, c)| c).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
-    let t = c.effect_time_at(s.playhead());
-    let center = (f64::from(seq.settings.width) / 2.0, f64::from(seq.settings.height) / 2.0);
-    Ok(match c.effects.iter().find(|e| e.effect == OBJECT3D) {
-        Some(e) => Object3DState { clip: id, has_object: true, animated: object_animated(e), settings: object_settings(e, t, center) },
-        None => Object3DState { clip: id, has_object: false, animated: false, settings: Object3DSettings::default() },
-    })
+    object_state_at(seq, id, s.playhead()).ok_or_else(|| MobileError::Command("That clip is gone.".into()))
 }
 
 pub(crate) fn set_object(s: &mut Session, id: u64, st: &Object3DSettings, merge: Option<&str>) -> Result<(), MobileError> {
     let t = s.playhead();
     edit_seq(s, "Edit 3D Object", merge, |q| {
+        let (prev_follow, prev_tid, prev_td) = {
+            let c = clip_mut(q, id)?;
+            let mt = c.effect_time_at(t);
+            let e = effect_mut(c, OBJECT3D)?;
+            (
+                bool_at(e, "follow_track", false),
+                f_at(e, "track_id", mt, 0.0).max(0.0) as u64,
+                f_at(e, "track_depth", mt, 240.0),
+            )
+        };
+        let mut adjusted = st.clone();
+        // When toggling `follow_track` or switching `track_id` at a non-zero playhead, rebase the
+        // object's stored pose so it stays visually locked at its current on-screen spot!
+        if (prev_follow != st.follow_track || (st.follow_track && prev_tid != st.track_id))
+            && (prev_tid != 0 || st.track_id != 0)
+        {
+            let screen_pose = if prev_follow && prev_tid != 0 {
+                forward_track_2d(
+                    q,
+                    prev_tid,
+                    t,
+                    (adjusted.x, adjusted.y, adjusted.z, adjusted.scale, adjusted.rotation_z),
+                    prev_td,
+                )
+            } else {
+                (adjusted.x, adjusted.y, adjusted.z, adjusted.scale, adjusted.rotation_z)
+            };
+            let (nx, ny, nz, nsc, nrz) = if adjusted.follow_track && adjusted.track_id != 0 {
+                inverse_track_2d(q, adjusted.track_id, t, screen_pose, adjusted.track_depth)
+            } else {
+                screen_pose
+            };
+            adjusted.x = nx;
+            adjusted.y = ny;
+            adjusted.z = nz;
+            adjusted.scale = nsc;
+            adjusted.rotation_z = nrz;
+        }
         let c = clip_mut(q, id)?;
         let mt = c.effect_time_at(t);
         let e = effect_mut(c, OBJECT3D)?;
-        write_object(e, st, mt);
+        write_object(e, &adjusted, mt);
         Ok(())
     })
 }
@@ -891,8 +1064,8 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
         };
         samples.push(filmcraft_project::TrackSample {
             time: t - c.start,
-            x: ((vx as f32 + p.x) / full_w as f32).clamp(0.0, 1.0),
-            y: ((vy as f32 + p.y) / full_h as f32).clamp(0.0, 1.0),
+            x: ((vx as f32 + p.x) / full_w as f32).clamp(-64.0, 64.0),
+            y: ((vy as f32 + p.y) / full_h as f32).clamp(-64.0, 64.0),
             z: p.z,
             scale: p.scale,
             rotation: p.rotation,
@@ -1059,52 +1232,6 @@ struct SolveWorkerArgs {
     opts: SolveOptions,
 }
 
-fn pick_2d_track_target(g: &Gray) -> (f32, f32) {
-    let (w, h) = (g.w, g.h);
-    if w < 16 || h < 16 {
-        return (w as f32 * 0.5, h as f32 * 0.5);
-    }
-    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
-    let x0 = (w / 5).max(3);
-    let x1 = ((w * 4) / 5).min(w.saturating_sub(4));
-    let y0 = (h / 5).max(3);
-    let y1 = ((h * 4) / 5).min(h.saturating_sub(4));
-    let norm = (cx * cx + cy * cy).max(1.0);
-    let mut best = (0.0f32, cx, cy);
-
-    let mut y = y0;
-    while y <= y1 {
-        let mut x = x0;
-        while x <= x1 {
-            let (mut sxx, mut syy, mut sxy) = (0.0f32, 0.0f32, 0.0f32);
-            for dy in -2i32..=2 {
-                let py = (y as i32 + dy) as usize;
-                for dx in -2i32..=2 {
-                    let px = (x as i32 + dx) as usize;
-                    let gx = 0.5 * (g.p[py * w + px + 1] - g.p[py * w + px - 1]);
-                    let gy = 0.5 * (g.p[(py + 1) * w + px] - g.p[(py - 1) * w + px]);
-                    sxx += gx * gx;
-                    syy += gy * gy;
-                    sxy += gx * gy;
-                }
-            }
-            let tr = sxx + syy;
-            let det_disc = ((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy).sqrt();
-            let lambda_min = 0.5 * (tr - det_disc);
-            let rx = x as f32 - cx;
-            let ry = y as f32 - cy;
-            let weight = 1.0 / (1.0 + 1.5 * ((rx * rx + ry * ry) / norm));
-            let score = lambda_min * weight;
-            if score > best.0 {
-                best = (score, x as f32, y as f32);
-            }
-            x += 4;
-        }
-        y += 4;
-    }
-    (best.1, best.2)
-}
-
 fn frame_has_visual_detail(rgba: &[u8], w: usize, h: usize) -> bool {
     if w < 4 || h < 4 || rgba.len() < w.saturating_mul(h).saturating_mul(4) {
         return false;
@@ -1144,161 +1271,52 @@ fn clip_has_trackable_texture(args: &SolveWorkerArgs) -> bool {
 }
 
 fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: usize) -> Result<SolveWorkerOutcome, String> {
-    job.set(0.55, Some("2D footage detected — switching to 2D tracking…"));
+    job.set(0.55, Some("2D footage detected — solving 2D camera space…"));
     let working_side = match args.opts.layout {
-        filmcraft_project::StereoLayout::Mono => 640,
-        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1280,
+        filmcraft_project::StereoLayout::Mono => 512,
+        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1024,
     };
-    let mut tracker: Option<Tracker> = None;
-    let mut samples: Vec<filmcraft_project::TrackSample> = Vec::new();
-    let mut t = args.win_start;
+    let cam2d_opts = Camera2DOptions {
+        stereo: args.opts.layout,
+        playhead: args.opts.playhead,
+        cut_sensitivity: 0.5,
+    };
     let mut idx = 0usize;
-
-    // Peek a frame ~6 steps ahead so if the background is static while a 2D foreground subject moves,
-    // target selection prefers a high-contrast corner that actually exhibits motion.
-    let probe_t = (args.win_start + Tick(args.frame_step.0.saturating_mul(6))).min(args.win_end - args.frame_step);
-    let probe_gray = if probe_t > args.win_start {
-        args.source
-            .video_frame(FrameRequest { time: args.clip.source_time_at(probe_t), scale: args.scale })
-            .ok()
-            .map(|pf| {
-                let (pw, ph, prgba) = pf.to_rgba8_max_side(working_side);
-                let (vx, vy, vw, vh) = view_rect(args.opts.layout, pw, ph);
-                if vx == 0 && vy == 0 && vw == pw && vh == ph {
-                    Gray::from_rgba8(&prgba, pw, ph)
-                } else {
-                    let full = Gray::from_rgba8(&prgba, pw, ph);
-                    let mut sub = vec![0.0f32; vw * vh];
-                    for row in 0..vh {
-                        sub[row * vw..(row + 1) * vw]
-                            .copy_from_slice(&full.p[(vy + row) * pw + vx..(vy + row) * pw + vx + vw]);
-                    }
-                    Gray { w: vw, h: vh, p: sub }
-                }
-            })
-    } else {
-        None
-    };
-
-    while t < args.win_end && samples.len() < 2000 {
-        if job.cancelled() {
-            return Err("cancelled".to_string());
+    let solved = solve_2d_camera_space(&cam2d_opts, |sink| {
+        let mut t = args.win_start;
+        while t < args.win_end && idx < 2000 {
+            if job.cancelled() {
+                return Err(Camera2DError::Cancelled);
+            }
+            let st = args.clip.source_time_at(t);
+            let f = args
+                .source
+                .video_frame(FrameRequest { time: st, scale: args.scale })
+                .map_err(|e| Camera2DError::Decode(e.to_string()))?;
+            let (full_w, full_h, rgba) = f.to_rgba8_max_side(working_side);
+            let rel_t = Tick(t.0.saturating_sub(args.clip.start.0));
+            sink(InputFrame {
+                time: rel_t,
+                width: full_w,
+                height: full_h,
+                rgba: &rgba,
+            })?;
+            idx += 1;
+            job.set(0.55 + 0.43 * (idx as f64 / est_frames.max(1) as f64).clamp(0.0, 1.0), None);
+            t += args.frame_step;
         }
-        let st = args.clip.source_time_at(t);
-        let f = args.source.video_frame(FrameRequest { time: st, scale: args.scale }).map_err(|e| e.to_string())?;
-        let (full_w, full_h, rgba) = f.to_rgba8_max_side(working_side);
-        let (vx, vy, vw, vh) = view_rect(args.opts.layout, full_w, full_h);
-        let right_crop = match args.opts.layout {
-            filmcraft_project::StereoLayout::Mono => None,
-            filmcraft_project::StereoLayout::SideBySide => Some((vx + vw, vy, vw, vh)),
-            filmcraft_project::StereoLayout::TopBottom => Some((vx, vy + vh, vw, vh)),
-        };
-        let p = match &mut tracker {
-            None => {
-                // Wait to seed `Tracker` until after any initial fade-from-black frame, unless we are
-                // near the end of the clip window.
-                if !frame_has_visual_detail(&rgba, full_w, full_h) && t + args.frame_step + args.frame_step < args.win_end {
-                    samples.push(filmcraft_project::TrackSample {
-                        time: Tick(t.0.saturating_sub(args.clip.start.0)),
-                        x: 0.5,
-                        y: 0.5,
-                        z: 0.0,
-                        scale: 1.0,
-                        rotation: 0.0,
-                        confidence: 0.0,
-                    });
-                    idx += 1;
-                    t += args.frame_step;
-                    continue;
-                }
-                let full_g = Gray::from_rgba8(&rgba, full_w, full_h);
-                let g0 = if vx == 0 && vy == 0 && vw == full_w && vh == full_h {
-                    full_g
-                } else {
-                    let mut sub = vec![0.0f32; vw * vh];
-                    for row in 0..vh {
-                        sub[row * vw..(row + 1) * vw]
-                            .copy_from_slice(&full_g.p[(vy + row) * full_w + vx..(vy + row) * full_w + vx + vw]);
-                    }
-                    Gray { w: vw, h: vh, p: sub }
-                };
-                let target = pick_2d_track_target_with_probe(&g0, probe_gray.as_ref());
-                let tr = Tracker::new_rgba(&rgba, full_w, full_h, (vx, vy, vw, vh), target, 19, 64.0);
-                let a = tr.anchor();
-                tracker = Some(tr);
-                a
-            }
-            Some(tr) => tr.push_rgba(&rgba, full_w, full_h, (vx, vy, vw, vh), right_crop),
-        };
-        samples.push(filmcraft_project::TrackSample {
-            time: Tick(t.0.saturating_sub(args.clip.start.0)),
-            x: ((vx as f32 + p.x) / full_w.max(1) as f32).clamp(0.0, 1.0),
-            y: ((vy as f32 + p.y) / full_h.max(1) as f32).clamp(0.0, 1.0),
-            z: p.z,
-            scale: p.scale,
-            rotation: p.rotation,
-            confidence: p.confidence,
-        });
-        idx += 1;
-        job.set(0.55 + 0.43 * (idx as f64 / est_frames.max(1) as f64).clamp(0.0, 1.0), None);
-        t += args.frame_step;
-    }
-    if samples.len() < 2 {
-        return Err("Not enough frames to track.".to_string());
-    }
-    filmcraft_render::track3d::smooth_track_samples(&mut samples);
-    Ok(SolveWorkerOutcome::Track2D { clip: args.clip.id, clip_start: args.clip.start, samples })
-}
-
-fn pick_2d_track_target_with_probe(g: &Gray, probe: Option<&Gray>) -> (f32, f32) {
-    let base = pick_2d_track_target(g);
-    let Some(p) = probe.filter(|p| p.w == g.w && p.h == g.h) else { return base };
-    let (w, h) = (g.w, g.h);
-    if w < 16 || h < 16 {
-        return base;
-    }
-    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
-    let norm = (cx * cx + cy * cy).max(1.0);
-    let x0 = (w / 6).max(3);
-    let x1 = ((w * 5) / 6).min(w.saturating_sub(4));
-    let y0 = (h / 6).max(3);
-    let y1 = ((h * 5) / 6).min(h.saturating_sub(4));
-    let mut best_moving = (0.0f32, base.0, base.1);
-    let mut y = y0;
-    while y <= y1 {
-        let mut x = x0;
-        while x <= x1 {
-            let (mut sxx, mut syy, mut sxy, mut temporal_diff) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-            for dy in -2i32..=2 {
-                let py = (y as i32 + dy) as usize;
-                for dx in -2i32..=2 {
-                    let px = (x as i32 + dx) as usize;
-                    let idx = py * w + px;
-                    let gx = 0.5 * (g.p[idx + 1] - g.p[idx - 1]);
-                    let gy = 0.5 * (g.p[idx + w] - g.p[idx - w]);
-                    sxx += gx * gx;
-                    syy += gy * gy;
-                    sxy += gx * gy;
-                    temporal_diff += (p.p[idx] - g.p[idx]).abs();
-                }
-            }
-            let mean_diff = temporal_diff / 25.0;
-            let tr = sxx + syy;
-            let det_disc = ((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy).sqrt();
-            let lambda_min = 0.5 * (tr - det_disc);
-            let rx = x as f32 - cx;
-            let ry = y as f32 - cy;
-            let center_w = 1.0 / (1.0 + 1.4 * ((rx * rx + ry * ry) / norm));
-            let motion_boost = if mean_diff > 0.025 { 1.0 + 3.5 * mean_diff.min(0.35) } else { 0.35 };
-            let score = lambda_min * center_w * motion_boost;
-            if score > best_moving.0 {
-                best_moving = (score, x as f32, y as f32);
-            }
-            x += 4;
-        }
-        y += 4;
-    }
-    if best_moving.0 > 1e-4 { (best_moving.1, best_moving.2) } else { base }
+        Ok(())
+    })
+    .map_err(|e| match e {
+        Camera2DError::Cancelled => "cancelled".to_string(),
+        Camera2DError::TooShort => "Not enough frames to track.".to_string(),
+        Camera2DError::Decode(m) => m,
+    })?;
+    Ok(SolveWorkerOutcome::Track2D {
+        clip: args.clip.id,
+        clip_start: args.clip.start,
+        samples: solved.samples,
+    })
 }
 
 fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorkerOutcome, String> {
@@ -1498,8 +1516,9 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
                         Ok(AppliedSolveOutcome::Camera3D(info))
                     })
                     .map_err(|e| e.to_string()),
-                Ok(SolveWorkerOutcome::Track2D { clip, clip_start, samples }) => s
-                    .edit("Switch to 2D Tracking", |p, _| {
+                Ok(SolveWorkerOutcome::Track2D { clip, clip_start, samples }) => {
+                    let ph = s.playhead();
+                    s.edit("Switch to 2D Tracking", |p, _| {
                         let id = p.alloc_id();
                         let q = p.sequence_mut(job.seq).ok_or(EngineError::NoSequence)?;
                         let count = samples.len() as u32;
@@ -1518,12 +1537,38 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
                         if let Some(mm) = q.matchmove.as_mut() {
                             mm.enabled = false;
                         }
-                        for track in &mut q.video_tracks {
-                            for item in &mut track.items {
-                                if let Some(e) = item.effects.iter_mut().find(|e| e.effect == OBJECT3D) {
-                                    set_bool(e, "follow_track", true);
-                                    set_f(e, "track_id", id as f64, Tick::ZERO);
+                        let center = (f64::from(q.settings.width) / 2.0, f64::from(q.settings.height) / 2.0);
+                        // Snapshot each 3D object's current screen pose at `ph` and rebase into the
+                        // new 2D track's anchor frame so objects stay right where the user put them.
+                        let mut rebases: Vec<(ClipId, Tick, (f64, f64, f64, f64, f64))> = Vec::new();
+                        for track in &q.video_tracks {
+                            for item in &track.items {
+                                if let Some(e) = item.effects.iter().find(|e| e.effect == OBJECT3D) {
+                                    let mt = item.effect_time_at(ph);
+                                    let st = object_settings(e, mt, center);
+                                    let screen_pose = if st.follow_track && st.track_id != 0 {
+                                        forward_track_2d(q, st.track_id, ph, (st.x, st.y, st.z, st.scale, st.rotation_z), st.track_depth)
+                                    } else {
+                                        (st.x, st.y, st.z, st.scale, st.rotation_z)
+                                    };
+                                    let anchored = inverse_track_2d(q, id, ph, screen_pose, st.track_depth);
+                                    rebases.push((item.id, mt, anchored));
                                 }
+                            }
+                        }
+                        for (cid, mt, (nx, ny, nz, nsc, nrz)) in rebases {
+                            if let Some((_, item)) = q.find_item_mut(cid)
+                                && let Some(e) = item.effects.iter_mut().find(|e| e.effect == OBJECT3D)
+                            {
+                                if let Some(pos_p) = e.params.get_mut("position") {
+                                    pos_p.set_at(mt, ParamValue::Vec2(filmcraft_geom::Vec2::new(nx, ny)));
+                                }
+                                set_f(e, "z", nz, mt);
+                                set_f(e, "scale", nsc, mt);
+                                set_f(e, "rotation_z", nrz, mt);
+                                set_bool(e, "follow_track", true);
+                                set_f(e, "track_id", id as f64, mt);
+                                set_bool(e, "behind_foreground", true);
                             }
                         }
                         Ok(AppliedSolveOutcome::Track2D(MotionTrackInfo {
@@ -1538,7 +1583,8 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
                             lost,
                         }))
                     })
-                    .map_err(|e| e.to_string()),
+                    .map_err(|e| e.to_string())
+                }
                 Err(e) => Err(e),
             }
         };

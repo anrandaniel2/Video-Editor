@@ -403,7 +403,7 @@ pub(crate) fn track_point(prev: &[Level], next: &[Level], p: (f32, f32), r: i32,
 
 /// Zero-mean normalised correlation over a small patch at the coarsest level: a starting guess
 /// when the motion is larger than the window, or when the last guess lost the target.
-fn search(prev: &[Level], next: &[Level], p: (f32, f32), r: i32, reach: f32) -> Option<(f32, f32)> {
+pub(crate) fn search(prev: &[Level], next: &[Level], p: (f32, f32), r: i32, reach: f32) -> Option<(f32, f32)> {
     let l = prev.len().min(next.len()).checked_sub(1)?;
     let s = (1usize << l) as f32;
     let (a, b) = (&prev[l].img, &next[l].img);
@@ -1058,8 +1058,8 @@ pub fn smooth_track_samples(samples: &mut [filmcraft_project::TrackSample]) {
             sy += w * pred_y;
         }
         if wx_sum > 1e-6 {
-            out.x = (sx / wx_sum).clamp(0.0, 1.0);
-            out.y = (sy / wx_sum).clamp(0.0, 1.0);
+            out.x = (sx / wx_sum).clamp(-64.0, 64.0);
+            out.y = (sy / wx_sum).clamp(-64.0, 64.0);
         }
 
         let (mut wz_sum, mut sz, mut ssc, mut srot_sin, mut srot_cos) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);

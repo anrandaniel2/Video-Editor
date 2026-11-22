@@ -15,7 +15,7 @@ use filmcraft_time::{FrameRate, Tick};
 
 use crate::{
     Frame, MobileError,
-    advanced::{MatchMovePose, SceneCamera3d, matchmove_pose_at},
+    advanced::{MatchMovePose, Object3DState, SceneCamera3d, matchmove_pose_at, object_state_at},
 };
 
 /// The largest side a picture may be asked for: a 4K frame's long side.
@@ -177,6 +177,14 @@ impl Renderer {
         let t = self.rate.snap(Tick(time.max(0)));
         let seq = self.project.sequence(self.seq)?;
         matchmove_pose_at(seq, t)
+    }
+
+    /// Evaluated 3D object state (including 2D motion-tracked screen pose) at `time`, read
+    /// lock-free from the snapshot so 3D gizmos stay aligned during scrubbing and playback.
+    pub fn object3d_state_at(&self, clip: u64, time: i64) -> Option<Object3DState> {
+        let t = self.rate.snap(Tick(time.max(0)));
+        let seq = self.project.sequence(self.seq)?;
+        object_state_at(seq, clip, t)
     }
 
     /// The program at `time` (ticks, snapped to a frame) with its long side at most `max_side`.

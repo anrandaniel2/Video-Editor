@@ -556,16 +556,21 @@ class EditorController(
                 else -> previewSide
             }
             val started = System.nanoTime()
-            val (frame, pose) = withContext(engine.preview) {
+            val objClipId = if (!liveEditing) object3DState?.clip else null
+            val (frame, pose, objAtTime) = withContext(engine.preview) {
                 val f = runCatching { r.frame(req.time, side.toUInt(), req.draft, null) }.getOrNull()
                 val p = runCatching { r.matchmovePose(req.time) }.getOrNull()
-                f to p
+                val o = objClipId?.let { cid -> runCatching { r.object3dStateAt(cid, req.time) }.getOrNull() }
+                Triple(f, p, o)
             }
             if (frame == null) return@collect
             val bmp = frame.intoBitmap(bitmaps[nextBitmap]) ?: return@collect
             bitmaps[nextBitmap] = bmp
             nextBitmap = 1 - nextBitmap
             matchmovePose = pose
+            if (!liveEditing && objAtTime != null && object3DState?.clip == objAtTime.clip) {
+                object3DState = objAtTime
+            }
             picture = bmp.asImageBitmap()
             if (req.interactive) {
                 val elapsed = System.nanoTime() - started
@@ -1227,12 +1232,30 @@ class EditorController(
         applyScenePreviewCamera()
     }
 
+    /** If the sequence was auto-switched to 2D camera tracking (and 3D Match-Move is off),
+     * bind newly added 3D objects to that 2D camera track and enable foreground occlusion.
+     */
+    private suspend fun autoAttach2dTrackIfActive(objectId: ULong) {
+        if (matchmoveActive) return
+        val tracks = runCatching { engine.command { motionTracks() } }.getOrDefault(emptyList())
+        val auto2d = tracks.lastOrNull { it.name.startsWith("2D Track ") } ?: return
+        val st = runCatching { engine.command { object3dState(objectId) } }.getOrNull() ?: return
+        if (!st.hasObject) return
+        val updated = st.settings.copy(
+            followTrack = true,
+            trackId = auto2d.id,
+            behindForeground = true,
+        )
+        runCatching { engine.command { setObject3d(objectId, updated, null) } }
+    }
+
     /** Add the 3D object without leaving the scene workspace. */
     fun addObjectInScene(mesh: Object3DMesh) {
         stop()
         scope.launch {
             try {
                 val id = engine.command { addObject3d(mesh) }
+                autoAttach2dTrackIfActive(id)
                 refresh()
                 loadObject3D(id)
             } catch (e: Exception) { host.tell(e.userMessage) }
@@ -1284,6 +1307,7 @@ class EditorController(
         scope.launch {
             try {
                 val id = engine.command { addObject3d(mesh) }
+                autoAttach2dTrackIfActive(id)
                 refresh()
                 panel = Panel.Object3D
                 loadObject3D(id)
@@ -1301,6 +1325,7 @@ class EditorController(
                 try {
                     val path = withContext(Dispatchers.IO) { projects.importUri(project, uri).absolutePath }
                     val id = engine.command { addModel(path) }
+                    autoAttach2dTrackIfActive(id)
                     refresh()
                     panel = Panel.Object3D
                     loadObject3D(id)
@@ -1315,7 +1340,34 @@ class EditorController(
 
     fun setObject(settings: Object3DSettings, merge: String? = null) {
         val c = selectedClip ?: return
-        object3DState = object3DState?.copy(settings = settings)
+        val prev = object3DState
+        object3DState = if (prev != null) {
+            if (settings.followTrack && settings.trackId != 0uL && prev.settings.followTrack && prev.settings.trackId == settings.trackId) {
+                val relScale = (prev.trackedScale / prev.settings.scale.coerceAtLeast(0.01)).coerceAtLeast(0.01)
+                val dtheta = prev.trackedRotationZ - prev.settings.rotationZ
+                val rad = Math.toRadians(dtheta)
+                val dx = settings.x - prev.settings.x
+                val dy = settings.y - prev.settings.y
+                val dz = settings.z - prev.settings.z
+                prev.copy(
+                    settings = settings,
+                    trackedX = prev.trackedX + relScale * (kotlin.math.cos(rad) * dx - kotlin.math.sin(rad) * dy),
+                    trackedY = prev.trackedY + relScale * (kotlin.math.sin(rad) * dx + kotlin.math.cos(rad) * dy),
+                    trackedZ = prev.trackedZ + dz,
+                    trackedScale = settings.scale * relScale,
+                    trackedRotationZ = settings.rotationZ + dtheta,
+                )
+            } else {
+                prev.copy(
+                    settings = settings,
+                    trackedX = settings.x,
+                    trackedY = settings.y,
+                    trackedZ = settings.z,
+                    trackedScale = settings.scale,
+                    trackedRotationZ = settings.rotationZ,
+                )
+            }
+        } else null
         stop()
         queueLiveEdit("object:${c.id}") { setObject3d(c.id, settings, merge) }
     }
@@ -1338,6 +1390,7 @@ class EditorController(
         scope.launch {
             try {
                 val id = engine.command { extrudeText(c.id, depth, bevel) }
+                autoAttach2dTrackIfActive(id)
                 refresh()
                 panel = Panel.Object3D
                 loadObject3D(id)
@@ -1532,8 +1585,18 @@ class EditorController(
     }
 
     fun followTrack(trackId: ULong, follow: Boolean) {
+        val c = selectedClip ?: return
         val st = object3DState?.settings ?: return
-        setObject(st.copy(followTrack = follow, trackId = trackId))
+        stop()
+        scope.launch {
+            try {
+                engine.command { setObject3d(c.id, st.copy(followTrack = follow, trackId = trackId), null) }
+                loadObject3D(c.id)
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
     }
 
     // ---- 3D camera match-move ----
@@ -1603,6 +1666,7 @@ class EditorController(
             host.tell("Add or select a video clip to solve 3D camera motion.")
             return
         }
+        val prior3dId = selectedClip?.takeIf { it.has3d }?.id
         stop()
         cameraSolveProgress = CameraSolveStatus(0.0, "Preparing footage…", false, null, null, null)
         scope.launch {
@@ -1621,12 +1685,16 @@ class EditorController(
                             st.error != null -> host.tell(st.error ?: "")
                             track2d != null -> {
                                 switchedTo2d = true
-                                engine.command { select(target) }
+                                if (prior3dId != null) {
+                                    engine.command { select(prior3dId) }
+                                } else {
+                                    engine.command { select(target) }
+                                }
                                 selectedTrackId = track2d.id
                                 trackingLayout = StereoLayout.MONO
                                 loadTracks()
                                 host.tell(
-                                    "2D video detected — switched to 2D motion tracking (${track2d.samples} frames · ${track2d.quality.toInt()}% lock).",
+                                    "2D clip detected — locked to 2D background space & behind foreground (${track2d.samples} frames · ${track2d.quality.toInt()}% lock).",
                                 )
                             }
                             s != null -> {
@@ -1652,7 +1720,12 @@ class EditorController(
             loadMatchMove()
             refresh()
             if (switchedTo2d) {
-                panel = Panel.Tracking
+                if (prior3dId != null) {
+                    loadObject3D(prior3dId)
+                    panel = Panel.Object3D
+                } else {
+                    panel = Panel.Tracking
+                }
             }
         }
     }

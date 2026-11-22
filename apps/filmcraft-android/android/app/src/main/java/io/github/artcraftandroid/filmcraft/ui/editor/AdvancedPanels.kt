@@ -245,6 +245,31 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
     AdvancedSlider("Camera distance", st.z, 50.0, 3000.0, 5.0, "object3d_z") { v, k -> change((ed.object3DState?.settings ?: st).copy(z = v), k) }
     AdvancedSlider("X", st.x, -2000.0, 4000.0, 1.0, "object3d_x") { v, k -> change((ed.object3DState?.settings ?: st).copy(x = v), k) }
     AdvancedSlider("Y", st.y, -2000.0, 4000.0, 1.0, "object3d_y") { v, k -> change((ed.object3DState?.settings ?: st).copy(y = v), k) }
+    Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), verticalAlignment = Alignment.CenterVertically) {
+        Text("Behind foreground", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+        Switch(
+            checked = st.behindForeground,
+            onCheckedChange = { change((ed.object3DState?.settings ?: st).copy(behindForeground = it)) },
+            colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+            modifier = Modifier.testTag("object3d_behind_foreground"),
+        )
+    }
+    if (st.behindForeground) {
+        AdvancedSlider("Foreground sensitivity", st.foregroundOcclusion, 0.0, 100.0, 1.0, "object3d_foreground_occlusion") { v, k ->
+            change((ed.object3DState?.settings ?: st).copy(foregroundOcclusion = v), k)
+        }
+    }
+    if (ed.motionTracks.isNotEmpty()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), verticalAlignment = Alignment.CenterVertically) {
+            Text("Follow 2D camera / motion track", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+            Switch(
+                checked = st.followTrack,
+                onCheckedChange = { ed.followTrack(ed.selectedTrackId, it) },
+                colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                modifier = Modifier.testTag("object3d_follow_transform"),
+            )
+        }
+    }
     }
     if (section == "Surface") {
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))

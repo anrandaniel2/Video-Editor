@@ -29,16 +29,34 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
     val clip=ed.selectedClip ?: return
     val state=ed.object3DState?.takeIf {it.clip==clip.id && it.hasObject} ?: return
     var active by remember(clip.id) {mutableStateOf<GizmoHit?>(null)}
+    val latestState by rememberUpdatedState(state)
     val settings by rememberUpdatedState(state.settings)
     val transform by rememberUpdatedState(placement)
+    fun effectiveOf(s:Object3DSettings,st:io.github.artcraftandroid.filmcraft.core.Object3DState):Object3DSettings=
+        if(s.followTrack && s.trackId!=0uL) {
+            val relScale=(st.trackedScale/st.settings.scale.coerceAtLeast(0.01)).coerceAtLeast(0.01)
+            val dthetaDeg=st.trackedRotationZ-st.settings.rotationZ
+            val rad=Math.toRadians(dthetaDeg)
+            val dx=s.x-st.settings.x
+            val dy=s.y-st.settings.y
+            val dz=s.z-st.settings.z
+            s.copy(
+                x=st.trackedX+relScale*(cos(rad)*dx-sin(rad)*dy),
+                y=st.trackedY+relScale*(sin(rad)*dx+cos(rad)*dy),
+                z=st.trackedZ+dz,
+                scale=(s.scale*relScale).coerceIn(0.1,10000.0),
+                rotationZ=s.rotationZ+dthetaDeg,
+            )
+        } else s
     Box(modifier.testTag("object3d_gizmo")) {
         Canvas(Modifier.fillMaxSize().pointerInput(clip.id,fw,fh) {
             fun geometry(s:Object3DSettings)=GizmoGeometry(s,transform,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble(),viewFor(ed,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble()))
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false)
                 if(down.isConsumed)return@awaitEachGesture
+                val stSnap=latestState
                 var current=settings
-                val initial=geometry(current)
+                val initial=geometry(effectiveOf(current,stSnap))
                 active=initial.hitGizmo(down.position,16.dp.toPx())
                 if(active!=null) {ed.stop();down.consume()}
                 var previous=down.position
@@ -80,9 +98,24 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                     val delta=point-previous;total+=delta
                     if(!changed && total.getDistance()<viewConfiguration.touchSlop) {previous=point;continue}
                     val drag=if(!changed)total else delta
+                    val eff=effectiveOf(current,stSnap)
                     current=when(hit.kind) {
-                        GizmoMode.Move -> geometry(current).move(current,hit.axis,drag)
-                        GizmoMode.Rotate -> rotateGizmoLocal(current,hit.axis,geometry(current).rotationDelta(hit.axis,point-drag,drag))
+                        GizmoMode.Move -> {
+                            val movedEff=geometry(eff).move(eff,hit.axis,drag)
+                            val dxScreen=movedEff.x-eff.x
+                            val dyScreen=movedEff.y-eff.y
+                            val dzScreen=movedEff.z-eff.z
+                            if(current.followTrack && current.trackId!=0uL) {
+                                val relScale=(stSnap.trackedScale/stSnap.settings.scale.coerceAtLeast(0.01)).coerceAtLeast(0.01)
+                                val rad=Math.toRadians(stSnap.trackedRotationZ-stSnap.settings.rotationZ)
+                                val dxAnc=(cos(rad)*dxScreen+sin(rad)*dyScreen)/relScale
+                                val dyAnc=(-sin(rad)*dxScreen+cos(rad)*dyScreen)/relScale
+                                current.copy(x=current.x+dxAnc,y=current.y+dyAnc,z=(current.z+dzScreen).coerceIn(20.0,20000.0))
+                            } else {
+                                current.copy(x=movedEff.x,y=movedEff.y,z=movedEff.z)
+                            }
+                        }
+                        GizmoMode.Rotate -> rotateGizmoLocal(current,hit.axis,geometry(eff).rotationDelta(hit.axis,point-drag,drag))
                     }
                     previous=point
                     ed.setObject(current,token);changed=true
@@ -92,7 +125,8 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
             }
         }) {
             if (size.width <= 0f || size.height <= 0f || fw <= 0f || fh <= 0f) return@Canvas
-            val geometry=GizmoGeometry(settings,placement,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble(),viewFor(ed,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble()))
+            val effDraw=effectiveOf(settings,latestState)
+            val geometry=GizmoGeometry(effDraw,placement,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble(),viewFor(ed,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble()))
             for((kind,face) in geometry.fusedFaces()) {
                 val base=axisColors[face.axis]
                 val brightness=if(active?.kind==kind && active?.axis==face.axis)1f else face.brightness.takeIf { it.isFinite() }?.coerceIn(0f,1f) ?: 0.4f

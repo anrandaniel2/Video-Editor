@@ -76,6 +76,16 @@ pub trait FxEnv: Sync {
     fn scene_camera(&self) -> Option<filmcraft_project::SceneCamera3D> {
         None
     }
+    /// Composite of enabled video tracks strictly below this item at the current moment,
+    /// sized to the working layer. Used for foreground subject occlusion matting.
+    fn underlying_video(&self) -> Option<Image> {
+        None
+    }
+    /// Underlying video `dt` timeline seconds away, warped into the current moment's 2D camera
+    /// space when a motion track is available. Returns `(warped_image, valid_mask_affine)`.
+    fn underlying_video_warped(&self, _dt: f64, _track_id: Option<u64>) -> Option<Image> {
+        None
+    }
 }
 
 /// The environment of a track item being rendered by [`crate::item_layer`].
@@ -190,6 +200,105 @@ impl FxEnv for ItemEnv<'_> {
         crate::preview_camera()
             .or_else(|| self.seq.matchmove_camera_at(self.t))
             .or_else(|| self.seq.scene_camera_at(self.t))
+    }
+    fn underlying_video(&self) -> Option<Image> {
+        if self.opts.solo_3d || self.opts.depth >= 2 {
+            return None;
+        }
+        let my_ti = self
+            .seq
+            .video_tracks
+            .iter()
+            .position(|tr| tr.items.iter().any(|i| i.id == self.item.id))?;
+        if my_ti == 0 {
+            return self
+                .source_frame(0.0, self.want)
+                .map(|img| resize(img, self.layer_size.0, self.layer_size.1));
+        }
+        let bg_ti = (0..my_ti).rev().find(|&ti| {
+            let tr = &self.seq.video_tracks[ti];
+            tr.enabled && tr.item_at(self.t).is_some_and(|it| it.enabled)
+        })?;
+        let o = RenderOptions {
+            captions: false,
+            working_output: true,
+            depth: self.opts.depth + 1,
+            ..self.opts
+        };
+        let rendered = crate::render_seq_tracks(self.project, self.seq, self.t, o, self.sources, Some(bg_ti));
+        Some(resize(rendered, self.layer_size.0, self.layer_size.1))
+    }
+    fn underlying_video_warped(&self, dt: f64, track_id: Option<u64>) -> Option<Image> {
+        if self.opts.solo_3d || self.opts.depth >= 2 {
+            return None;
+        }
+        let t_ref = self.t + Tick::from_seconds_f64(dt);
+        if t_ref.0 < 0 || t_ref == self.t {
+            return None;
+        }
+        let my_ti = self
+            .seq
+            .video_tracks
+            .iter()
+            .position(|tr| tr.items.iter().any(|i| i.id == self.item.id))?;
+        let raw_ref = if my_ti == 0 {
+            self.source_frame(dt, self.want)
+                .map(|img| resize(img, self.layer_size.0, self.layer_size.1))?
+        } else {
+            let bg_ti = (0..my_ti).rev().find(|&ti| {
+                let tr = &self.seq.video_tracks[ti];
+                tr.enabled && tr.item_at(self.t).is_some_and(|it| it.enabled) && tr.item_at(t_ref).is_some_and(|it| it.enabled)
+            })?;
+            // Require the same underlying clip across `t` and `t_ref` so we never warp across a cut.
+            let it_now = self.seq.video_tracks[bg_ti].item_at(self.t)?;
+            let it_ref = self.seq.video_tracks[bg_ti].item_at(t_ref)?;
+            if it_now.id != it_ref.id {
+                return None;
+            }
+            let o = RenderOptions {
+                captions: false,
+                working_output: true,
+                depth: self.opts.depth + 1,
+                ..self.opts
+            };
+            let rendered = crate::render_seq_tracks(self.project, self.seq, t_ref, o, self.sources, Some(bg_ti));
+            resize(rendered, self.layer_size.0, self.layer_size.1)
+        };
+
+        let (w, h) = (raw_ref.w, raw_ref.h);
+        let track = track_id
+            .filter(|&id| id != 0)
+            .and_then(|id| self.seq.motion_tracks.iter().find(|tr| tr.id == id))
+            .or_else(|| self.seq.motion_tracks.last());
+        if let Some(tr) = track {
+            let start = self.seq.find_item(tr.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
+            let rel_now = self.t - start;
+            let rel_ref = t_ref - start;
+            if let (Some(first), Some(last), Some(s_now), Some(s_ref)) =
+                (tr.samples.first(), tr.samples.last(), tr.sample_at(rel_now), tr.sample_at(rel_ref))
+                && rel_ref >= first.time
+                && rel_ref <= last.time
+            {
+                let rel_s = f64::from(s_now.scale.max(0.01) / s_ref.scale.max(0.01));
+                let dtheta = f64::from(s_now.rotation - s_ref.rotation).to_radians();
+                let a = rel_s * dtheta.cos();
+                let b = rel_s * dtheta.sin();
+                let sx_now = f64::from(s_now.x) * w as f64;
+                let sy_now = f64::from(s_now.y) * h as f64;
+                let sx_ref = f64::from(s_ref.x) * w as f64;
+                let sy_ref = f64::from(s_ref.y) * h as f64;
+                let m = Affine {
+                    a,
+                    b,
+                    c: -b,
+                    d: a,
+                    e: sx_now - (a * sx_ref - b * sy_ref),
+                    f: sy_now - (b * sx_ref + a * sy_ref),
+                };
+                return Some(raw_ref.transformed(w, h, &m));
+            }
+        }
+        Some(raw_ref)
     }
     fn clip_key(&self) -> u64 {
         let mut h = 0xcbf2_9ce4_8422_2325u64;
