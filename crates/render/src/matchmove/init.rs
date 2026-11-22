@@ -69,10 +69,11 @@ struct EssentialInit {
 struct RotationInit {
     inliers: usize,
     median_err_px: f64,
+    all_median_err_px: f64,
 }
 
 /// Build an initial [`SceneModel`] (either 6-DOF or `rotation_only`) across all shot frames.
-pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, cancel: &dyn Fn() -> bool) -> Result<SceneModel, SolveError> {
+pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: bool, cancel: &dyn Fn() -> bool) -> Result<SceneModel, SolveError> {
     let cx = shot.width as f64 * 0.5;
     let cy = shot.height as f64 * 0.5;
     let nominal_focal = (shot.height as f64 * 0.5) / (f64::from(CLASSIC_FOV).to_radians() * 0.5).tan();
@@ -85,6 +86,9 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, cancel: &
     let (h_mat, h_inliers) = ransac_homography(&matches);
     let seeds: &[f64] = if refine_focal { &[1.0, 0.88, 1.15, 0.80, 1.24] } else { &[1.0] };
     let (focal, rot_cand, ess_cand) = best_focal_hypothesis(&matches, h_mat, (cx, cy, nominal_focal), seeds, cancel)?;
+    if is_mono && is_planar_2d_motion(&matches, (cx, cy), rot_cand.as_ref()) {
+        return Err(SolveError::Planar2DVideo);
+    }
     let n = matches.len();
     let h_dom = h_inliers * 100 >= n * 40 && h_inliers >= 40.min((n * 2) / 3);
 
@@ -298,13 +302,16 @@ fn estimate_pair_rotation(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, c
     }
 
     let mut errs = Vec::new();
+    let mut all_errs = Vec::with_capacity(matches.len());
     let mut inliers = 0usize;
     for m in matches {
         let q = mat3_mul_vec(r, [(m.p1.0 - cx) / f, (m.p1.1 - cy) / f, 1.0]);
         if q[2] <= 1e-5 {
+            all_errs.push(1e6);
             continue;
         }
         let err = (cx + f * q[0] / q[2] - m.p2.0).hypot(cy + f * q[1] / q[2] - m.p2.1);
+        all_errs.push(err);
         if err <= 2.2 {
             inliers += 1;
             errs.push(err);
@@ -314,7 +321,135 @@ fn estimate_pair_rotation(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, c
         return None;
     }
     let median_err_px = median_f64(&mut errs);
-    (median_err_px <= 2.0).then_some(RotationInit { inliers, median_err_px })
+    let all_median_err_px = median_f64(&mut all_errs);
+    (median_err_px <= 2.0).then_some(RotationInit { inliers, median_err_px, all_median_err_px })
+}
+
+/// Detect flat 2D footage (screen recordings, 2D Ken Burns pan/zoom/spin, or locked-off static
+/// plates) by testing whether a single 4-DOF 2D similarity transform
+/// `(u' - cx, v' - cy) = (a x - b y + tx, b x + a y + ty)` explains the global correspondence
+/// field without 3D depth relief or 3D perspective keystone foreshortening (`H = K R K⁻¹`).
+fn is_planar_2d_motion(matches: &[PairMatch], (cx, cy): (f64, f64), rot_cand: Option<&RotationInit>) -> bool {
+    let n = matches.len();
+    if n < 12 {
+        return false;
+    }
+    let mut disps: Vec<f64> = matches.iter().map(|m| (m.p2.0 - m.p1.0).hypot(m.p2.1 - m.p1.1)).collect();
+    let median_disp = median_f64(&mut disps);
+
+    let pts: Vec<(f64, f64, f64, f64)> = matches.iter().map(|m| (m.p1.0 - cx, m.p1.1 - cy, m.p2.0 - cx, m.p2.1 - cy)).collect();
+    let tol = 1.4f64;
+    let mut rng = Rng::new(0x3244_5349_4d32_3032);
+    let mut best_model = (1.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut best_mask = vec![false; n];
+    let mut best_inliers = 0usize;
+
+    for _ in 0..RANSAC_ITERS {
+        let Some([i, j]) = rng.sample_indices::<2>(n) else { break };
+        let (x1i, y1i, x2i, y2i) = pts[i];
+        let (x1j, y1j, x2j, y2j) = pts[j];
+        let dx1 = x1j - x1i;
+        let dy1 = y1j - y1i;
+        let denom = dx1 * dx1 + dy1 * dy1;
+        if denom < 144.0 {
+            continue;
+        }
+        let dx2 = x2j - x2i;
+        let dy2 = y2j - y2i;
+        let a = (dx1 * dx2 + dy1 * dy2) / denom;
+        let b = (dx1 * dy2 - dy1 * dx2) / denom;
+        let scale = a.hypot(b);
+        if !(0.25..=4.0).contains(&scale) {
+            continue;
+        }
+        let tx = x2i - (a * x1i - b * y1i);
+        let ty = y2i - (b * x1i + a * y1i);
+        let mut count = 0usize;
+        let mut mask = vec![false; n];
+        for (k, &(x1, y1, x2, y2)) in pts.iter().enumerate() {
+            let err = (a * x1 - b * y1 + tx - x2).hypot(b * x1 + a * y1 + ty - y2);
+            if err <= tol {
+                count += 1;
+                mask[k] = true;
+            }
+        }
+        if count > best_inliers {
+            best_inliers = count;
+            best_mask = mask;
+            best_model = (a, b, tx, ty);
+        }
+    }
+
+    if best_inliers >= 4
+        && let Some(refined) = refine_similarity_2d(&pts, &best_mask)
+    {
+        best_model = refined;
+    }
+
+    let (a, b, tx, ty) = best_model;
+    let mut all_errs = Vec::with_capacity(n);
+    let mut final_inliers = 0usize;
+    for &(x1, y1, x2, y2) in &pts {
+        let err = (a * x1 - b * y1 + tx - x2).hypot(b * x1 + a * y1 + ty - y2);
+        if err <= tol {
+            final_inliers += 1;
+        }
+        all_errs.push(err);
+    }
+    let inlier_ratio = final_inliers as f64 / n as f64;
+    let sim_all_med = median_f64(&mut all_errs);
+    if inlier_ratio < 0.84 || sim_all_med > 1.25 {
+        return false;
+    }
+
+    let sim_scale = a.hypot(b);
+    if median_disp < 1.5 || (sim_scale - 1.0).abs() >= 0.015 {
+        return true;
+    }
+    rot_cand.is_none_or(|rot| sim_all_med + 0.08 < rot.all_median_err_px)
+}
+
+fn refine_similarity_2d(pts: &[(f64, f64, f64, f64)], mask: &[bool]) -> Option<(f64, f64, f64, f64)> {
+    let mut cnt = 0usize;
+    let (mut mx1, mut my1, mut mx2, mut my2) = (0.0, 0.0, 0.0, 0.0);
+    for (&(x1, y1, x2, y2), &keep) in pts.iter().zip(mask) {
+        if keep {
+            mx1 += x1;
+            my1 += y1;
+            mx2 += x2;
+            my2 += y2;
+            cnt += 1;
+        }
+    }
+    if cnt < 2 {
+        return None;
+    }
+    let inv = 1.0 / cnt as f64;
+    mx1 *= inv;
+    my1 *= inv;
+    mx2 *= inv;
+    my2 *= inv;
+
+    let (mut sum_r2, mut num_a, mut num_b) = (0.0, 0.0, 0.0);
+    for (&(x1, y1, x2, y2), &keep) in pts.iter().zip(mask) {
+        if keep {
+            let ux1 = x1 - mx1;
+            let uy1 = y1 - my1;
+            let ux2 = x2 - mx2;
+            let uy2 = y2 - my2;
+            sum_r2 += ux1 * ux1 + uy1 * uy1;
+            num_a += ux1 * ux2 + uy1 * uy2;
+            num_b += ux1 * uy2 - uy1 * ux2;
+        }
+    }
+    if sum_r2 <= 1e-6 {
+        return None;
+    }
+    let a = num_a / sum_r2;
+    let b = num_b / sum_r2;
+    let tx = mx2 - (a * mx1 - b * my1);
+    let ty = my2 - (b * mx1 + a * my1);
+    Some((a, b, tx, ty))
 }
 
 fn wahba_rotation(rays: &[(Vec3, Vec3)], mask: Option<&[bool]>) -> Option<Mat3> {

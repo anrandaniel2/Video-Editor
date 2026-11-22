@@ -183,7 +183,7 @@ impl FxEnv for ItemEnv<'_> {
         Some((track.sample_at(self.t - start)?, anchor))
     }
     fn scene_lighting(&self) -> filmcraft_project::SceneLighting {
-        self.seq.scene_lighting.clone()
+        self.seq.scene_lighting.evaluated_at(self.t)
     }
     fn scene_camera(&self) -> Option<filmcraft_project::SceneCamera3D> {
         // the editor's grid/orbit preview camera wins over the sequence's match-move and static camera

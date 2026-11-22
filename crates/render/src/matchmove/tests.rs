@@ -669,3 +669,64 @@ fn phase6_hostile_bounds_and_clip_offset_sync() {
     seq.camera_solves[0].points[0].position[2] = f32::INFINITY;
     assert!(seq.check_bounds().is_err());
 }
+
+#[test]
+fn ac_2d_planar_pan_zoom_is_detected_as_planar_2d_video() {
+    use filmcraft_time::FrameRate;
+
+    let (w, h) = (320usize, 180usize);
+    let rate = FrameRate::FPS_24;
+    let num_frames = 32usize;
+
+    // Generate 220 deterministic planar 2D features undergoing pure 2D Ken Burns pan + zoom
+    // (`u' = cx + s * (u - cx) + tx`, `v' = cy + s * (v - cy) + ty`) with zero 3D perspective/parallax.
+    let mut seed = 0x2D_7E57_u64;
+    let mut next = || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 32) as f32) / (u32::MAX as f32)
+    };
+    let pts_2d: Vec<(f32, f32, u8)> = (0..220)
+        .map(|i| {
+            let x = (next() * 2.0 - 1.0) * 190.0;
+            let y = (next() * 2.0 - 1.0) * 110.0;
+            let lum = 165u8.saturating_add(((i % 5) * 18) as u8);
+            (x, y, lum)
+        })
+        .collect();
+
+    let mut frames = Vec::with_capacity(num_frames);
+    for f in 0..num_frames {
+        let t = f as f32 / (num_frames - 1) as f32;
+        let scale = 1.0 + 0.16 * t;
+        let tx = -38.0 * t;
+        let ty = 16.0 * t;
+        let mut rgba = vec![20u8; w * h * 4];
+        for px in rgba.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        for &(bx, by, lum) in &pts_2d {
+            let sx = (w as f32 * 0.5 + scale * bx + tx).round() as i32;
+            let sy = (h as f32 * 0.5 + scale * by + ty).round() as i32;
+            for dy in -2..=2 {
+                for dx in -2..=2 {
+                    let (px_x, px_y) = (sx + dx, sy + dy);
+                    if px_x >= 0 && px_x < w as i32 && px_y >= 0 && px_y < h as i32 {
+                        let off = (px_y as usize * w + px_x as usize) * 4;
+                        rgba[off] = lum;
+                        rgba[off + 1] = lum;
+                        rgba[off + 2] = lum;
+                    }
+                }
+            }
+        }
+        frames.push(InputFrame { time: rate.tick_of(f as i64), width: w, height: h, rgba });
+    }
+
+    let res = solve_frames(&SolveOptions::default(), &frames, &|| false);
+    assert!(
+        matches!(res, Err(SolveError::Planar2DVideo)),
+        "pure 2D pan/zoom footage must be classified as Planar2DVideo, got: {:?}",
+        res.map(|s| (s.solve.rotation_only, s.solve.points.len()))
+    );
+}
+

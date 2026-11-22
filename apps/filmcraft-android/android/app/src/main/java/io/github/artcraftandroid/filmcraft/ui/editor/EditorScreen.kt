@@ -280,7 +280,8 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     val masking = ed.panel == Panel.Mask && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
     val advanced = (ed.panel == Panel.Background || ed.panel == Panel.Tracking) && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
     val object3d = sel?.has3d == true
-    val movable = !object3d && sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D && ed.panel != Panel.Scene
+    val matchmovePlate = ed.matchmoveActive && sel != null && sel.id == ed.activeMatchMoveClipId && ed.panel != Panel.Transform
+    val movable = !object3d && !matchmovePlate && sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D && ed.panel != Panel.Scene
     var placement by remember { mutableStateOf<Placement?>(null) }
     LaunchedEffect(sel?.id, t?.revision, ed.playhead, movable) {
         placement = if ((movable || object3d) && sel != null) ed.placementOf(sel.id) else null
@@ -288,6 +289,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     LaunchedEffect(sel?.id, t?.revision, ed.playhead, ed.panel) {
         if (object3d && sel != null) ed.loadObject3D(sel.id)
         if (masking && sel != null) ed.loadMasks(sel.id)
+        if (ed.panel == Panel.Lights || ed.panel == Panel.Scene) ed.loadLights(ed.playhead)
     }
     LaunchedEffect(ed.panel) {
         if (ed.panel != Panel.MatchMove) ed.matchmoveTapToPlace = false
@@ -299,13 +301,24 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
         val empty = (t?.duration ?: 0L) == 0L
         val boxW = if (empty) maxWidth else min(maxWidth.value, maxHeight.value * aspect).dp
         val boxH = if (empty) maxHeight else boxW / aspect
+        val currentBoxWPx by rememberUpdatedState(with(density) { boxW.toPx() })
         val currentBoxHPx by rememberUpdatedState(with(density) { boxH.toPx() })
+        val currentFrameW by rememberUpdatedState(t?.width?.toFloat() ?: 0f)
+        val currentFrameH by rememberUpdatedState(t?.height?.toFloat() ?: 0f)
         val px = with(density) { max(boxW.toPx(), boxH.toPx()) }
         LaunchedEffect(px) { ed.previewSide = px.roundToInt() }
         Box(
             Modifier
                 .fillMaxSize()
-                .sceneOrbitPointerInput(ed, enabled = ed.panel == Panel.Scene, viewHeightPx = { currentBoxHPx }),
+                .sceneOrbitPointerInput(
+                    ed = ed,
+                    enabled = ed.panel == Panel.Scene,
+                    scope = scope,
+                    viewWidthPx = { currentBoxWPx },
+                    viewHeightPx = { currentBoxHPx },
+                    frameWidthPx = { currentFrameW },
+                    frameHeightPx = { currentFrameH },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Box(
@@ -418,7 +431,11 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                 if (ed.panel == Panel.Scene && t != null) {
                     SceneGridOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize()) {
                         CameraGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize()) {
-                            LightGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat())
+                            LightGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize()) {
+                                if (object3d) {
+                                    ObjectGizmoOverlay(ed, t.width.toFloat(), t.height.toFloat(), placement, Modifier.fillMaxSize())
+                                }
+                            }
                         }
                     }
                 }
@@ -441,34 +458,43 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
 }
 
 /**
- * Orbit, dolly, and two-finger pan the 3D Scene viewport when no child gizmo handle consumes
- * the initial touch. Attached on an ancestor of all scene gizmo overlays so sibling Compose
- * `pointerInput` modifiers cannot block hit-testing.
+ * Orbit, dolly, two-finger pan, and tap-to-pick 3D objects in the 3D Scene viewport when no child
+ * gizmo handle consumes the touch. Attached on an ancestor of all scene gizmo overlays so sibling
+ * Compose `pointerInput` modifiers cannot block hit-testing.
  */
 private fun Modifier.sceneOrbitPointerInput(
     ed: EditorController,
     enabled: Boolean,
+    scope: kotlinx.coroutines.CoroutineScope,
+    viewWidthPx: () -> Float,
     viewHeightPx: () -> Float,
+    frameWidthPx: () -> Float,
+    frameHeightPx: () -> Float,
 ): Modifier {
     if (!enabled) return this
     return pointerInput(ed) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             if (down.isConsumed) return@awaitEachGesture
-            ed.stop()
-            down.consume()
+            var handledByChild = false
             var cur = ed.sceneOrbit
             var previous = down.position
+            var totalDrag = Offset.Zero
             var count = 1
             var multi = false
             var moved = false
             while (true) {
                 val event = awaitPointerEvent()
+                if (event.changes.any { it.isConsumed }) handledByChild = true
                 val pressed = event.changes.filter { it.pressed }
                 if (pressed.isEmpty()) break
+                if (handledByChild && !moved) continue
                 if (pressed.size != count) {
                     count = pressed.size
-                    if (count >= 2) multi = true
+                    if (count >= 2) {
+                        multi = true
+                        ed.stop()
+                    }
                     if (count == 1) previous = pressed[0].position
                     event.changes.forEach { if (it.positionChanged()) it.consume() }
                     continue
@@ -477,6 +503,7 @@ private fun Modifier.sceneOrbitPointerInput(
                     val zoom = event.calculateZoom()
                     val pan = event.calculatePan()
                     if (zoom != 1f || pan != Offset.Zero) {
+                        ed.stop()
                         val fov = ed.activeRenderCamera?.fov ?: CLASSIC_FOV
                         cur = cur.dollyAndPanBy(zoom, pan.x, pan.y, fov, viewHeightPx())
                         ed.setSceneOrbit(cur)
@@ -493,14 +520,43 @@ private fun Modifier.sceneOrbitPointerInput(
                 val change = pressed[0]
                 val delta = change.position - previous
                 previous = change.position
-                if (delta != Offset.Zero) {
-                    cur = cur.orbitBy(delta.x, delta.y)
+                totalDrag += delta
+                if (!moved && totalDrag.getDistance() < viewConfiguration.touchSlop) continue
+                val step = if (!moved) totalDrag else delta
+                if (step != Offset.Zero) {
+                    ed.stop()
+                    cur = cur.orbitBy(step.x, step.y)
                     ed.setSceneOrbit(cur)
                     moved = true
                     change.consume()
                 }
             }
-            if (moved) ed.applyScenePreviewCamera()
+            if (moved) {
+                ed.applyScenePreviewCamera()
+            } else if (!multi && !handledByChild) {
+                val vw = viewWidthPx()
+                val vh = viewHeightPx()
+                val fw = frameWidthPx()
+                val fh = frameHeightPx()
+                if (vw > 0f && vh > 0f && fw > 0f && fh > 0f) {
+                    val ox = (size.width - vw) * 0.5f
+                    val oy = (size.height - vh) * 0.5f
+                    val innerX = down.position.x - ox
+                    val innerY = down.position.y - oy
+                    if (innerX in 0f..vw && innerY in 0f..vh) {
+                        val k = vw / fw
+                        val point = Offset(innerX / k, innerY / k)
+                        val tolerance = (12.dp.toPx() / k).toDouble()
+                        scope.launch {
+                            val hit = ed.pickPreview(point, tolerance, only3d = true)
+                            if (hit != null) {
+                                ed.stop()
+                                if (ed.selectedClip?.id != hit) ed.select(hit)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

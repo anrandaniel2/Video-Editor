@@ -64,6 +64,7 @@ fn matchmove_json(s: &Session) -> Result<Value> {
             "yawTrim": m.yaw_trim,
             "pitchTrim": m.pitch_trim,
             "rollTrim": m.roll_trim,
+            "offset": m.offset,
         }),
         None => Value::Null,
     })
@@ -89,8 +90,14 @@ fn set_matchmove_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let yaw_trim = f_opt("yawTrim");
     let pitch_trim = f_opt("pitchTrim");
     let roll_trim = f_opt("rollTrim");
+    let offset = p.get("offset").and_then(Value::as_array).and_then(|arr| {
+        (arr.len() >= 3).then(|| {
+            std::array::from_fn::<_, 3, _>(|i| arr.get(i).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0) as f32)
+        })
+    });
     s.edit_sequence_as("Set Match-Move", merge.as_deref(), |seq, _ctx, _st| {
         let base = seq.matchmove.filter(|m| m.solve == solve).unwrap_or_else(|| filmcraft_project::SequenceMatchMove::new(solve));
+        let off = offset.unwrap_or(base.offset);
         seq.matchmove = Some(filmcraft_project::SequenceMatchMove {
             solve,
             enabled: enabled.unwrap_or(base.enabled),
@@ -98,6 +105,7 @@ fn set_matchmove_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             yaw_trim: yaw_trim.unwrap_or(base.yaw_trim).clamp(-180.0, 180.0),
             pitch_trim: pitch_trim.unwrap_or(base.pitch_trim).clamp(-180.0, 180.0),
             roll_trim: roll_trim.unwrap_or(base.roll_trim).clamp(-180.0, 180.0),
+            offset: [off[0].clamp(-100_000.0, 100_000.0), off[1].clamp(-100_000.0, 100_000.0), off[2].clamp(-100_000.0, 100_000.0)],
         });
         Ok(())
     })?;
@@ -116,14 +124,58 @@ fn delete_camera_solve_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     camera_solves_json(s)
 }
 
-fn lighting_json(s: &Session) -> Result<Value> {
+fn interp_name(i: filmcraft_project::Interpolation) -> &'static str {
+    match i {
+        filmcraft_project::Interpolation::Linear => "linear",
+        filmcraft_project::Interpolation::Hold => "hold",
+        filmcraft_project::Interpolation::EaseIn => "easeIn",
+        filmcraft_project::Interpolation::EaseOut => "easeOut",
+        filmcraft_project::Interpolation::AutoBezier
+        | filmcraft_project::Interpolation::ContinuousBezier
+        | filmcraft_project::Interpolation::Bezier => "smooth",
+    }
+}
+
+fn parse_interp(name: &str) -> filmcraft_project::Interpolation {
+    match name {
+        "hold" => filmcraft_project::Interpolation::Hold,
+        "easeIn" | "ease_in" => filmcraft_project::Interpolation::EaseIn,
+        "easeOut" | "ease_out" => filmcraft_project::Interpolation::EaseOut,
+        "smooth" | "autoBezier" | "bezier" => filmcraft_project::Interpolation::AutoBezier,
+        _ => filmcraft_project::Interpolation::Linear,
+    }
+}
+
+fn tick_arg(s: &Session, p: &Value) -> filmcraft_time::Tick {
+    let raw = p.get("time").and_then(Value::as_i64).map(filmcraft_time::Tick).unwrap_or_else(|| s.playhead());
+    s.sequence_rate().snap(raw)
+}
+
+fn lighting_json_at(s: &Session, at: filmcraft_time::Tick) -> Result<Value> {
     let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
     let l = &seq.scene_lighting;
+    let lights: Vec<Value> = l
+        .lights
+        .iter()
+        .map(|raw| {
+            let eval = raw.evaluated_at(at);
+            let mut obj = serde_json::to_value(&eval).unwrap_or_else(|_| json!({}));
+            obj["animated"] = json!(raw.is_animated());
+            obj["hasKeyframe"] = json!(raw.has_keyframe_at(at));
+            obj["interpolation"] = json!(interp_name(raw.interpolation_at(at)));
+            obj["keyframes"] = json!(raw.keyframe_times().into_iter().map(|t| t.0).collect::<Vec<i64>>());
+            obj
+        })
+        .collect();
     Ok(json!({
-        "lights": l.lights.iter().map(|x| serde_json::to_value(x).unwrap_or(json!({}))).collect::<Vec<_>>(),
+        "lights": lights,
         "ambientColor": l.ambient_color,
         "ambientLevel": l.ambient_level,
     }))
+}
+
+fn lighting_json(s: &Session) -> Result<Value> {
+    lighting_json_at(s, s.sequence_rate().snap(s.playhead()))
 }
 
 pub fn commands() -> Vec<CommandSpec> {
@@ -133,18 +185,19 @@ pub fn commands() -> Vec<CommandSpec> {
             label: "Scene Lights",
             menu: &[],
             shortcut: None,
-            params: "{}",
+            params: r#"{"time":i64?}"#,
             enabled: has_seq,
-            run: |s, _| lighting_json(s),
+            run: |s, p| lighting_json_at(s, tick_arg(s, p)),
             journal: false,
         },
         set_spec(
             "lights.set",
             "Set Scene Light",
-            r#"{"id":u64=0 (0 = new), "name":str, "enabled":bool, "kind":"directional"|"point"|"spot", "color":[r,g,b] sRGB, "intensity":f64, "position":[x,y,z], "angle":f64, "elevation":f64, "range":f64, "cone":f64, "softness":f64, "merge":str?}"#,
+            r#"{"id":u64=0 (0 = new), "name":str, "enabled":bool, "kind":"directional"|"point"|"spot", "color":[r,g,b] sRGB, "intensity":f64, "position":[x,y,z], "angle":f64, "elevation":f64, "range":f64, "cone":f64, "softness":f64, "time":i64?, "merge":str?}"#,
             |s, p| {
                 let id = p.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
                 let mut light = light_from(p, "lights.set")?;
+                let at = tick_arg(s, p);
                 let merge = p.get("merge").and_then(|v| v.as_str()).map(str::to_string);
                 let out = s.edit_sequence_as("Set Scene Light", merge.as_deref(), |seq, _ctx, _st| {
                     let lights = &mut seq.scene_lighting.lights;
@@ -156,18 +209,62 @@ pub fn commands() -> Vec<CommandSpec> {
                     } else {
                         light.id = id;
                         match lights.iter_mut().find(|l| l.id == id) {
-                            Some(slot) => *slot = light.clone(),
+                            Some(slot) => slot.update_from_edit(&light, at),
                             None => lights.push(light.clone()),
                         }
                         id
                     };
                     Ok(id)
                 })?;
-                let mut v = lighting_json(s)?;
+                let mut v = lighting_json_at(s, at)?;
                 v["id"] = json!(out);
                 Ok(v)
             },
         ),
+        set_spec("lights.toggleAnimation", "Toggle Light Keyframes", r#"{"id":u64, "time":i64?}"#, |s, p| {
+            let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("lights.toggleAnimation", "id is required"))?;
+            let at = tick_arg(s, p);
+            s.edit_sequence_as("Toggle Light Keyframes", None, |seq, _ctx, _st| {
+                let light = seq.scene_lighting.lights.iter_mut().find(|l| l.id == id).ok_or_else(|| bad("lights.toggleAnimation", format!("no light {id}")))?;
+                let _ = light.toggle_animation(at);
+                Ok(())
+            })?;
+            lighting_json_at(s, at)
+        }),
+        set_spec("lights.addKeyframe", "Add Light Keyframe", r#"{"id":u64, "time":i64?, "interpolation":str?}"#, |s, p| {
+            let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("lights.addKeyframe", "id is required"))?;
+            let at = tick_arg(s, p);
+            let interp_override = p.get("interpolation").and_then(Value::as_str).map(parse_interp);
+            s.edit_sequence_as("Add Light Keyframe", None, |seq, _ctx, _st| {
+                let light = seq.scene_lighting.lights.iter_mut().find(|l| l.id == id).ok_or_else(|| bad("lights.addKeyframe", format!("no light {id}")))?;
+                let interp = interp_override.unwrap_or_else(|| light.interpolation_at(at));
+                light.add_keyframe_at(at, interp);
+                Ok(())
+            })?;
+            lighting_json_at(s, at)
+        }),
+        set_spec("lights.removeKeyframe", "Remove Light Keyframe", r#"{"id":u64, "time":i64?}"#, |s, p| {
+            let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("lights.removeKeyframe", "id is required"))?;
+            let at = tick_arg(s, p);
+            s.edit_sequence_as("Remove Light Keyframe", None, |seq, _ctx, _st| {
+                let light = seq.scene_lighting.lights.iter_mut().find(|l| l.id == id).ok_or_else(|| bad("lights.removeKeyframe", format!("no light {id}")))?;
+                let _ = light.remove_keyframe_at(at);
+                Ok(())
+            })?;
+            lighting_json_at(s, at)
+        }),
+        set_spec("lights.setInterpolation", "Set Light Keyframe Curve", r#"{"id":u64, "time":i64?, "interpolation":str}"#, |s, p| {
+            let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad("lights.setInterpolation", "id is required"))?;
+            let interp_str = p.get("interpolation").and_then(Value::as_str).unwrap_or("linear");
+            let interp = parse_interp(interp_str);
+            let at = tick_arg(s, p);
+            s.edit_sequence_as("Set Light Keyframe Curve", None, |seq, _ctx, _st| {
+                let light = seq.scene_lighting.lights.iter_mut().find(|l| l.id == id).ok_or_else(|| bad("lights.setInterpolation", format!("no light {id}")))?;
+                let _ = light.set_interpolation_at(at, interp);
+                Ok(())
+            })?;
+            lighting_json_at(s, at)
+        }),
         set_spec("lights.ambient", "Set Ambient Light", r#"{"color":[r,g,b] sRGB, "level":f64, "merge":str?}"#, |s, p| {
             let color =
                 p.get("color").and_then(|v| v.as_array()).map(|a| std::array::from_fn::<_, 3, _>(|i| a.get(i).and_then(|x| x.as_f64()).unwrap_or(1.0) as f32));
@@ -359,7 +456,82 @@ fn export_matchmove_json(s: &Session) -> Result<Value> {
         "yawTrim": mm.yaw_trim,
         "pitchTrim": mm.pitch_trim,
         "rollTrim": mm.roll_trim,
+        "offset": mm.offset,
         "frames": frames,
         "points": points,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Session;
+    use filmcraft_time::{TICKS_PER_SECOND, Tick};
+
+    #[test]
+    fn light_keyframes_interpolate_and_persist_roundtrip() {
+        let mut s = Session::default();
+        s.execute("file.newSequence", json!({ "name": "s", "fps": 24, "width": 320, "height": 180, "video": 1, "audio": 0 })).unwrap();
+
+        let added = s.execute("lights.set", json!({ "id": 0, "name": "Key Spot", "kind": "spot" })).unwrap();
+        let id = added["id"].as_u64().unwrap();
+
+        // Enable keyframing at t = 0: initial keyframe stamped with default properties.
+        s.set_playhead(Tick::ZERO);
+        let toggled = s.execute("lights.toggleAnimation", json!({ "id": id })).unwrap();
+        let l0 = toggled["lights"].as_array().unwrap().iter().find(|l| l["id"].as_u64() == Some(id)).unwrap();
+        assert_eq!(l0["animated"].as_bool(), Some(true));
+        assert_eq!(l0["hasKeyframe"].as_bool(), Some(true));
+        assert_eq!(l0["keyframes"].as_array().unwrap().len(), 1);
+
+        // Set explicit values at t = 0.
+        s.execute(
+            "lights.set",
+            json!({
+                "id": id, "name": "Key Spot", "enabled": true, "kind": "spot",
+                "color": [1.0, 0.0, 0.0], "intensity": 1.0,
+                "position": [0.0, 0.0, 600.0], "angle": 100.0, "elevation": 20.0,
+                "range": 800.0, "cone": 20.0, "softness": 0.2,
+                "time": 0
+            }),
+        )
+        .unwrap();
+
+        // Set Linear curve so midpoint is exact 50%.
+        s.execute("lights.setInterpolation", json!({ "id": id, "interpolation": "linear" })).unwrap();
+
+        // Stamp second keyframe at t = 1s.
+        s.execute(
+            "lights.set",
+            json!({
+                "id": id, "name": "Key Spot", "enabled": true, "kind": "spot",
+                "color": [0.0, 1.0, 0.5], "intensity": 3.0,
+                "position": [200.0, -100.0, 1000.0], "angle": 160.0, "elevation": 60.0,
+                "range": 1600.0, "cone": 50.0, "softness": 0.8,
+                "time": TICKS_PER_SECOND
+            }),
+        )
+        .unwrap();
+
+        // Evaluate at midpoint t = 0.5s via `lights.list`.
+        let mid = s.execute("lights.list", json!({ "time": TICKS_PER_SECOND / 2 })).unwrap();
+        let lm = mid["lights"].as_array().unwrap().iter().find(|l| l["id"].as_u64() == Some(id)).unwrap();
+        assert_eq!(lm["hasKeyframe"].as_bool(), Some(false));
+        assert_eq!(lm["keyframes"].as_array().unwrap().len(), 2);
+        assert!((lm["intensity"].as_f64().unwrap() - 2.0).abs() < 1e-4);
+        assert!((lm["color"][0].as_f64().unwrap() - 0.5).abs() < 1e-4);
+        assert!((lm["color"][1].as_f64().unwrap() - 0.5).abs() < 1e-4);
+        assert!((lm["position"][0].as_f64().unwrap() - 100.0).abs() < 1e-3);
+        assert!((lm["angle"].as_f64().unwrap() - 130.0).abs() < 1e-3);
+        assert!((lm["cone"].as_f64().unwrap() - 35.0).abs() < 1e-3);
+        assert!((lm["softness"].as_f64().unwrap() - 0.5).abs() < 1e-3);
+
+        // JSON persistence round-trip preserves keyframe tracks.
+        let saved = serde_json::to_string(s.active_sequence().unwrap()).unwrap();
+        let loaded: filmcraft_project::Sequence = serde_json::from_str(&saved).unwrap();
+        let eval_mid = loaded.scene_lighting.evaluated_at(Tick(TICKS_PER_SECOND / 2));
+        assert!((eval_mid.lights[0].intensity - 2.0).abs() < 1e-4);
+        assert!((eval_mid.lights[0].cone - 35.0).abs() < 1e-3);
+    }
+}
+

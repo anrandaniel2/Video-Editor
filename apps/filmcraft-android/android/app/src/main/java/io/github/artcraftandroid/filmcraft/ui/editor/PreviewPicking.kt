@@ -15,12 +15,13 @@ internal fun placementContains(p: Placement, point: Offset, tolerance: Double): 
 }
 
 /** Only runs on a tap, not every preview frame. Higher video lanes composite on top. */
-internal suspend fun EditorController.pickPreview(point: Offset, tolerance: Double): ULong? {
+internal suspend fun EditorController.pickPreview(point: Offset, tolerance: Double, only3d: Boolean = false): ULong? {
     val snapshot = timeline ?: return null
     val time = playhead
     for (lane in snapshot.lanes.filter { it.index >= 0 }.sortedByDescending { it.index }) {
         for (clip in lane.clips.asReversed()) {
             if (time < clip.start || time - clip.start >= clip.duration || clip.opacity <= 0.0) continue
+            if (!clip.has3d && only3d) continue
             val p = placementOf(clip.id) ?: continue
             if (!clip.has3d) {
                 if (placementContains(p, point, tolerance)) return clip.id

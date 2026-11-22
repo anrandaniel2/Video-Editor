@@ -1,6 +1,7 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.compose.ui.geometry.Offset
+import io.github.artcraftandroid.filmcraft.core.MatchMoveSettings
 import io.github.artcraftandroid.filmcraft.core.Object3DSettings
 import io.github.artcraftandroid.filmcraft.core.Placement
 import kotlin.math.*
@@ -51,6 +52,8 @@ internal class ViewProjection(val eye: GizmoVec, val yawDeg: Double, val pitchDe
     private val focal = (frameHeight / 2.0) / kotlin.math.tan(Math.toRadians(fov) / 2.0)
     /** The eye in world units. */
     fun eyePosition(): GizmoVec = eye
+    /** Focal length in frame pixels for the active vertical field of view. */
+    fun focalLength(): Double = focal
     /** Camera-space depth of a world point (negative when behind the eye). */
     fun depthOf(world: GizmoVec): Double {
         val d = world - eye
@@ -82,7 +85,7 @@ internal class ViewProjection(val eye: GizmoVec, val yawDeg: Double, val pitchDe
 internal class GizmoGeometry(val pose:GizmoPose,private val layer:Placement?,private val fw:Double,private val fh:Double,private val width:Double,private val height:Double,pixels:Double,private val orbit:ViewProjection?=null,private val poseIsWorld:Boolean=false) {
     constructor(settings:Object3DSettings,layer:Placement?,fw:Double,fh:Double,width:Double,height:Double,pixels:Double,orbit:ViewProjection?=null,poseIsWorld:Boolean=false):this(GizmoPose(settings.x,settings.y,settings.z,settings.rotationX,settings.rotationY,settings.rotationZ),layer,fw,fh,width,height,pixels,orbit,poseIsWorld)
     val origin=if(poseIsWorld)GizmoVec(pose.x,pose.y,pose.z)else GizmoVec((pose.x-fw/2)*pose.z.coerceAtLeast(1.0)/fh.coerceAtLeast(1.0),(pose.y-fh/2)*pose.z.coerceAtLeast(1.0)/fh.coerceAtLeast(1.0),pose.z.coerceAtLeast(1.0))
-    val radius=(if(orbit!=null)pixels*orbit.depthOf(origin).coerceAtLeast(20.0)/fh.coerceAtLeast(1.0)/(width/fw.coerceAtLeast(1.0)) else pixels*origin.z/fh.coerceAtLeast(1.0)/(width/fw.coerceAtLeast(1.0)))/(layer?.scale?.absoluteValue ?: 1.0).coerceAtLeast(0.001)
+    val radius=(if(orbit!=null)pixels*orbit.depthOf(origin).coerceAtLeast(20.0)/orbit.focalLength().coerceAtLeast(1.0)/(width/fw.coerceAtLeast(1.0)) else pixels*origin.z/fh.coerceAtLeast(1.0)/(width/fw.coerceAtLeast(1.0)))/(layer?.scale?.absoluteValue ?: 1.0).coerceAtLeast(0.001)
     val axes=gizmoBasis.map {rotate(it)}
     fun rotate(v:GizmoVec)=v.rotate(pose.rotationX,pose.rotationY,pose.rotationZ)
     fun project(world:GizmoVec):GizmoPoint? {
@@ -202,8 +205,9 @@ internal class GizmoGeometry(val pose:GizmoPose,private val layer:Placement?,pri
         // drag vertically to push/pull it in depth instead of dividing by a near-zero tangent.
         val amount:Double=if(length>0.0001f)((drag.x*t.x+drag.y*t.y)/length).toDouble() else -drag.y*radius/64.0
         val d=axes[axis]*amount.toDouble()
-        val old=GizmoVec((current.x-fw/2)*current.z/fh,(current.y-fh/2)*current.z/fh,current.z)
-        val next=old+d;val z=next.z.coerceIn(1.0,10000.0)
+        val curZ=current.z.coerceAtLeast(20.0)
+        val old=GizmoVec((current.x-fw/2)*curZ/fh,(current.y-fh/2)*curZ/fh,curZ)
+        val next=old+d;val z=next.z.coerceIn(20.0,20000.0)
         return current.copy(x=fw/2+fh*next.x/z,y=fh/2+fh*next.y/z,z=z)
     }
     fun rotationDelta(axis:Int,point:Offset,drag:Offset):Double {
@@ -229,6 +233,72 @@ internal fun rotateEulerLocal(rotationX:Double,rotationY:Double,rotationZ:Double
 internal fun rotateGizmoLocal(s:Object3DSettings,axis:Int,degrees:Double):Object3DSettings {
     val (x,y,z)=rotateEulerLocal(s.rotationX,s.rotationY,s.rotationZ,axis,degrees)
     return s.copy(rotationX=x,rotationY=y,rotationZ=z)
+}
+
+/**
+ * Rotate the solved Match-Move camera rig about local camera [axis] by [degrees] while keeping
+ * the camera's current eye `cam.position` stationary at the playhead. Returns both the updated
+ * [MatchMoveSettings] and the resulting [SceneCamera] pose for immediate zero-latency gizmo drag.
+ */
+internal fun rotateMatchMoveCamera(
+    cam: SceneCamera,
+    mm: MatchMoveSettings,
+    axis: Int,
+    degrees: Double,
+): Pair<MatchMoveSettings, SceneCamera> {
+    fun viewRows(pitch: Double, yaw: Double, roll: Double): Array<DoubleArray> {
+        val r0 = GizmoVec(1.0, 0.0, 0.0).rotate(pitch, yaw, roll)
+        val r1 = GizmoVec(0.0, 1.0, 0.0).rotate(pitch, yaw, roll)
+        val r2 = GizmoVec(0.0, 0.0, 1.0).rotate(pitch, yaw, roll)
+        return arrayOf(
+            doubleArrayOf(r0.x, r0.y, r0.z),
+            doubleArrayOf(r1.x, r1.y, r1.z),
+            doubleArrayOf(r2.x, r2.y, r2.z),
+        )
+    }
+    fun mul3(a: Array<DoubleArray>, b: Array<DoubleArray>): Array<DoubleArray> = Array(3) { r ->
+        DoubleArray(3) { c -> a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c] }
+    }
+    fun transpose3(m: Array<DoubleArray>): Array<DoubleArray> = Array(3) { r -> DoubleArray(3) { c -> m[c][r] } }
+    fun mulVec3(m: Array<DoubleArray>, v: DoubleArray): DoubleArray = DoubleArray(3) { r ->
+        m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2]
+    }
+    val (newPitch, newYaw, newRoll) = rotateEulerLocal(cam.pitch, cam.yaw, cam.roll, axis, degrees)
+    val vrCur = viewRows(cam.pitch, cam.yaw, cam.roll)
+    val vrTrimOld = viewRows(mm.pitchTrim, mm.yawTrim, mm.rollTrim)
+    val vrNew = viewRows(newPitch, newYaw, newRoll)
+    val vrTrimNew = mul3(mul3(vrTrimOld, transpose3(vrCur)), vrNew)
+    val sy = (-vrTrimNew[0][2]).coerceIn(-1.0, 1.0)
+    val yawTrimRad = asin(sy)
+    val cy = cos(yawTrimRad)
+    val pitchTrimDeg: Double
+    val rollTrimDeg: Double
+    if (abs(cy) > 1e-6) {
+        pitchTrimDeg = Math.toDegrees(atan2(vrTrimNew[1][2], vrTrimNew[2][2]))
+        rollTrimDeg = Math.toDegrees(atan2(vrTrimNew[0][1], vrTrimNew[0][0]))
+    } else {
+        pitchTrimDeg = 0.0
+        rollTrimDeg = Math.toDegrees(atan2(-vrTrimNew[1][0], vrTrimNew[1][1]))
+    }
+    val yawTrimDeg = Math.toDegrees(yawTrimRad)
+    val eye = doubleArrayOf(
+        cam.position.getOrElse(0) { 0.0 },
+        cam.position.getOrElse(1) { 0.0 },
+        cam.position.getOrElse(2) { 0.0 },
+    )
+    val rotOld = doubleArrayOf(eye[0] - mm.offsetX, eye[1] - mm.offsetY, eye[2] - mm.offsetZ)
+    val posSample = mulVec3(vrTrimOld, rotOld)
+    val rotNew = mulVec3(transpose3(vrTrimNew), posSample)
+    val nextMm = mm.copy(
+        yawTrim = yawTrimDeg,
+        pitchTrim = pitchTrimDeg,
+        rollTrim = rollTrimDeg,
+        offsetX = eye[0] - rotNew[0],
+        offsetY = eye[1] - rotNew[1],
+        offsetZ = eye[2] - rotNew[2],
+    )
+    val nextCam = cam.copy(pitch = newPitch, yaw = newYaw, roll = newRoll)
+    return nextMm to nextCam
 }
 internal fun segmentDistance(p:Offset,a:Offset,b:Offset):Float {
     val d=b-a;val length=d.x*d.x+d.y*d.y

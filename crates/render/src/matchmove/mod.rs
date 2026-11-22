@@ -98,6 +98,9 @@ pub enum SolveError {
     Cancelled,
     TooShort,
     InsufficientMotion,
+    /// Footage exhibits flat 2D image-plane motion (2D pan/zoom/spin or static plate) without 3D
+    /// perspective foreshortening or multi-depth parallax; callers can switch to 2D motion tracking.
+    Planar2DVideo,
     PoorQuality { median_rms_px: f32, median_confidence: f32 },
     Decode(String),
 }
@@ -108,6 +111,7 @@ impl std::fmt::Display for SolveError {
             Self::Cancelled => write!(f, "camera solve cancelled"),
             Self::TooShort => write!(f, "clip is too short to solve the camera (need at least 8 frames)"),
             Self::InsufficientMotion => write!(f, "not enough clean motion to solve the camera"),
+            Self::Planar2DVideo => write!(f, "footage appears to be flat 2D motion without 3D perspective; use 2D motion tracking"),
             Self::PoorQuality { median_rms_px, median_confidence } => {
                 write!(f, "not enough clean motion to solve the camera (RMS {median_rms_px:.2} px, confidence {median_confidence:.2})")
             }
@@ -128,7 +132,7 @@ where
     if cancel() {
         return Err(SolveError::Cancelled);
     }
-    let mut model = initialize_scene(&shot, opts.refine_focal, cancel)?;
+    let mut model = initialize_scene(&shot, opts.refine_focal, opts.layout == StereoLayout::Mono, cancel)?;
     run_bundle_adjustment(&mut model, &shot.tracks, opts.refine_focal, cancel)?;
     if opts.layout != StereoLayout::Mono {
         apply_stereo_scale_prior(&mut model, &shot.stereo_obs, shot.width, opts.stereo_baseline);

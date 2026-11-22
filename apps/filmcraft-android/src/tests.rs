@@ -1901,6 +1901,9 @@ fn phase8_tap_place_bake_camera_and_export_matchmove_track() {
         yaw_trim: 9.0,
         pitch_trim: -4.0,
         roll_trim: 2.5,
+        offset_x: 15.0,
+        offset_y: -10.0,
+        offset_z: 25.0,
     };
     m.set_matchmove(mm_trimmed, None).unwrap();
     let exported: serde_json::Value = serde_json::from_str(&m.execute("scene.exportMatchmove".into(), "{}".into()).unwrap()).unwrap();
@@ -1936,3 +1939,140 @@ fn phase8_tap_place_bake_camera_and_export_matchmove_track() {
     assert!(m.matchmove_state().unwrap().unwrap().enabled);
     assert!(m.scene_camera().is_some());
 }
+
+fn synthetic_planar_2d_mp4(dir: &Path, name: &str, frames: i64) -> String {
+    struct Planar2dSource {
+        info: filmcraft_media::MediaInfo,
+        rate: FrameRate,
+        frames: i64,
+    }
+    impl MediaSource for Planar2dSource {
+        fn info(&self) -> &filmcraft_media::MediaInfo {
+            &self.info
+        }
+        fn video_frame(&self, req: filmcraft_media::FrameRequest) -> filmcraft_media::Result<Arc<filmcraft_frame::VideoFrame>> {
+            let (w, h) = (320usize, 180usize);
+            let mut rgba = vec![22u8; w * h * 4];
+            for px in rgba.as_chunks_mut::<4>().0 {
+                px[3] = 255;
+            }
+            let idx = self.rate.frame_at(req.time).clamp(0, (self.frames - 1).max(1)) as f32;
+            let u = idx / (self.frames - 1).max(1) as f32;
+            let scale = 1.0 + 0.14 * u;
+            let tx = -34.0 * u;
+            let ty = 14.0 * u;
+            let mut seed = 0x2D_C0FFEE_u64;
+            for i in 0..200usize {
+                let mut next = || {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    ((seed >> 32) as f32) / (u32::MAX as f32)
+                };
+                let bx = (next() * 2.0 - 1.0) * 180.0;
+                let by = (next() * 2.0 - 1.0) * 105.0;
+                let sx = (w as f32 * 0.5 + scale * bx + tx).round() as i32;
+                let sy = (h as f32 * 0.5 + scale * by + ty).round() as i32;
+                let val = 175u8.saturating_add(((i % 4) * 20) as u8);
+                for dy in -2..=2 {
+                    for dx in -2..=2 {
+                        let (px_x, px_y) = (sx + dx, sy + dy);
+                        if px_x >= 0 && px_x < w as i32 && px_y >= 0 && px_y < h as i32 {
+                            let off = (px_y as usize * w + px_x as usize) * 4;
+                            rgba[off] = val;
+                            rgba[off + 1] = val;
+                            rgba[off + 2] = val;
+                        }
+                    }
+                }
+            }
+            Ok(Arc::new(filmcraft_frame::VideoFrame::rgba8(w as u32, h as u32, rgba).with_pts(req.time)))
+        }
+        fn audio(&self, _: i64, _: usize, _: u32) -> filmcraft_media::Result<filmcraft_frame::AudioBuffer> {
+            Err(filmcraft_media::MediaError::NoStream("audio"))
+        }
+    }
+
+    let path = dir.join(name);
+    let (w, h, rate) = (320, 180, FrameRate::FPS_24);
+    let dur = rate.tick_of(frames);
+    let base = GeneratorSource::new(Generator::ColorMatte { color: [0.1, 0.1, 0.1, 1.0] }, w, h, rate, dur);
+    let src = Planar2dSource { info: base.info().clone(), rate, frames };
+    let mut p = Project::new("planar_fixture");
+    let clip = MediaClip {
+        media: MediaRef::Generator(Generator::ColorMatte { color: [0.1, 0.1, 0.1, 1.0] }),
+        info: src.info.clone(),
+        interpret: Default::default(),
+        mark_in: None,
+        mark_out: None,
+        markers: vec![],
+        offline: false,
+        proxy: None,
+        identity: None,
+    };
+    let item = p.add_item("pan2d", Label::Iris, ItemKind::Media(Box::new(clip)), None);
+    let seq = p.new_sequence("s", SequenceSettings { width: w, height: h, frame_rate: rate, ..Default::default() }, 1, 0, None);
+    let v = p.make_track_item(item, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, dur), rate).unwrap();
+    p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
+    let settings = fx::ExportSettings { format: fx::Format::H264, path: path.to_string_lossy().into_owned(), bitrate_kbps: 2_400, ..Default::default() };
+    let shared: filmcraft_media::SharedSource = Arc::new(src);
+    let provider = move |id: ItemId| (id == item).then(|| shared.clone());
+    fx::export(&Arc::new(p), seq, &settings, &provider, &Default::default()).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn phase9_planar_2d_autoswitch_and_animated_lights_rendering() {
+    // 1. Flat 2D pan/zoom video automatically switches from 3D Match-Move to 2D Motion Tracking.
+    let d = tmp();
+    let clip_2d = synthetic_planar_2d_mp4(&d, "planar_pan_zoom.mp4", 28);
+    let m = MobileSession::new();
+    m.new_project("Phase9".into(), 320, 180, 24).unwrap();
+    let cid = m.add_media(vec![clip_2d]).unwrap()[0];
+
+    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st = poll_camera_solve(&m, job);
+    assert!(st.error.is_none(), "2D auto-switch must succeed cleanly without error, got {st:?}");
+    assert!(st.switched_to_motion_track.is_some(), "status must report switched_to_motion_track=Some(...), got {st:?}");
+    assert!(m.camera_solves().unwrap().is_empty(), "no bogus 3D solve should be saved for a 2D video");
+    let tracks_2d = m.motion_tracks().unwrap();
+    assert_eq!(tracks_2d.len(), 1, "automatic 2D MotionTrack must be created on the clip");
+    assert_eq!(tracks_2d[0].clip, cid);
+    assert!(tracks_2d[0].samples >= 20, "2D MotionTrack must cover the clip frames: {:?}", tracks_2d[0]);
+
+    // 2. Animated 3D scene light keyframes drive rendered 3D frames over timeline time.
+    let _cube = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    m.execute("lights.ambient".into(), r#"{"color":[0.0,0.0,0.0],"level":0.0}"#.into()).unwrap();
+    let add_res: serde_json::Value =
+        serde_json::from_str(&m.execute("lights.set".into(), r#"{"id":0,"name":"AnimSun","kind":"directional"}"#.into()).unwrap()).unwrap();
+    let lid = add_res["id"].as_u64().unwrap();
+    m.execute("lights.toggleAnimation".into(), format!(r#"{{"id":{lid},"time":0}}"#)).unwrap();
+    m.execute("lights.setInterpolation".into(), format!(r#"{{"id":{lid},"interpolation":"linear"}}"#)).unwrap();
+    // Keyframe 0s: pure dark (intensity = 0.0).
+    m.execute(
+        "lights.set".into(),
+        format!(
+            r#"{{"id":{lid},"name":"AnimSun","enabled":true,"kind":"directional","color":[1.0,0.2,0.1],"intensity":0.0,"position":[0.0,0.0,700.0],"angle":135.0,"elevation":45.0,"range":900.0,"cone":35.0,"softness":0.5,"time":0}}"#
+        ),
+    )
+    .unwrap();
+    // Keyframe 1s: bright warm red-orange (intensity = 3.5).
+    m.execute(
+        "lights.set".into(),
+        format!(
+            r#"{{"id":{lid},"name":"AnimSun","enabled":true,"kind":"directional","color":[1.0,0.2,0.1],"intensity":3.5,"position":[0.0,0.0,700.0],"angle":135.0,"elevation":45.0,"range":900.0,"cone":35.0,"softness":0.5,"time":{SEC}}}"#
+        ),
+    )
+    .unwrap();
+
+    let r = m.renderer().unwrap();
+    let f0 = r.still(0, 320, None).unwrap();
+    let f_mid = r.still(SEC / 2, 320, None).unwrap();
+    let f1 = r.still(SEC, 320, None).unwrap();
+    // Sample center pixel (160, 90) where the 3D cube sits.
+    let center_red = |rgba: &[u8]| rgba[(90 * 320 + 160) * 4] as i32;
+    let (r0, r_mid, r1) = (center_red(&f0.rgba), center_red(&f_mid.rgba), center_red(&f1.rgba));
+    assert!(
+        r0 < r_mid && r_mid < r1 && (r1 - r0) > 80,
+        "animated directional light intensity must brighten cube across 0s -> 0.5s -> 1s (got red={r0} -> {r_mid} -> {r1})"
+    );
+}
+

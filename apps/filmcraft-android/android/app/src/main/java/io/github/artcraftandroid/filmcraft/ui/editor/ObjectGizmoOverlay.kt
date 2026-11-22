@@ -36,9 +36,11 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
             fun geometry(s:Object3DSettings)=GizmoGeometry(s,transform,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble(),minOf(62.dp.toPx(),minOf(size.width,size.height).toFloat()*0.28f).toDouble(),viewFor(ed,fw.toDouble(),fh.toDouble(),size.width.toDouble(),size.height.toDouble()))
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false)
+                if(down.isConsumed)return@awaitEachGesture
                 var current=settings
                 val initial=geometry(current)
                 active=initial.hitGizmo(down.position,16.dp.toPx())
+                if(active!=null) {ed.stop();down.consume()}
                 var previous=down.position
                 var total=androidx.compose.ui.geometry.Offset.Zero
                 var count=1
@@ -49,7 +51,10 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                 while(true) {
                     val event=awaitPointerEvent()
                     val fingers=event.changes.count {it.pressed}
-                    if(fingers==0)break
+                    if(fingers==0) {
+                        if(active!=null) event.changes.forEach {it.consume()}
+                        break
+                    }
                     if(fingers!=count) {
                         count=fingers;multi=multi || fingers>=2;active=null;pinch=1f
                         event.changes.firstOrNull {it.pressed}?.let {previous=it.position}
@@ -76,7 +81,7 @@ fun ObjectGizmoOverlay(ed:EditorController,fw:Float,fh:Float,placement:Placement
                     if(!changed && total.getDistance()<viewConfiguration.touchSlop) {previous=point;continue}
                     val drag=if(!changed)total else delta
                     current=when(hit.kind) {
-                        GizmoMode.Move -> initial.move(current,hit.axis,drag)
+                        GizmoMode.Move -> geometry(current).move(current,hit.axis,drag)
                         GizmoMode.Rotate -> rotateGizmoLocal(current,hit.axis,geometry(current).rotationDelta(hit.axis,point-drag,drag))
                     }
                     previous=point

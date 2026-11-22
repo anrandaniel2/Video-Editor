@@ -330,6 +330,8 @@ pub struct CameraSolveStatus {
     pub finished: bool,
     pub error: Option<String>,
     pub solve: Option<CameraSolveInfo>,
+    /// Populated when 2D video motion was detected and automatically tracked with 2D point tracking.
+    pub switched_to_motion_track: Option<MotionTrackInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -340,6 +342,9 @@ pub struct MatchMoveSettings {
     pub yaw_trim: f64,
     pub pitch_trim: f64,
     pub roll_trim: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub offset_z: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -998,13 +1003,23 @@ pub(crate) fn set_background(s: &mut Session, id: u64, st: &BackgroundSettings, 
 
 // ---- 3D camera match-move ----
 
+enum SolveWorkerOutcome {
+    Camera3D(SolveReport),
+    Track2D { clip: ClipId, clip_start: Tick, samples: Vec<filmcraft_project::TrackSample> },
+}
+
+enum AppliedSolveOutcome {
+    Camera3D(CameraSolveInfo),
+    Track2D(MotionTrackInfo),
+}
+
 pub(crate) struct SolveJob {
     seq: filmcraft_project::ItemId,
     progress: AtomicU64,
     stage: Mutex<String>,
     cancel: AtomicBool,
-    solved: Mutex<Option<Result<SolveReport, String>>>,
-    applied: Mutex<Option<Result<CameraSolveInfo, String>>>,
+    solved: Mutex<Option<Result<SolveWorkerOutcome, String>>>,
+    applied: Mutex<Option<Result<AppliedSolveOutcome, String>>>,
 }
 
 impl SolveJob {
@@ -1039,7 +1054,97 @@ struct SolveWorkerArgs {
     opts: SolveOptions,
 }
 
-fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveReport, String> {
+fn pick_2d_track_target(g: &Gray) -> (f32, f32) {
+    let (w, h) = (g.w, g.h);
+    if w < 16 || h < 16 {
+        return (w as f32 * 0.5, h as f32 * 0.5);
+    }
+    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+    let x0 = (w / 5).max(3);
+    let x1 = ((w * 4) / 5).min(w.saturating_sub(4));
+    let y0 = (h / 5).max(3);
+    let y1 = ((h * 4) / 5).min(h.saturating_sub(4));
+    let norm = (cx * cx + cy * cy).max(1.0);
+    let mut best = (0.0f32, cx, cy);
+
+    let mut y = y0;
+    while y <= y1 {
+        let mut x = x0;
+        while x <= x1 {
+            let (mut sxx, mut syy, mut sxy) = (0.0f32, 0.0f32, 0.0f32);
+            for dy in -2i32..=2 {
+                let py = (y as i32 + dy) as usize;
+                for dx in -2i32..=2 {
+                    let px = (x as i32 + dx) as usize;
+                    let gx = 0.5 * (g.p[py * w + px + 1] - g.p[py * w + px - 1]);
+                    let gy = 0.5 * (g.p[(py + 1) * w + px] - g.p[(py - 1) * w + px]);
+                    sxx += gx * gx;
+                    syy += gy * gy;
+                    sxy += gx * gy;
+                }
+            }
+            let tr = sxx + syy;
+            let det_disc = ((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy).sqrt();
+            let lambda_min = 0.5 * (tr - det_disc);
+            let rx = x as f32 - cx;
+            let ry = y as f32 - cy;
+            let weight = 1.0 / (1.0 + 1.5 * ((rx * rx + ry * ry) / norm));
+            let score = lambda_min * weight;
+            if score > best.0 {
+                best = (score, x as f32, y as f32);
+            }
+            x += 4;
+        }
+        y += 4;
+    }
+    (best.1, best.2)
+}
+
+fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: usize) -> Result<SolveWorkerOutcome, String> {
+    job.set(0.55, Some("2D footage detected — switching to 2D tracking…"));
+    let mut tracker: Option<Tracker> = None;
+    let mut samples: Vec<filmcraft_project::TrackSample> = Vec::new();
+    let mut t = args.win_start;
+    let mut idx = 0usize;
+    while t < args.win_end && samples.len() < 2000 {
+        if job.cancelled() {
+            return Err("cancelled".to_string());
+        }
+        let st = args.clip.source_time_at(t);
+        let f = args.source.video_frame(FrameRequest { time: st, scale: args.scale }).map_err(|e| e.to_string())?;
+        let rgba = f.to_rgba8();
+        let g = Gray::from_rgba8(&rgba, f.width as usize, f.height as usize);
+        let (full_w, full_h) = (g.w.max(1), g.h.max(1));
+        let p = match &mut tracker {
+            None => {
+                let target = pick_2d_track_target(&g);
+                let tr = Tracker::new(&g, target, 17, 64.0);
+                let a = tr.anchor();
+                tracker = Some(tr);
+                a
+            }
+            Some(tr) => tr.push(&g, None),
+        };
+        samples.push(filmcraft_project::TrackSample {
+            time: Tick(t.0.saturating_sub(args.clip.start.0)),
+            x: (p.x / full_w as f32).clamp(0.0, 1.0),
+            y: (p.y / full_h as f32).clamp(0.0, 1.0),
+            z: p.z,
+            scale: p.scale,
+            rotation: p.rotation,
+            confidence: p.confidence,
+        });
+        idx += 1;
+        job.set(0.55 + 0.43 * (idx as f64 / est_frames.max(1) as f64).clamp(0.0, 1.0), None);
+        t += args.frame_step;
+    }
+    if samples.len() < 2 {
+        return Err("Not enough frames to track.".to_string());
+    }
+    Ok(SolveWorkerOutcome::Track2D { clip: args.clip.id, clip_start: args.clip.start, samples })
+}
+
+fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorkerOutcome, String> {
     let est_frames = (((args.win_end - args.win_start).0 / args.frame_step.0).max(1) as usize).min(filmcraft_project::CameraSolve::MAX_FRAMES);
     job.set(0.02, Some("Reading video frames…"));
     let mut t = args.win_start;
@@ -1063,10 +1168,12 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveReport
             Ok(Some(InputFrame { time: Tick(cur.0.saturating_sub(args.clip.start.0)), width: f.width as usize, height: f.height as usize, rgba: f.to_rgba8() }))
         })
     });
-    res.map_err(|e| match e {
-        SolveError::Cancelled => "cancelled".to_string(),
-        other_err => other_err.to_string(),
-    })
+    match res {
+        Ok(rep) => Ok(SolveWorkerOutcome::Camera3D(rep)),
+        Err(SolveError::Planar2DVideo) => filmcraft_media::cancel::with_background(true, || run_fallback_2d_tracker(job, &args, est_frames)),
+        Err(SolveError::Cancelled) => Err("cancelled".to_string()),
+        Err(other_err) => Err(other_err.to_string()),
+    }
 }
 
 pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions) -> Result<Arc<SolveJob>, MobileError> {
@@ -1157,7 +1264,7 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
             Err("cancelled".to_string())
         } else {
             match res {
-                Ok(rep) => s
+                Ok(SolveWorkerOutcome::Camera3D(rep)) => s
                     .edit("Solve Camera", |p, _| {
                         let id = p.alloc_id();
                         let q = p.sequence_mut(job.seq).ok_or(EngineError::NoSequence)?;
@@ -1168,7 +1275,48 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
                         let info = solve_info(q, &solve);
                         q.camera_solves.push(solve);
                         q.matchmove = Some(filmcraft_project::SequenceMatchMove::new(id));
-                        Ok(info)
+                        Ok(AppliedSolveOutcome::Camera3D(info))
+                    })
+                    .map_err(|e| e.to_string()),
+                Ok(SolveWorkerOutcome::Track2D { clip, clip_start, samples }) => s
+                    .edit("Switch to 2D Tracking", |p, _| {
+                        let id = p.alloc_id();
+                        let q = p.sequence_mut(job.seq).ok_or(EngineError::NoSequence)?;
+                        let count = samples.len() as u32;
+                        let quality = f64::from(samples.iter().map(|s| s.confidence).sum::<f32>()) / f64::from(count.max(1)) * 100.0;
+                        let lost = samples.iter().filter(|s| s.confidence <= 0.0).count() as u32;
+                        let first = samples.first().map(|s| s.time).unwrap_or(Tick::ZERO);
+                        let last = samples.last().map(|s| s.time).unwrap_or(Tick::ZERO);
+                        let name = format!("2D Track {}", q.motion_tracks.len() + 1);
+                        q.motion_tracks.push(filmcraft_project::MotionTrack {
+                            id,
+                            clip,
+                            name: name.clone(),
+                            layout: filmcraft_project::StereoLayout::Mono,
+                            samples,
+                        });
+                        if let Some(mm) = q.matchmove.as_mut() {
+                            mm.enabled = false;
+                        }
+                        for track in &mut q.video_tracks {
+                            for item in &mut track.items {
+                                if let Some(e) = item.effects.iter_mut().find(|e| e.effect == OBJECT3D) {
+                                    set_bool(e, "follow_track", true);
+                                    set_f(e, "track_id", id as f64, Tick::ZERO);
+                                }
+                            }
+                        }
+                        Ok(AppliedSolveOutcome::Track2D(MotionTrackInfo {
+                            id,
+                            clip: clip.0,
+                            name,
+                            layout: StereoLayout::Mono,
+                            samples: count,
+                            start: clip_start.0 + first.0,
+                            end: clip_start.0 + last.0,
+                            quality,
+                            lost,
+                        }))
                     })
                     .map_err(|e| e.to_string()),
                 Err(e) => Err(e),
@@ -1179,9 +1327,19 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
     let progress = f64::from_bits(job.progress.load(Ordering::Relaxed));
     let stage = job.stage.lock().unwrap_or_else(PoisonError::into_inner).clone();
     match job.applied.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
-        Some(Ok(info)) => CameraSolveStatus { progress: 1.0, stage: "Done".into(), finished: true, error: None, solve: Some(info.clone()) },
-        Some(Err(e)) => CameraSolveStatus { progress, stage, finished: true, error: Some(e.clone()), solve: None },
-        None => CameraSolveStatus { progress, stage, finished: false, error: None, solve: None },
+        Some(Ok(AppliedSolveOutcome::Camera3D(info))) => {
+            CameraSolveStatus { progress: 1.0, stage: "Done".into(), finished: true, error: None, solve: Some(info.clone()), switched_to_motion_track: None }
+        }
+        Some(Ok(AppliedSolveOutcome::Track2D(track))) => CameraSolveStatus {
+            progress: 1.0,
+            stage: "Switched to 2D tracking".into(),
+            finished: true,
+            error: None,
+            solve: None,
+            switched_to_motion_track: Some(track.clone()),
+        },
+        Some(Err(e)) => CameraSolveStatus { progress, stage, finished: true, error: Some(e.clone()), solve: None, switched_to_motion_track: None },
+        None => CameraSolveStatus { progress, stage, finished: false, error: None, solve: None, switched_to_motion_track: None },
     }
 }
 
@@ -1209,6 +1367,9 @@ pub(crate) fn matchmove_state(s: &Session) -> Result<Option<MatchMoveSettings>, 
         yaw_trim: f64::from(m.yaw_trim),
         pitch_trim: f64::from(m.pitch_trim),
         roll_trim: f64::from(m.roll_trim),
+        offset_x: f64::from(m.offset[0]),
+        offset_y: f64::from(m.offset[1]),
+        offset_z: f64::from(m.offset[2]),
     }))
 }
 
@@ -1228,6 +1389,11 @@ pub(crate) fn set_matchmove(s: &mut Session, st: &MatchMoveSettings, merge: Opti
             yaw_trim: finite(st.yaw_trim, 0.0).clamp(-180.0, 180.0) as f32,
             pitch_trim: finite(st.pitch_trim, 0.0).clamp(-180.0, 180.0) as f32,
             roll_trim: finite(st.roll_trim, 0.0).clamp(-180.0, 180.0) as f32,
+            offset: [
+                finite(st.offset_x, 0.0).clamp(-100_000.0, 100_000.0) as f32,
+                finite(st.offset_y, 0.0).clamp(-100_000.0, 100_000.0) as f32,
+                finite(st.offset_z, 0.0).clamp(-100_000.0, 100_000.0) as f32,
+            ],
         });
         Ok(())
     })

@@ -332,6 +332,8 @@ pub struct SequenceMatchMove {
     pub pitch_trim: f32,
     #[serde(default)]
     pub roll_trim: f32,
+    #[serde(default)]
+    pub offset: [f32; 3],
 }
 
 impl SequenceMatchMove {
@@ -339,19 +341,33 @@ impl SequenceMatchMove {
     pub const DEFAULT_SCALE_PX: f32 = 700.0;
 
     pub fn new(solve: u64) -> Self {
-        Self { solve, enabled: true, scale_px: Self::DEFAULT_SCALE_PX, yaw_trim: 0.0, pitch_trim: 0.0, roll_trim: 0.0 }
+        Self {
+            solve,
+            enabled: true,
+            scale_px: Self::DEFAULT_SCALE_PX,
+            yaw_trim: 0.0,
+            pitch_trim: 0.0,
+            roll_trim: 0.0,
+            offset: [0.0; 3],
+        }
     }
 
     /// Whether every stored float is finite and `scale_px` is non-negative.
     pub fn is_finite(&self) -> bool {
-        self.scale_px.is_finite() && self.scale_px >= 0.0 && self.yaw_trim.is_finite() && self.pitch_trim.is_finite() && self.roll_trim.is_finite()
+        self.scale_px.is_finite()
+            && self.scale_px >= 0.0
+            && self.yaw_trim.is_finite()
+            && self.pitch_trim.is_finite()
+            && self.roll_trim.is_finite()
+            && self.offset.iter().all(|v| v.is_finite())
     }
 
-    /// Materialise a [`SceneCamera3D`] from a solved frame, applying `scale_px` and rigid
-    /// world-orientation trims (`yaw_trim`, `pitch_trim`, `roll_trim`).
+    /// Materialise a [`SceneCamera3D`] from a solved frame, applying `scale_px`, rigid
+    /// world-orientation trims (`yaw_trim`, `pitch_trim`, `roll_trim`), and world `offset`.
     pub fn apply_to_sample(&self, sample: &SolvedFrame) -> SceneCamera3D {
         let scale = if self.scale_px.is_finite() { self.scale_px.max(0.0) } else { Self::DEFAULT_SCALE_PX };
         let pos = [finite_or(sample.position[0], 0.0) * scale, finite_or(sample.position[1], 0.0) * scale, finite_or(sample.position[2], 0.0) * scale];
+        let off = [finite_or(self.offset[0], 0.0), finite_or(self.offset[1], 0.0), finite_or(self.offset[2], 0.0)];
         let yaw_s = finite_or(sample.yaw, 0.0);
         let pitch_s = finite_or(sample.pitch, 0.0);
         let roll_s = finite_or(sample.roll, 0.0);
@@ -360,29 +376,33 @@ impl SequenceMatchMove {
         let pt = finite_or(self.pitch_trim, 0.0);
         let rt = finite_or(self.roll_trim, 0.0);
         if yt == 0.0 && pt == 0.0 && rt == 0.0 {
-            return SceneCamera3D { position: pos, yaw: yaw_s, pitch: pitch_s, roll: roll_s, fov };
+            return SceneCamera3D { position: [pos[0] + off[0], pos[1] + off[1], pos[2] + off[2]], yaw: yaw_s, pitch: pitch_s, roll: roll_s, fov };
         }
         let vr_s = SceneCamera3D { position: [0.0; 3], yaw: yaw_s, pitch: pitch_s, roll: roll_s, fov }.view_rotation();
         let vr_t = SceneCamera3D { position: [0.0; 3], yaw: yt, pitch: pt, roll: rt, fov }.view_rotation();
         let vr = mat3_mul(vr_s, vr_t);
-        let position = mat3_transpose_mul_vec(vr_t, pos);
+        let rotated = mat3_transpose_mul_vec(vr_t, pos);
+        let position = [rotated[0] + off[0], rotated[1] + off[1], rotated[2] + off[2]];
         let (pitch, yaw, roll) = euler_from_view_rotation(vr);
         SceneCamera3D { position, yaw, pitch, roll, fov }
     }
 
-    /// Transform a solver-normalised 3D landmark into world pixel coordinates under `scale_px`
-    /// and rigid world-orientation trims (`yaw_trim`, `pitch_trim`, `roll_trim`).
+    /// Transform a solver-normalised 3D landmark into world pixel coordinates under `scale_px`,
+    /// rigid world-orientation trims (`yaw_trim`, `pitch_trim`, `roll_trim`), and world `offset`.
     pub fn apply_to_point(&self, point: [f32; 3]) -> [f32; 3] {
         let scale = if self.scale_px.is_finite() { self.scale_px.max(0.0) } else { Self::DEFAULT_SCALE_PX };
         let p = [finite_or(point[0], 0.0) * scale, finite_or(point[1], 0.0) * scale, finite_or(point[2], 0.0) * scale];
+        let off = [finite_or(self.offset[0], 0.0), finite_or(self.offset[1], 0.0), finite_or(self.offset[2], 0.0)];
         let yt = finite_or(self.yaw_trim, 0.0);
         let pt = finite_or(self.pitch_trim, 0.0);
         let rt = finite_or(self.roll_trim, 0.0);
-        if yt == 0.0 && pt == 0.0 && rt == 0.0 {
-            return p;
-        }
-        let vr_t = SceneCamera3D { position: [0.0; 3], yaw: yt, pitch: pt, roll: rt, fov: CLASSIC_FOV }.view_rotation();
-        mat3_transpose_mul_vec(vr_t, p)
+        let rotated = if yt == 0.0 && pt == 0.0 && rt == 0.0 {
+            p
+        } else {
+            let vr_t = SceneCamera3D { position: [0.0; 3], yaw: yt, pitch: pt, roll: rt, fov: CLASSIC_FOV }.view_rotation();
+            mat3_transpose_mul_vec(vr_t, p)
+        };
+        [rotated[0] + off[0], rotated[1] + off[1], rotated[2] + off[2]]
     }
 
     /// Adjust `(yaw_trim, pitch_trim, roll_trim)` so a raw solver floor normal `normal` maps onto

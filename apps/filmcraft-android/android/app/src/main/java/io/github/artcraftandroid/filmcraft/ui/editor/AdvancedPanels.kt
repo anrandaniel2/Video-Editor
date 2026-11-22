@@ -624,7 +624,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 solves.forEach { s ->
                     val label = String.format(Locale.US, "%s · %df · %.2fpx", s.name, s.frames.toInt(), s.medianRmsPx)
                     SelectChip(label, selectedSolve.id == s.id, {
-                        val base = mm ?: MatchMoveSettings(s.id, true, 700.0, 0.0, 0.0, 0.0)
+                        val base = mm ?: MatchMoveSettings(s.id, true, 700.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
                         ed.setMatchMove(base.copy(solve = s.id, enabled = true))
                     }, tag = "matchmove_item_${s.id}")
                 }
@@ -643,7 +643,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             )
 
             val cur = mm?.takeIf { it.solve == selectedSolve.id }
-                ?: MatchMoveSettings(selectedSolve.id, false, 700.0, 0.0, 0.0, 0.0)
+                ?: MatchMoveSettings(selectedSolve.id, false, 700.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
@@ -710,7 +710,17 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 SelectChip("Add 3D object", false, { ed.panel = Panel.Object3D }, tag = "matchmove_add_object")
                 SelectChip("Inspect in 3D Scene", false, { ed.panel = Panel.Scene }, tag = "matchmove_inspect_scene")
                 SelectChip("Reset alignment", false, {
-                    ed.setMatchMove(cur.copy(scalePx = 700.0, yawTrim = 0.0, pitchTrim = 0.0, rollTrim = 0.0))
+                    ed.setMatchMove(
+                        cur.copy(
+                            scalePx = 700.0,
+                            yawTrim = 0.0,
+                            pitchTrim = 0.0,
+                            rollTrim = 0.0,
+                            offsetX = 0.0,
+                            offsetY = 0.0,
+                            offsetZ = 0.0,
+                        ),
+                    )
                 }, tag = "matchmove_reset")
             }
         }
@@ -916,7 +926,7 @@ fun AnimationFrameBar(ed: EditorController, modifier: Modifier = Modifier) {
 @Composable
 fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
     val lighting = ed.sceneLights
-    LaunchedEffect(Unit) { ed.loadLights() }
+    LaunchedEffect(ed.playhead) { ed.loadLights(ed.playhead) }
     val light = lighting.lights.firstOrNull { it.id == ed.selectedLightId } ?: lighting.lights.firstOrNull()
     ToolPanel(
         "Lights", close, modifier, tag = "lights_panel",
@@ -968,8 +978,9 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.padding(start = 6.dp).size(18.dp).clip(CircleShape).background(Color(l.color[0], l.color[1], l.color[2])))
+                val animBadge = if (l.animated) " · ◆" else ""
                 Text(
-                    "${l.name} · ${l.kind}",
+                    "${l.name} · ${l.kind}$animBadge",
                     style = FcType.Body, color = if (l.enabled) Fc.Title else Fc.Detail,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f).padding(start = 8.dp),
@@ -985,6 +996,80 @@ fun LightsPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Mo
         if (light != null) {
             Spacer(Modifier.height(8.dp))
             Text("Selected light", style = FcType.Label, color = Fc.Title, modifier = Modifier.padding(horizontal = FcSize.PanelPadding))
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (light.animated) "Keyframed · ${light.keyframes.size} keys · edits at playhead"
+                else "Static · enable keyframes to animate over time",
+                style = FcType.Caption, color = Fc.Detail,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SelectChip(
+                    if (light.animated) "Keyframes On" else "Enable keyframes",
+                    light.animated,
+                    { ed.toggleLightAnimation(light.id) },
+                    tag = "lights_toggle_keyframes",
+                )
+                if (light.keyframes.isNotEmpty()) {
+                    SelectChip("◀◆", false, { ed.jumpLightKeyframe(light.id, -1) }, tag = "lights_prev_keyframe")
+                }
+                if (light.animated) {
+                    SelectChip(
+                        if (light.hasKeyframe) "− Keyframe" else "+ Keyframe",
+                        light.hasKeyframe,
+                        { if (light.hasKeyframe) ed.removeLightKeyframe(light.id) else ed.addLightKeyframe(light.id) },
+                        tag = "lights_stamp_keyframe",
+                    )
+                }
+                if (light.keyframes.isNotEmpty()) {
+                    SelectChip("◆▶", false, { ed.jumpLightKeyframe(light.id, 1) }, tag = "lights_next_keyframe")
+                }
+            }
+            if (light.animated) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        "linear" to "Linear",
+                        "smooth" to "Smooth",
+                        "easeIn" to "Ease in",
+                        "easeOut" to "Ease out",
+                        "hold" to "Hold",
+                    ).forEach { (id, label) ->
+                        SelectChip(
+                            label,
+                            light.interpolation == id,
+                            { ed.setLightInterpolation(light.id, id) },
+                            tag = "lights_curve_$id",
+                        )
+                    }
+                }
+                if (light.keyframes.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        light.keyframes.forEachIndexed { idx, tick ->
+                            val sec = String.format(Locale.US, "◆ %.2fs", tick.toDouble() / TPS.toDouble())
+                            val atKey = kotlin.math.abs(ed.playhead - tick) < TPS / 120L
+                            SelectChip(
+                                sec,
+                                atKey,
+                                { ed.seek(tick, draft = false) },
+                                tag = "lights_key_$idx",
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

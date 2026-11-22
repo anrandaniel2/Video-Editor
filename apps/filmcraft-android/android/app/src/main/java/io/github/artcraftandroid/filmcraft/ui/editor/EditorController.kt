@@ -130,8 +130,12 @@ data class SceneLight(
     val range: Double = 0.0,
     val cone: Double = 35.0,
     val softness: Double = 0.5,
+    val animated: Boolean = false,
+    val hasKeyframe: Boolean = false,
+    val interpolation: String = "linear",
+    val keyframes: List<Long> = emptyList(),
 ) {
-    fun toJson(merge: String? = null): String {
+    fun toJson(merge: String? = null, time: Long? = null): String {
         val j = JSONObject()
         j.put("id", id)
         j.put("name", name)
@@ -145,25 +149,34 @@ data class SceneLight(
         j.put("range", range)
         j.put("cone", cone)
         j.put("softness", softness)
+        if (time != null) j.put("time", time)
         if (merge != null) j.put("merge", merge)
         return j.toString()
     }
 
     companion object {
-        fun from(j: JSONObject) = SceneLight(
-            id = j.optLong("id"),
-            name = j.optString("name", "Light"),
-            enabled = j.optBoolean("enabled", true),
-            kind = j.optString("kind", "directional"),
-            color = (0..2).map { j.optJSONArray("color")?.optDouble(it, 1.0)?.toFloat() ?: 1f },
-            intensity = j.optDouble("intensity", 1.0),
-            position = (0..2).map { j.optJSONArray("position")?.optDouble(it, if (it == 2) 1500.0 else 0.0) ?: if (it == 2) 1500.0 else 0.0 },
-            angle = j.optDouble("angle", 135.0),
-            elevation = j.optDouble("elevation", 45.0),
-            range = j.optDouble("range", 0.0),
-            cone = j.optDouble("cone", 35.0),
-            softness = j.optDouble("softness", 0.5),
-        )
+        fun from(j: JSONObject): SceneLight {
+            val kfArr = j.optJSONArray("keyframes")
+            val kfs = (0 until (kfArr?.length() ?: 0)).map { kfArr!!.optLong(it, 0L) }
+            return SceneLight(
+                id = j.optLong("id"),
+                name = j.optString("name", "Light"),
+                enabled = j.optBoolean("enabled", true),
+                kind = j.optString("kind", "directional"),
+                color = (0..2).map { j.optJSONArray("color")?.optDouble(it, 1.0)?.toFloat() ?: 1f },
+                intensity = j.optDouble("intensity", 1.0),
+                position = (0..2).map { j.optJSONArray("position")?.optDouble(it, if (it == 2) 1500.0 else 0.0) ?: if (it == 2) 1500.0 else 0.0 },
+                angle = j.optDouble("angle", 135.0),
+                elevation = j.optDouble("elevation", 45.0),
+                range = j.optDouble("range", 0.0),
+                cone = j.optDouble("cone", 35.0),
+                softness = j.optDouble("softness", 0.5),
+                animated = j.optBoolean("animated", false),
+                hasKeyframe = j.optBoolean("hasKeyframe", false),
+                interpolation = j.optString("interpolation", "linear"),
+                keyframes = kfs,
+            )
+        }
     }
 }
 
@@ -341,6 +354,7 @@ class EditorController(
         if (changed) {
             loadSceneCamera()
             loadMatchMove()
+            loadLights()
             newRenderer()
             scheduleSave()
         }
@@ -433,7 +447,7 @@ class EditorController(
     fun select(clip: ULong?) {
         resetMaskTool()
         submenu = Submenu.None
-        if (panel !is Panel.TextInput) panel = null
+        if (panel !is Panel.TextInput && panel != Panel.Scene && panel != Panel.MatchMove) panel = null
         selectedCaption = null
         quickEdit { select(clip) }
     }
@@ -1322,9 +1336,10 @@ class EditorController(
     var sceneLights by mutableStateOf(SceneLightingState())
         private set
 
-    suspend fun loadLights() {
+    suspend fun loadLights(time: Long = playhead) {
+        if (liveEditing) return
         sceneLights = runCatching {
-            SceneLightingState.from(engine.command { execute("lights.list", "{}") })
+            SceneLightingState.from(engine.command { execute("lights.list", """{"time":$time}""") })
         }.getOrDefault(SceneLightingState())
     }
 
@@ -1333,9 +1348,13 @@ class EditorController(
         stop()
         scope.launch {
             try {
-                val light = SceneLight(name = "Light ${sceneLights.lights.size + 1}", kind = kind,
-                    position = listOf((timeline?.width?.toDouble() ?: 1080.0) / 2, (timeline?.height?.toDouble() ?: 1920.0) / 2, 1500.0))
-                val out = engine.command { execute("lights.set", light.toJson()) }
+                val at = playhead
+                val light = SceneLight(
+                    name = "Light ${sceneLights.lights.size + 1}",
+                    kind = kind,
+                    position = listOf((timeline?.width?.toDouble() ?: 1080.0) / 2, (timeline?.height?.toDouble() ?: 1920.0) / 2, 1500.0),
+                )
+                val out = engine.command { execute("lights.set", light.toJson(time = at)) }
                 sceneLights = SceneLightingState.from(out)
                 selectedLightId = JSONObject(out).optLong("id")
                 onAdded(selectedLightId)
@@ -1347,9 +1366,71 @@ class EditorController(
     /** Put a light object in the scene (its `id` edits it; 0 creates one). */
     fun setLight(light: SceneLight, merge: String? = null) {
         stop()
-        sceneLights = sceneLights.copy(lights = sceneLights.lights.map { if (it.id == light.id) light else it })
-        val body = light.toJson(merge)
-        queueLiveEdit("light:${light.id}") { execute("lights.set", body); Unit }
+        val at = playhead
+        val optimistic = if (light.animated) light.copy(hasKeyframe = true) else light
+        sceneLights = sceneLights.copy(lights = sceneLights.lights.map { if (it.id == optimistic.id) optimistic else it })
+        val body = optimistic.toJson(merge, time = at)
+        queueLiveEdit("light:${optimistic.id}") { execute("lights.set", body); Unit }
+    }
+
+    fun toggleLightAnimation(id: Long) {
+        stop()
+        val at = playhead
+        scope.launch {
+            try {
+                val out = engine.command { execute("lights.toggleAnimation", """{"id":$id,"time":$at}""") }
+                sceneLights = SceneLightingState.from(out)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun addLightKeyframe(id: Long) {
+        stop()
+        val at = playhead
+        scope.launch {
+            try {
+                val out = engine.command { execute("lights.addKeyframe", """{"id":$id,"time":$at}""") }
+                sceneLights = SceneLightingState.from(out)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun removeLightKeyframe(id: Long) {
+        stop()
+        val at = playhead
+        scope.launch {
+            try {
+                val out = engine.command { execute("lights.removeKeyframe", """{"id":$id,"time":$at}""") }
+                sceneLights = SceneLightingState.from(out)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun setLightInterpolation(id: Long, interpolation: String) {
+        stop()
+        val at = playhead
+        scope.launch {
+            try {
+                val body = JSONObject().put("id", id).put("time", at).put("interpolation", interpolation).toString()
+                val out = engine.command { execute("lights.setInterpolation", body) }
+                sceneLights = SceneLightingState.from(out)
+            } catch (e: Exception) { host.tell(e.userMessage) }
+            refresh()
+        }
+    }
+
+    fun jumpLightKeyframe(id: Long, dir: Int) {
+        val kfs = sceneLights.lights.firstOrNull { it.id == id }?.keyframes?.sorted().orEmpty()
+        if (kfs.isEmpty()) return
+        val next = if (dir > 0) {
+            kfs.firstOrNull { it > playhead } ?: kfs.last()
+        } else {
+            kfs.lastOrNull { it < playhead } ?: kfs.first()
+        }
+        seek(next, draft = false)
     }
 
     fun removeLight(id: Long) {
@@ -1427,6 +1508,13 @@ class EditorController(
     val matchmoveActive: Boolean
         get() = matchmoveState?.let { it.enabled && it.solve != 0uL } == true
 
+    /** Video clip ID currently driving the active Match-Move solve (locked as background plate). */
+    val activeMatchMoveClipId: ULong?
+        get() {
+            val activeSolve = matchmoveState?.takeIf { it.enabled && it.solve != 0uL }?.solve ?: return null
+            return cameraSolves.firstOrNull { it.id == activeSolve }?.clip
+        }
+
     /** Effective camera driving 3D objects and lights at the playhead (solved match-move pose, else manual camera). */
     val activeRenderCamera: SceneCamera?
         get() = effectiveRenderCamera(
@@ -1461,8 +1549,9 @@ class EditorController(
             return
         }
         stop()
-        cameraSolveProgress = CameraSolveStatus(0.0, "Preparing footage…", false, null, null)
+        cameraSolveProgress = CameraSolveStatus(0.0, "Preparing footage…", false, null, null, null)
         scope.launch {
+            var switchedTo2d = false
             try {
                 val job = engine.command { startCameraSolve(target, options) }
                 cameraSolveJob = job
@@ -1471,9 +1560,20 @@ class EditorController(
                     cameraSolveProgress = st
                     if (st.finished) {
                         val s = st.solve
+                        val track2d = st.switchedToMotionTrack
                         when {
                             st.error == "cancelled" -> {}
                             st.error != null -> host.tell(st.error ?: "")
+                            track2d != null -> {
+                                switchedTo2d = true
+                                engine.command { select(target) }
+                                selectedTrackId = track2d.id
+                                trackingLayout = StereoLayout.MONO
+                                loadTracks()
+                                host.tell(
+                                    "2D video detected — switched to 2D motion tracking (${track2d.samples} frames · ${track2d.quality.toInt()}% lock).",
+                                )
+                            }
                             s != null -> {
                                 val rms = "%.2f".format(java.util.Locale.US, s.medianRmsPx)
                                 val cuts = if (s.shotsSkipped > 0u) " · ${s.shotsSkipped} cut skipped" else ""
@@ -1496,6 +1596,9 @@ class EditorController(
             }
             loadMatchMove()
             refresh()
+            if (switchedTo2d) {
+                panel = Panel.Tracking
+            }
         }
     }
 
@@ -1523,7 +1626,7 @@ class EditorController(
     }
 
     fun clearMatchMove() {
-        setMatchMove(MatchMoveSettings(0uL, false, 700.0, 0.0, 0.0, 0.0), null)
+        setMatchMove(MatchMoveSettings(0uL, false, 700.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), null)
     }
 
     fun deleteCameraSolve(id: ULong) {

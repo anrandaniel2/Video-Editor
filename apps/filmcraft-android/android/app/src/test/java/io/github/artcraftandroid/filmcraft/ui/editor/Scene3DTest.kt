@@ -1,10 +1,13 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
 import androidx.compose.ui.graphics.Color
+import io.github.artcraftandroid.filmcraft.core.MatchMoveSettings
 import io.github.artcraftandroid.filmcraft.core.Object3DMesh
 import io.github.artcraftandroid.filmcraft.core.Object3DSettings
 import io.github.artcraftandroid.filmcraft.core.SceneCamera3d
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -110,5 +113,76 @@ class Scene3DTest {
 
         val zoomedIn = aligned.dollyAndPanBy(zoom = 2f, panX = 0f, panY = 0f, fov = CLASSIC_FOV, viewHeightPx = 700f)
         assertEquals(350.0, zoomedIn.distance, 1e-6)
+    }
+
+    @Test
+    fun gizmoRadiusRemainsConstantOnScreenAcrossSolvedMatchMoveFovs() {
+        val fw = 1080.0
+        val fh = 1920.0
+        val obj = cubeAt(z = 900.0)
+        for (fov in listOf(24.0, CLASSIC_FOV, 88.0)) {
+            val cam = SceneCamera(listOf(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, fov)
+            val g = GizmoGeometry(obj, null, fw, fh, fw, fh, 64.0, cameraProjection(cam, fw, fh, fw, fh))
+            val screenLen = (g.endpoint(0) - g.centre).getDistance().toDouble()
+            assertEquals("screen handle length stays ~64 px at fov=$fov", 64.0, screenLen, 0.5)
+        }
+    }
+
+    @Test
+    fun rotateMatchMoveCameraPivotsAroundCurrentEyeWithoutDriftingPosition() {
+        val mm = MatchMoveSettings(1uL, true, 700.0, 8.0, -4.0, 2.0, 20.0, -15.0, 40.0)
+        val cam = SceneCamera(listOf(140.0, -60.0, 220.0), 18.0, -7.0, 3.0, 50.0)
+        val (nextMm, nextCam) = rotateMatchMoveCamera(cam, mm, axis = 1, degrees = 12.0)
+        assertEquals(cam.position[0], nextCam.position[0], 1e-6)
+        assertEquals(cam.position[1], nextCam.position[1], 1e-6)
+        assertEquals(cam.position[2], nextCam.position[2], 1e-6)
+        assertTrue(kotlin.math.abs(nextMm.yawTrim - mm.yawTrim) > 5.0)
+    }
+
+    @Test
+    fun blenderLightConeSpecReflectsEmitDirectionConeSoftnessAndRange() {
+        // Default light (135° / 45°) shines forward (+Z) into the 3D scene, never backwards (-Z).
+        val emit = lightEmitDirection(135.0, 45.0)
+        assertTrue("emission points forward into +Z", emit.z > 0.5)
+        val (roundAngle, roundElev) = lightAnglesFromEmit(emit)
+        assertEquals(135.0, roundAngle, 1e-4)
+        assertEquals(45.0, roundElev, 1e-4)
+
+        val narrowHard = SceneLight(kind = "spot", cone = 18.0, softness = 0.0, range = 600.0)
+        val wideSoft = narrowHard.copy(cone = 52.0, softness = 0.65, range = 2200.0)
+        val specA = buildLightConeSpec(narrowHard, 80.0)
+        val specB = buildLightConeSpec(wideSoft, 80.0)
+
+        assertTrue(specA.hasAimTarget && specB.hasAimTarget)
+        assertNull(specA.innerRadius)
+        assertNotNull(specB.innerRadius)
+        assertTrue("wider cone + longer range produces wider base", specB.outerRadius > specA.outerRadius * 2.0)
+        assertTrue("longer falloff range extends beam length", specB.beamLength > specA.beamLength)
+        assertTrue("softness penumbra ring lies strictly inside outer cone", specB.innerRadius!! < specB.outerRadius)
+
+        val pointSpec = buildLightConeSpec(SceneLight(kind = "point", range = 1000.0), 80.0)
+        assertFalse(pointSpec.hasAimTarget)
+    }
+
+    @Test
+    fun sceneLightJsonRoundTripsKeyframeMetadata() {
+        val raw = JSONObject()
+            .put("id", 7L)
+            .put("name", "Key Spot")
+            .put("enabled", true)
+            .put("kind", "spot")
+            .put("intensity", 2.4)
+            .put("cone", 42.0)
+            .put("softness", 0.4)
+            .put("animated", true)
+            .put("hasKeyframe", true)
+            .put("interpolation", "smooth")
+            .put("keyframes", org.json.JSONArray(listOf(0L, TPS, TPS * 2)))
+        val parsed = SceneLight.from(raw)
+        assertEquals(7L, parsed.id)
+        assertTrue(parsed.animated)
+        assertTrue(parsed.hasKeyframe)
+        assertEquals("smooth", parsed.interpolation)
+        assertEquals(listOf(0L, TPS, TPS * 2), parsed.keyframes)
     }
 }
