@@ -1958,13 +1958,13 @@ mod tests {
             }
         }
         let mut e = find_effect("object_3d").unwrap().instance();
-        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(110.0);
+        e.params.get_mut("size").unwrap().value = filmcraft_project::ParamValue::Float(240.0);
         e.params.get_mut("behind_foreground").unwrap().value = filmcraft_project::ParamValue::Bool(true);
         let env = OccEnv;
         let mut img = Image::new(256, 256);
         apply(&mut img, &e, &FxCtx { env: Some(&env), ..ctx() });
         let unoccluded_alpha = img.px[(128 * 256 + 100) * 4 + 3];
-        let occluded_alpha = img.px[(128 * 256 + 140) * 4 + 3];
+        let occluded_alpha = img.px[(128 * 256 + 144) * 4 + 3];
         assert!(unoccluded_alpha > 0.85, "background side of 3D cube should stay visible, got {unoccluded_alpha}");
         assert!(occluded_alpha < 0.15, "foreground subject column should occlude 3D cube, got {occluded_alpha}");
     }
