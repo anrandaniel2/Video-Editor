@@ -17,7 +17,7 @@ use filmcraft_project::{StereoLayout, TrackSample};
 use filmcraft_time::Tick;
 
 use crate::matchmove::InputFrame;
-use crate::scene::{SceneDetector, SceneOptions};
+use crate::scene::SceneDetector;
 use crate::track3d::{
     GpuTrackBackend, GpuTrackQuery, Gray, Level, corners, crop_gray, gpu_backend, search, smooth_track_samples, track_point, view_rect,
 };
@@ -175,22 +175,6 @@ fn conform_rgba<'a>(rgba: &'a [u8], w: usize, h: usize, stereo: StereoLayout) ->
     (dw, dh, std::borrow::Cow::Owned(box_downsample_rgba(rgba, w, h, dw, dh)))
 }
 
-fn view_rgba<'a>(rgba: &'a [u8], w: usize, h: usize, vx: usize, vy: usize, vw: usize, vh: usize) -> std::borrow::Cow<'a, [u8]> {
-    if vx == 0 && vy == 0 && vw == w && vh == h {
-        return std::borrow::Cow::Borrowed(rgba);
-    }
-    let mut out = vec![0u8; vw * vh * 4];
-    for y in 0..vh {
-        let src_off = ((vy + y) * w + vx) * 4;
-        let dst_off = y * vw * 4;
-        let len = vw * 4;
-        if let (Some(src), Some(dst)) = (rgba.get(src_off..src_off + len), out.get_mut(dst_off..dst_off + len)) {
-            dst.copy_from_slice(src);
-        }
-    }
-    std::borrow::Cow::Owned(out)
-}
-
 fn grid_cell_index(x: f32, y: f32, vw: usize, vh: usize) -> usize {
     let gx = ((x.max(0.0) as usize) * GRID_COLS / vw.max(1)).min(GRID_COLS - 1);
     let gy = ((y.max(0.0) as usize) * GRID_ROWS / vh.max(1)).min(GRID_ROWS - 1);
@@ -203,7 +187,7 @@ fn count_cells_mask(mask: u64) -> usize {
 
 fn seed_grid(
     view: &Gray,
-    gpu: Option<&GpuTrackBackend>,
+    gpu: Option<(&dyn GpuTrackBackend, usize)>,
     live: &mut Vec<LivePoint>,
     next_id: &mut usize,
 ) {
@@ -215,40 +199,40 @@ fn seed_grid(
         cell_counts[grid_cell_index(p.x, p.y, vw, vh)] += 1;
     }
 
-    if let Some(g) = gpu {
-        let cx = vw as f32 * 0.5;
-        let cy = vh as f32 * 0.5;
-        let reach = cx.hypot(cy);
-        if let Some(cands) = g.detect_corners(vw as u32, vh as u32, cx, cy, reach, MIN_SEPARATION_PX, TARGET_FEATURES * 3) {
-            for (px, py) in cands {
-                if live.len() >= TARGET_FEATURES {
-                    break;
-                }
-                if (px as usize) < border
-                    || (py as usize) < border
-                    || (px as usize) + border >= vw
-                    || (py as usize) + border >= vh
-                {
-                    continue;
-                }
-                let cell = grid_cell_index(px, py, vw, vh);
-                if cell_counts[cell] >= PER_CELL_CAP {
-                    continue;
-                }
-                if live.iter().any(|q| {
-                    let dx = q.x - px;
-                    let dy = q.y - py;
-                    dx * dx + dy * dy < min_sep2
-                }) {
-                    continue;
-                }
-                let id = *next_id;
-                *next_id += 1;
-                cell_counts[cell] += 1;
-                live.push(LivePoint { id, x: px, y: py, vx: 0.0, vy: 0.0 });
+    if let Some((g, slot)) = gpu
+        && vw > border * 2
+        && vh > border * 2
+        && let Some(mut cands) = g.detect_corners(slot, (border, border, vw - border, vh - border), 8)
+    {
+        cands.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (_, px, py) in cands {
+            if live.len() >= TARGET_FEATURES {
+                break;
             }
-            return;
+            if (px as usize) < border
+                || (py as usize) < border
+                || (px as usize) + border >= vw
+                || (py as usize) + border >= vh
+            {
+                continue;
+            }
+            let cell = grid_cell_index(px, py, vw, vh);
+            if cell_counts[cell] >= PER_CELL_CAP {
+                continue;
+            }
+            if live.iter().any(|q| {
+                let dx = q.x - px;
+                let dy = q.y - py;
+                dx * dx + dy * dy < min_sep2
+            }) {
+                continue;
+            }
+            let id = *next_id;
+            *next_id += 1;
+            cell_counts[cell] += 1;
+            live.push(LivePoint { id, x: px, y: py, vx: 0.0, vy: 0.0 });
         }
+        return;
     }
 
     let cell_w = vw as f32 / GRID_COLS as f32;
@@ -308,7 +292,7 @@ fn track_single_cpu(prev_pyr: &[Level], curr_pyr: &[Level], p: (f32, f32), guess
 fn estimate_whip_pan_guess(
     prev_pyr: Option<&[Level]>,
     curr_pyr: Option<&[Level]>,
-    gpu: Option<&GpuTrackBackend>,
+    gpu: Option<(&dyn GpuTrackBackend, usize, usize)>,
     vw: usize,
     vh: usize,
     live: &[LivePoint],
@@ -320,8 +304,8 @@ fn estimate_whip_pan_guess(
     let step = (live.len() / 9).max(1);
     let mut shifts: Vec<(f32, f32)> = Vec::with_capacity(9);
     for p in live.iter().step_by(step).take(9) {
-        let found = if let Some(g) = gpu {
-            g.coarse_search((p.x, p.y), 3, reach)
+        let found = if let Some((g, prev_slot, curr_slot)) = gpu {
+            g.coarse_search(prev_slot, curr_slot, (p.x, p.y), 3, reach)
         } else if let (Some(pp), Some(cp)) = (prev_pyr, curr_pyr) {
             search(pp, cp, (p.x, p.y), 3, reach)
         } else {
@@ -817,16 +801,14 @@ fn isolate_shot_around_playhead(obs: &[FrameObservation], playhead: Tick, cut_se
 /// Solve global 2D background camera motion over streamed RGBA frames.
 pub fn solve_2d_camera_space<F>(options: &Camera2DOptions, mut for_each_frame: F) -> Result<Camera2DSolve, Camera2DError>
 where
-    F: FnMut(&mut dyn FnMut(InputFrame<'_>) -> Result<bool, Camera2DError>) -> Result<(), Camera2DError>,
+    F: FnMut(&mut dyn FnMut(InputFrame<'_>) -> Result<(), Camera2DError>) -> Result<(), Camera2DError>,
 {
     let gpu = gpu_backend();
-    let mut detector = SceneDetector::new(SceneOptions {
-        sensitivity: options.cut_sensitivity,
-        min_shot_frames: 6,
-    });
+    let mut detector = SceneDetector::new();
     let mut observations: Vec<FrameObservation> = Vec::new();
     let mut live: Vec<LivePoint> = Vec::new();
     let mut prev_pyr: Option<Vec<Level>> = None;
+    let mut gpu_prev_slot: Option<usize> = None;
     let mut next_id = 0usize;
     let mut view_geom: Option<(usize, usize, usize, usize, usize, usize)> = None;
     let mut levels = 3usize;
@@ -840,40 +822,44 @@ where
             return Err(Camera2DError::Decode("invalid frame dimensions".into()));
         }
         let (cw, ch, conformed) = conform_rgba(input.rgba, input.width, input.height, options.stereo);
-        let (vx, vy, vw, vh) = view_rect(cw, ch, options.stereo);
+        let (vx, vy, vw, vh) = view_rect(options.stereo, cw, ch);
         if view_geom.is_none() {
             levels = pyramid_levels_for(vw, vh);
             view_geom = Some((cw, ch, vx, vy, vw, vh));
         }
         let (_, _, vx, vy, vw, vh) = view_geom.unwrap_or((cw, ch, vx, vy, vw, vh));
-        let full_gray = Gray::from_rgba8(&conformed, cw, ch);
-        let scene_diff = detector.feed_luma(frame_idx, input.time, &full_gray.p, cw, ch);
-        let view = crop_gray(&full_gray, vx, vy, vw, vh);
-        let v_rgba = view_rgba(&conformed, cw, ch, vx, vy, vw, vh);
+        let scene_diff = detector.push_rgba(&conformed, cw, ch);
+        let curr_slot = frame_idx % 2;
 
-        let gpu_ready = if let Some(g) = gpu {
-            g.build_rgba_pyramid(&v_rgba, vw as u32, vh as u32, levels).is_some()
-        } else {
-            false
+        let gpu_view = gpu.and_then(|g| {
+            g.build_rgba_pyramid(curr_slot, &conformed, cw, ch, (vx, vy, vw, vh), (vw, vh), levels)
+        });
+        let gpu_ready = gpu_view.is_some();
+        let view = match gpu_view {
+            Some(gv) => gv,
+            None => {
+                let full_gray = Gray::from_rgba8(&conformed, cw, ch);
+                crop_gray(&full_gray, vx, vy, vw, vh)
+            }
         };
-        let curr_pyr = if gpu_ready { None } else { Some(Level::pyramid(view.clone(), levels)) };
+        let curr_pyr = if gpu_ready { None } else { Some(view.pyramid(levels)) };
 
         let mut matches = Vec::with_capacity(live.len());
         let prev_count = live.len();
 
         if frame_idx > 0 && !live.is_empty() {
             let mut survivors = Vec::with_capacity(live.len());
-            if gpu_ready && let Some(g) = gpu {
+            if gpu_ready
+                && let (Some(g), Some(prev_slot)) = (gpu, gpu_prev_slot)
+            {
                 let queries: Vec<GpuTrackQuery> = live
                     .iter()
                     .map(|p| GpuTrackQuery {
-                        x: p.x,
-                        y: p.y,
-                        guess_dx: p.vx,
-                        guess_dy: p.vy,
+                        pt: (p.x, p.y),
+                        guess: (p.vx, p.vy),
                     })
                     .collect();
-                if let Some(res) = g.track_batch_fb(&queries, LK_PATCH_RADIUS, FB_MAX_PX) {
+                if let Some(res) = g.track_batch_fb(prev_slot, curr_slot, &queries, LK_PATCH_RADIUS, FB_MAX_PX) {
                     let mut failed_idx = Vec::new();
                     for (i, r) in res.into_iter().enumerate() {
                         let p = live[i];
@@ -894,13 +880,11 @@ where
                         let retry_q: Vec<GpuTrackQuery> = failed_idx
                             .iter()
                             .map(|&i| GpuTrackQuery {
-                                x: live[i].x,
-                                y: live[i].y,
-                                guess_dx: 0.0,
-                                guess_dy: 0.0,
+                                pt: (live[i].x, live[i].y),
+                                guess: (0.0, 0.0),
                             })
                             .collect();
-                        if let Some(retry_res) = g.track_batch_fb(&retry_q, LK_PATCH_RADIUS, FB_MAX_PX) {
+                        if let Some(retry_res) = g.track_batch_fb(prev_slot, curr_slot, &retry_q, LK_PATCH_RADIUS, FB_MAX_PX) {
                             for (&orig_i, r) in failed_idx.iter().zip(retry_res) {
                                 if let Some((nx, ny)) = r {
                                     let p = live[orig_i];
@@ -939,12 +923,17 @@ where
 
             // Whip-pan recovery: if < 35% of features survived and it is NOT a hard scene cut,
             // run coarse ZNCC global shift estimation and re-track with that global shift guess!
+            let gpu_pair = if gpu_ready {
+                gpu.zip(gpu_prev_slot).map(|(g, ps)| (g, ps, curr_slot))
+            } else {
+                None
+            };
             if survivors.len() * 100 < prev_count * 35
                 && scene_diff < 0.36
                 && let Some((whip_dx, whip_dy)) = estimate_whip_pan_guess(
                     prev_pyr.as_deref(),
                     curr_pyr.as_deref(),
-                    gpu_ready.then_some(gpu).flatten(),
+                    gpu_pair,
                     vw,
                     vh,
                     &live,
@@ -952,17 +941,15 @@ where
             {
                 let mut whip_matches = Vec::with_capacity(live.len());
                 let mut whip_survivors = Vec::with_capacity(live.len());
-                if gpu_ready && let Some(g) = gpu {
+                if let Some((g, prev_slot, _)) = gpu_pair {
                     let queries: Vec<GpuTrackQuery> = live
                         .iter()
                         .map(|p| GpuTrackQuery {
-                            x: p.x,
-                            y: p.y,
-                            guess_dx: whip_dx,
-                            guess_dy: whip_dy,
+                            pt: (p.x, p.y),
+                            guess: (whip_dx, whip_dy),
                         })
                         .collect();
-                    if let Some(res) = g.track_batch_fb(&queries, LK_PATCH_RADIUS, FB_MAX_PX) {
+                    if let Some(res) = g.track_batch_fb(prev_slot, curr_slot, &queries, LK_PATCH_RADIUS, FB_MAX_PX) {
                         for (i, r) in res.into_iter().enumerate() {
                             if let Some((nx, ny)) = r {
                                 let p = live[i];
@@ -1006,7 +993,12 @@ where
         };
 
         if frame_idx == 0 || frame_idx % 2 == 0 || live.len() < (TARGET_FEATURES * 7) / 10 {
-            seed_grid(&view, gpu_ready.then_some(gpu).flatten(), &mut live, &mut next_id);
+            seed_grid(
+                &view,
+                gpu_ready.then_some(gpu).flatten().map(|g| (g, curr_slot)),
+                &mut live,
+                &mut next_id,
+            );
         }
 
         let alive = live.iter().map(|p| (p.id, p.x, p.y)).collect::<Vec<_>>();
@@ -1019,14 +1011,13 @@ where
         });
 
         if gpu_ready {
-            if let Some(g) = gpu {
-                g.advance_pyramid();
-            }
+            gpu_prev_slot = Some(curr_slot);
         } else {
+            gpu_prev_slot = None;
             prev_pyr = curr_pyr;
         }
         frame_idx += 1;
-        Ok(true)
+        Ok(())
     })?;
 
     if observations.len() < 2 {
