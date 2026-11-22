@@ -135,4 +135,17 @@ object Glyphs {
         val colors = listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red)
         drawCircle(androidx.compose.ui.graphics.Brush.sweepGradient(colors), u(9f), Offset(u(12f), u(12f)), style = Stroke(u(3.5f)))
     }
+
+    /** A 3D camera with corner tracking brackets (camera match-move). */
+    val Camera3D = Glyph.Drawn { c ->
+        val w = Stroke(width = u(1.6f), join = StrokeJoin.Round, cap = StrokeCap.Round)
+        drawRoundRect(c, Offset(u(4.5f), u(7.5f)), Size(u(15f), u(11f)), CornerRadius(u(2f)), style = w)
+        drawRoundRect(c, Offset(u(8f), u(5.5f)), Size(u(4.5f), u(2.2f)), CornerRadius(u(0.8f)))
+        drawCircle(c, u(3.2f), Offset(u(12f), u(13f)), style = w)
+        // subtle corner track brackets
+        drawLine(c, Offset(u(2f), u(5f)), Offset(u(2f), u(2.5f)), u(1.5f), StrokeCap.Round)
+        drawLine(c, Offset(u(2f), u(2.5f)), Offset(u(4.5f), u(2.5f)), u(1.5f), StrokeCap.Round)
+        drawLine(c, Offset(u(22f), u(5f)), Offset(u(22f), u(2.5f)), u(1.5f), StrokeCap.Round)
+        drawLine(c, Offset(u(22f), u(2.5f)), Offset(u(19.5f), u(2.5f)), u(1.5f), StrokeCap.Round)
+    }
 }

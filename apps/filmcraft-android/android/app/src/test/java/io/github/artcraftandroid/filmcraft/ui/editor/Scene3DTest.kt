@@ -1,0 +1,91 @@
+package io.github.artcraftandroid.filmcraft.ui.editor
+
+import androidx.compose.ui.graphics.Color
+import io.github.artcraftandroid.filmcraft.core.Object3DMesh
+import io.github.artcraftandroid.filmcraft.core.Object3DSettings
+import io.github.artcraftandroid.filmcraft.core.SceneCamera3d
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class Scene3DTest {
+    private fun cubeAt(x: Double = 540.0, y: Double = 960.0, z: Double = 900.0) = Object3DSettings(
+        mesh = Object3DMesh.CUBE, text = "", font = "Inter", fontStyle = "Regular", align = 1u, tracking = 0.0,
+        kerning = true, ligatures = true, leading = 100.0, baselineShift = 0.0, fauxBold = false, fauxItalic = false,
+        caps = 0u, underline = false, boxWidth = 500.0, vertical = false, size = 200.0, depth = 200.0, bevel = 0.0,
+        x = x, y = y, z = z, rotationX = 0.0, rotationY = 0.0, rotationZ = 0.0, scale = 100.0,
+        color = 0xffffffffu, sideColor = 0xff808080u, metalness = 0.0, roughness = 50.0, envReflection = 100.0, emissive = 0.0,
+        lightAngle = 135.0, lightElevation = 45.0, opacity = 100.0, followTrack = false, trackId = 0uL, trackDepth = 240.0,
+        modelPath = "", modelAnim = -1, modelTime = 0.0, modelPlay = true, modelLoop = true, modelSpeed = 100.0,
+    )
+
+    @Test
+    fun fromNativeMapsAllCameraFields() {
+        val cam = SceneCamera.fromNative(SceneCamera3d(listOf(120.0, -45.0, 310.0), 12.5, -6.0, 2.0, 48.0))
+        assertEquals(listOf(120.0, -45.0, 310.0), cam.position)
+        assertEquals(12.5, cam.yaw, 1e-6)
+        assertEquals(-6.0, cam.pitch, 1e-6)
+        assertEquals(2.0, cam.roll, 1e-6)
+        assertEquals(48.0, cam.fov, 1e-6)
+    }
+
+    @Test
+    fun effectiveRenderCameraPrefersMatchMoveOverManualCamera() {
+        val solved = SceneCamera(listOf(80.0, 0.0, 150.0), 4.0, -2.0, 0.0, 50.0)
+        val manual = SceneCamera.DEFAULT
+        assertSame(solved, effectiveRenderCamera(solved, manual))
+        assertSame(manual, effectiveRenderCamera(null, manual))
+        assertNull(effectiveRenderCamera(null, null))
+    }
+
+    @Test
+    fun matchMoveCameraParallaxShiftsWorldObjectInGizmoProjection() {
+        val fw = 1080.0
+        val fh = 1920.0
+        val camCenter = SceneCamera(listOf(0.0, 0.0, 0.0), 0.0, 0.0, 0.0, CLASSIC_FOV)
+        val camTruckRight = SceneCamera(listOf(180.0, 0.0, 0.0), 0.0, 0.0, 0.0, CLASSIC_FOV)
+
+        val nearObj = cubeAt(z = 800.0)
+        val farObj = cubeAt(z = 1600.0)
+
+        val near0 = GizmoGeometry(nearObj, null, fw, fh, fw, fh, 64.0, cameraProjection(camCenter, fw, fh, fw, fh)).centre
+        val near1 = GizmoGeometry(nearObj, null, fw, fh, fw, fh, 64.0, cameraProjection(camTruckRight, fw, fh, fw, fh)).centre
+        val far0 = GizmoGeometry(farObj, null, fw, fh, fw, fh, 64.0, cameraProjection(camCenter, fw, fh, fw, fh)).centre
+        val far1 = GizmoGeometry(farObj, null, fw, fh, fw, fh, 64.0, cameraProjection(camTruckRight, fw, fh, fw, fh)).centre
+
+        val nearShift = (near0.x - near1.x).toDouble()
+        val farShift = (far0.x - far1.x).toDouble()
+        assertTrue("near object shifts left when camera trucks right", nearShift > 200.0)
+        assertEquals("parallax scales inversely with depth", nearShift * 0.5, farShift, 0.5)
+    }
+
+    @Test
+    fun landmarkColorClassifiesReprojectionRms() {
+        assertNotNull(landmarkColor(0.4))
+        assertEquals(Color(0xFF6FE295), landmarkColor(0.6))
+        assertEquals(Color(0xFFFFC947), landmarkColor(1.8))
+        assertEquals(Color(0xFFFF6575), landmarkColor(3.4))
+    }
+
+    @Test
+    fun frameNormalizedAtTapHandlesLetterboxPillarboxAndBars() {
+        // 16:9 frame (1920x1080) inside square 1000x1000 container -> fitted 1000x562.5 with oy = 218.75.
+        val center = frameNormalizedAtTap(500f, 500f, 1000f, 1000f, 1920f, 1080f)
+        assertNotNull(center)
+        assertEquals(0.5, center!!.first, 1e-4)
+        assertEquals(0.5, center.second, 1e-4)
+
+        val quarter = frameNormalizedAtTap(250f, 218.75f + 562.5f * 0.25f, 1000f, 1000f, 1920f, 1080f)
+        assertNotNull(quarter)
+        assertEquals(0.25, quarter!!.first, 1e-4)
+        assertEquals(0.25, quarter.second, 1e-4)
+
+        // Tap on top/bottom letterbox black bars returns null.
+        assertNull(frameNormalizedAtTap(500f, 100f, 1000f, 1000f, 1920f, 1080f))
+        assertNull(frameNormalizedAtTap(500f, 900f, 1000f, 1000f, 1920f, 1080f))
+        assertNull(frameNormalizedAtTap(10f, 10f, 0f, 1000f, 1920f, 1080f))
+    }
+}

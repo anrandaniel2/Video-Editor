@@ -13,7 +13,10 @@ use filmcraft_project::{ItemId, Project};
 use filmcraft_render::{RenderOptions, SourceProvider};
 use filmcraft_time::{FrameRate, Tick};
 
-use crate::{Frame, MobileError, advanced::SceneCamera3d};
+use crate::{
+    Frame, MobileError,
+    advanced::{MatchMovePose, SceneCamera3d, matchmove_pose_at},
+};
 
 /// The largest side a picture may be asked for: a 4K frame's long side.
 const MAX_SIDE: u32 = 4096;
@@ -168,6 +171,14 @@ impl Renderer {
         self.sample_rate
     }
 
+    /// Active solved match-move camera pose and confidence at `time` (ticks, snapped to a frame),
+    /// read directly from the immutable project snapshot without taking the session lock.
+    pub fn matchmove_pose(&self, time: i64) -> Option<MatchMovePose> {
+        let t = self.rate.snap(Tick(time.max(0)));
+        let seq = self.project.sequence(self.seq)?;
+        matchmove_pose_at(seq, t)
+    }
+
     /// The program at `time` (ticks, snapped to a frame) with its long side at most `max_side`.
     /// `draft` decodes faster at a little less quality (for playback and scrubbing).
     pub fn frame(&self, time: i64, max_side: u32, draft: bool, cancel: Option<Arc<CancelToken>>) -> Result<Frame, MobileError> {
@@ -189,7 +200,13 @@ impl Renderer {
         let img = guarded(&cancel, || {
             filmcraft_media::cancel::with_draft(draft, || {
                 filmcraft_render::with_preview_camera(preview_camera, || {
-                    filmcraft_render::render_sequence(&self.project, self.seq, t, RenderOptions { scale, captions: true, solo_3d, ..Default::default() }, &provider)
+                    filmcraft_render::render_sequence(
+                        &self.project,
+                        self.seq,
+                        t,
+                        RenderOptions { scale, captions: true, solo_3d, ..Default::default() },
+                        &provider,
+                    )
                 })
             })
         });

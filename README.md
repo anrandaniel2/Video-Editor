@@ -89,6 +89,24 @@ keeps the clip's masks.
 
 <br>
 
+## 3D Camera Match-Move
+
+Select a video clip and open **Match-Move** (or open **3D Scene › Match-Move**). FilmCraft tracks dense
+optical-flow features across the shot, isolates hard cuts around the playhead, automatically selects
+between full 6-DoF epipolar reconstruction and rotation-only tripod pan/tilt, estimates focal length
+when requested, and refines camera poses and 3D landmarks with sparse Huber bundle adjustment.
+
+Once solved, 3D primitives, extruded text, imported GLB/glTF models and 3D scene lights render through
+the solved camera in both live preview and exported video. Use **Auto-level ground** to align the scene
+floor to reconstructed 3D landmarks, **Place on landmark** / **Pick landmark** to tap any reconstructed
+3D point directly on the preview monitor and drop or snap a 3D object onto that surface, **Bake to camera**
+to freeze the solved pose at the playhead into the manual 3D camera, or adjust **World scale** and
+**Yaw / Pitch / Roll trim** while inspecting the 3D point cloud and camera trajectory in **3D Scene**.
+Headless and pipeline callers can also query calibrated world-space camera tracks and 3D landmarks via
+`scene.exportMatchmove` and bake poses via `scene.bakeMatchmoveFrame`.
+
+<br>
+
 ## Text
 
 <p align="center">
@@ -151,6 +169,7 @@ FilmCraft for Android is in beta.
 | 31 filters, 23 effects, opacity, mirror and flip; move, scale and turn on the preview | ✅ |
 | Clip masks: ellipse, rectangle, polygon and free-draw; feather, expansion, opacity, invert and combine; drag on the preview | ✅ |
 | 3D objects: primitives, extruded text and imported GLB/glTF models with PBR textures, rigs and animations; any size GLB imports | ✅ |
+| 3D camera match-move: 6-DoF & tripod camera solving, bundle-adjusted 3D point cloud, stereo SBS/TB depth, ground auto-leveling and surface snapping | ✅ |
 | 50 transitions, intro and outro, apply to all | ✅ |
 | Text: presets, the phone's fonts, colours and layout | ✅ |
 | Captions made on the phone (Whisper, downloaded once when you ask), edited and burned in | ✅ |

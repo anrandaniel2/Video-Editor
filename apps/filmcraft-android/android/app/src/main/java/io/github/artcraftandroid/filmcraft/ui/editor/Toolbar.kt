@@ -94,6 +94,7 @@ private fun addTools(ed: EditorController) = listOf(
     Tool("editor_tool_audio", "Audio", LucideIcons.Music.glyph()) { ed.submenu = Submenu.AddAudio },
     Tool("editor_tool_text", "Text", LucideIcons.Type.glyph()) { ed.panel = Panel.TextInput(null) },
     Tool("editor_tool_3d", "3D Scene", Glyphs.Object3D, active = ed.panel == Panel.Scene) { ed.panel = if (ed.panel == Panel.Scene) null else Panel.Scene },
+    Tool("editor_tool_matchmove", "Match-Move", Glyphs.Camera3D, enabled = ed.duration > 0, active = ed.panel == Panel.MatchMove || ed.matchmoveActive) { ed.panel = Panel.MatchMove },
     Tool("editor_tool_lights", "Lights", LucideIcons.Sun.glyph()) { ed.panel = Panel.Lights },
     Tool("editor_tool_captions", "Captions", LucideIcons.Captions.glyph(), enabled = ed.duration > 0) { ed.panel = Panel.Captions },
     Tool("editor_tool_files", "Files", LucideIcons.File.glyph()) { ed.submenu = Submenu.Files },
@@ -166,6 +167,7 @@ private fun clipTools(ed: EditorController, c: ClipInfo): List<Tool> {
             if (c.hasAudio) Tool("editor_tool_audio_submenu", "Audio", (if (c.muted) LucideIcons.VolumeX else LucideIcons.Volume2).glyph()) { ed.submenu = Submenu.ClipAudio } else null,
         ) + picture + listOf(
             Tool("editor_tool_track", "Track", LucideIcons.Timer.glyph(), active = ed.panel == Panel.Tracking) { ed.panel = Panel.Tracking },
+            Tool("editor_tool_clip_matchmove", "Match-Move", Glyphs.Camera3D, active = ed.panel == Panel.MatchMove || ed.matchmoveActive) { ed.panel = Panel.MatchMove },
             duplicate, replace,
         )
     }

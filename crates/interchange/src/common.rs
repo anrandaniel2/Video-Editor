@@ -535,6 +535,8 @@ pub(crate) fn empty_sequence(settings: SequenceSettings) -> Sequence {
         multicam: None,
         merged: None,
         motion_tracks: Vec::new(),
+        camera_solves: Vec::new(),
+        matchmove: None,
         scene_lighting: Default::default(),
         scene_camera: None,
         split: Default::default(),

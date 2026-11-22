@@ -52,9 +52,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
 import io.github.artcraftandroid.filmcraft.core.FontFamily
+import io.github.artcraftandroid.filmcraft.core.MatchMoveSettings
 import io.github.artcraftandroid.filmcraft.core.ModelInfo
 import io.github.artcraftandroid.filmcraft.core.Object3DMesh
 import io.github.artcraftandroid.filmcraft.core.Object3DSettings
+import io.github.artcraftandroid.filmcraft.core.SolveCameraOptions
 import io.github.artcraftandroid.filmcraft.core.StereoLayout
 import io.github.artcraftandroid.filmcraft.ui.Fc
 import io.github.artcraftandroid.filmcraft.ui.FcSlider
@@ -67,7 +69,9 @@ import io.github.artcraftandroid.filmcraft.ui.SelectChip
 import io.github.artcraftandroid.filmcraft.ui.SliderRow
 import io.github.artcraftandroid.filmcraft.ui.ToolPanel
 import io.github.artcraftandroid.filmcraft.ui.glyph
+import java.util.Locale
 import kotlin.math.round
+import kotlin.math.roundToInt
 
 /** Keyframable 3D primitives and extruded text. */
 @Composable
@@ -284,6 +288,32 @@ private fun ObjectControls(ed: EditorController, st: Object3DSettings, animated:
         SelectChip("Lights", ed.panel == Panel.Lights, { ed.panel = Panel.Lights }, tag = "object3d_lights")
     }
     HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            if (ed.matchmoveActive) "3D Camera Match-Move active (world-locked)"
+            else "3D Camera Match-Move",
+            style = FcType.Label, color = if (ed.matchmoveActive) Fc.Title else Fc.Secondary,
+            modifier = Modifier.weight(1f),
+        )
+        if (ed.matchmoveActive) {
+            SelectChip("Snap to surface", false, { ed.snapObjectToMatchMove() }, tag = "object3d_snap_matchmove")
+            SelectChip("Pick landmark", ed.matchmoveTapToPlace, {
+                ed.matchmoveShowMarkers = true
+                ed.panel = Panel.MatchMove
+                ed.matchmoveTapToPlace = true
+            }, tag = "object3d_pick_landmark")
+        }
+        SelectChip(
+            if (ed.matchmoveActive) "Align…" else "Solve…",
+            ed.matchmoveActive,
+            { ed.panel = Panel.MatchMove },
+            tag = "object3d_open_matchmove",
+        )
+    }
     Row(Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding), verticalAlignment = Alignment.CenterVertically) {
         Text("Follow motion track", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
         Switch(
@@ -418,6 +448,14 @@ fun TrackingPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
             }
         },
     ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SelectChip("Point track", true, {}, tag = "tracking_mode_point")
+            SelectChip("3D Camera Match-Move", false, { ed.panel = Panel.MatchMove }, tag = "tracking_mode_camera")
+        }
+        Spacer(Modifier.height(6.dp))
         Text(
             "Tap the preview to choose what to follow, then track from the playhead. Side-by-side or top/bottom footage also estimates depth.",
             style = FcType.Caption, color = Fc.Detail,
@@ -460,6 +498,218 @@ fun TrackingPanel(ed: EditorController, close: () -> Unit, modifier: Modifier = 
                 style = FcType.Caption, color = Fc.Detail,
                 modifier = Modifier.padding(horizontal = FcSize.PanelPadding, vertical = 8.dp),
             )
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+/** Reconstruct 3D camera motion & point cloud from footage and align the sequence's 3D world. */
+@Composable
+fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier = Modifier) {
+    val targetClip = ed.matchmoveTargetClip
+    val solves = ed.cameraSolves
+    val mm = ed.matchmoveState
+    val running = ed.cameraSolveProgress
+    LaunchedEffect(targetClip?.id) { ed.loadMatchMove() }
+
+    var stereo by remember { mutableStateOf(StereoLayout.MONO) }
+    var baseline by remember { mutableDoubleStateOf(64.0) }
+    var refineFocal by remember { mutableStateOf(true) }
+    var maxSeconds by remember { mutableDoubleStateOf(15.0) }
+
+    val selectedSolve = solves.firstOrNull { it.id == mm?.solve } ?: solves.lastOrNull()
+
+    ToolPanel(
+        "3D Camera Match-Move", close, modifier, tag = "matchmove_panel",
+        actions = {
+            if (selectedSolve != null && running == null) {
+                PanelAction(
+                    LucideIcons.Trash2.glyph(), "Delete solve",
+                    { ed.deleteCameraSolve(selectedSolve.id) },
+                    tag = "matchmove_delete",
+                )
+            }
+        },
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SelectChip("Point track", false, { ed.panel = Panel.Tracking }, tag = "matchmove_mode_point")
+            SelectChip("3D Camera Match-Move", true, {}, tag = "matchmove_mode_camera")
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Solves real 3D camera motion and scene landmarks so 3D objects and lights lock naturally into handheld or moving-camera footage.",
+            style = FcType.Caption, color = Fc.Detail,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+        )
+        Spacer(Modifier.height(8.dp))
+
+        if (running != null) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 6.dp)
+                    .testTag("matchmove_progress"),
+            ) {
+                Text(running.stage, style = FcType.Body, color = Fc.Title)
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f).height(6.dp).clip(CircleShape).background(Fc.SliderOff)) {
+                        Box(
+                            Modifier.fillMaxWidth(running.progress.toFloat().coerceIn(0f, 1f))
+                                .height(6.dp).clip(CircleShape).background(Fc.Accent),
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Text("${(running.progress * 100).roundToInt()}%", style = FcType.Value, color = Fc.Secondary)
+                    Spacer(Modifier.width(12.dp))
+                    SelectChip("Cancel", false, { ed.cancelCameraSolve() }, tag = "matchmove_cancel")
+                }
+            }
+        } else {
+            Text(
+                if (targetClip != null) "Footage: ${targetClip.name}"
+                else "Footage: add or select a video clip on the timeline",
+                style = FcType.Body, color = Fc.Secondary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SelectChip("Mono", stereo == StereoLayout.MONO, { stereo = StereoLayout.MONO }, tag = "matchmove_mono")
+                SelectChip("Side by side", stereo == StereoLayout.SIDE_BY_SIDE, { stereo = StereoLayout.SIDE_BY_SIDE }, tag = "matchmove_sbs")
+                SelectChip("Top / bottom", stereo == StereoLayout.TOP_BOTTOM, { stereo = StereoLayout.TOP_BOTTOM }, tag = "matchmove_tb")
+            }
+            if (stereo != StereoLayout.MONO) {
+                AdvancedSlider("Depth sensitivity", baseline, 4.0, 256.0, 1.0, "matchmove_baseline") { v, _ -> baseline = v }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Estimate focal length", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = refineFocal,
+                    onCheckedChange = { refineFocal = it },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                    modifier = Modifier.testTag("matchmove_refine_focal"),
+                )
+            }
+            AdvancedSlider("Seconds to analyse", maxSeconds, 1.0, 60.0, 1.0, "matchmove_seconds") { v, _ -> maxSeconds = v }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SelectChip(
+                    "Solve 3D camera", false,
+                    { ed.solveCamera(targetClip?.id, SolveCameraOptions(maxSeconds, refineFocal, stereo, baseline)) },
+                    tag = "matchmove_solve",
+                )
+                SelectChip("Open 3D Scene", false, { ed.panel = Panel.Scene }, tag = "matchmove_open_scene")
+            }
+        }
+
+        if (solves.isNotEmpty() && selectedSolve != null) {
+            HorizontalDivider(color = Fc.Divider, thickness = 1.dp, modifier = Modifier.padding(vertical = 6.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                solves.forEach { s ->
+                    val label = String.format(Locale.US, "%s · %df · %.2fpx", s.name, s.frames.toInt(), s.medianRmsPx)
+                    SelectChip(label, selectedSolve.id == s.id, {
+                        val base = mm ?: MatchMoveSettings(s.id, true, 700.0, 0.0, 0.0, 0.0)
+                        ed.setMatchMove(base.copy(solve = s.id, enabled = true))
+                    }, tag = "matchmove_item_${s.id}")
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            val modeText = if (selectedSolve.rotationOnly) "Tripod pan/tilt (rotation-only)" else "${selectedSolve.points} 3D points"
+            val rmsText = String.format(Locale.US, "%.2f px RMS · %d%% lock", selectedSolve.medianRmsPx, selectedSolve.quality.roundToInt())
+            val extra = buildList {
+                if (selectedSolve.shotsSkipped > 0u) add("${selectedSolve.shotsSkipped} cut skipped")
+                if (selectedSolve.lost > 0u) add("${selectedSolve.lost} lost")
+            }.joinToString(" · ")
+            Text(
+                listOf(modeText, rmsText, extra).filter { it.isNotEmpty() }.joinToString(" · "),
+                style = FcType.Caption, color = Fc.Detail,
+                modifier = Modifier.padding(horizontal = FcSize.PanelPadding),
+            )
+
+            val cur = mm?.takeIf { it.solve == selectedSolve.id }
+                ?: MatchMoveSettings(selectedSolve.id, false, 700.0, 0.0, 0.0, 0.0)
+
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Drive 3D scene camera", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = cur.enabled,
+                    onCheckedChange = { ed.setMatchMove(cur.copy(enabled = it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                    modifier = Modifier.testTag("matchmove_enabled"),
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Show 3D track points", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = ed.matchmoveShowMarkers,
+                    onCheckedChange = { ed.matchmoveShowMarkers = it },
+                    colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                    modifier = Modifier.testTag("matchmove_show_markers"),
+                )
+            }
+
+            fun alignBase() = ed.matchmoveState?.takeIf { it.solve == selectedSolve.id }
+                ?: cur.copy(solve = selectedSolve.id, enabled = true)
+
+            AdvancedSlider("World scale", cur.scalePx, 50.0, 3000.0, 5.0, "matchmove_scale") { v, k ->
+                ed.setMatchMove(alignBase().copy(scalePx = v), k)
+            }
+            AdvancedSlider("Yaw trim", cur.yawTrim, -180.0, 180.0, 0.5, "matchmove_yaw") { v, k ->
+                ed.setMatchMove(alignBase().copy(yawTrim = v), k)
+            }
+            AdvancedSlider("Pitch trim", cur.pitchTrim, -180.0, 180.0, 0.5, "matchmove_pitch") { v, k ->
+                ed.setMatchMove(alignBase().copy(pitchTrim = v), k)
+            }
+            AdvancedSlider("Roll trim", cur.rollTrim, -180.0, 180.0, 0.5, "matchmove_roll") { v, k ->
+                ed.setMatchMove(alignBase().copy(rollTrim = v), k)
+            }
+
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (!selectedSolve.rotationOnly) {
+                    SelectChip("Auto-level ground", false, { ed.levelMatchMoveGround() }, tag = "matchmove_auto_level")
+                    if (cur.enabled) {
+                        SelectChip(
+                            if (ed.matchmoveTapToPlace) "Tap landmark…" else "Place on landmark",
+                            ed.matchmoveTapToPlace,
+                            {
+                                ed.matchmoveTapToPlace = !ed.matchmoveTapToPlace
+                                if (ed.matchmoveTapToPlace) ed.matchmoveShowMarkers = true
+                            },
+                            tag = "matchmove_tap_landmark",
+                        )
+                    }
+                }
+                if (cur.enabled) {
+                    SelectChip("Bake to camera", false, { ed.bakeMatchMoveCamera() }, tag = "matchmove_bake_camera")
+                }
+                SelectChip("Add 3D object", false, { ed.panel = Panel.Object3D }, tag = "matchmove_add_object")
+                SelectChip("Inspect in 3D Scene", false, { ed.panel = Panel.Scene }, tag = "matchmove_inspect_scene")
+                SelectChip("Reset alignment", false, {
+                    ed.setMatchMove(cur.copy(scalePx = 700.0, yawTrim = 0.0, pitchTrim = 0.0, rollTrim = 0.0))
+                }, tag = "matchmove_reset")
+            }
         }
         Spacer(Modifier.height(12.dp))
     }

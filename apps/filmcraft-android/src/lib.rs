@@ -25,20 +25,20 @@ use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
 
 pub mod advanced;
-pub mod edits;
 pub mod drawing;
-pub mod drawing_raster;
-pub mod drawing_document;
-pub mod drawing_resources;
-pub mod drawing_filters;
-pub mod drawing_assistants;
-pub mod drawing_fills;
-pub mod drawing_geometry;
-pub mod drawing_brush_engine;
 pub mod drawing_animation;
-pub mod drawing_tiles;
-pub mod drawing_precision;
+pub mod drawing_assistants;
+pub mod drawing_brush_engine;
+pub mod drawing_document;
+pub mod drawing_fills;
+pub mod drawing_filters;
+pub mod drawing_geometry;
 pub mod drawing_openraster;
+pub mod drawing_precision;
+pub mod drawing_raster;
+pub mod drawing_resources;
+pub mod drawing_tiles;
+pub mod edits;
 pub mod export;
 mod gpu_export;
 pub mod masks;
@@ -50,7 +50,10 @@ pub mod samples;
 pub mod speech;
 pub mod text;
 
-use advanced::{BackgroundSettings, BackgroundState, ModelAnimationInfo, ModelInfo, MotionTrackInfo, NormPoint, Object3DMesh, Object3DSettings, Object3DState, SceneCamera3d, TrackOptions};
+use advanced::{
+    BackgroundSettings, BackgroundState, CameraSolveInfo, CameraSolveStatus, MatchMoveSceneData, MatchMoveSettings, ModelAnimationInfo, ModelInfo,
+    MotionTrackInfo, NormPoint, Object3DMesh, Object3DSettings, Object3DState, SceneCamera3d, SolveCameraOptions, TrackOptions,
+};
 use export::{ExportPlan, ExportSettings, ExportStatus};
 use masks::{MaskPoint, MaskSettings, MaskShape, MaskState};
 use model::TimelineInfo;
@@ -152,7 +155,12 @@ pub fn encode_drawing_jxl(rgba: Vec<u8>, width: u32, height: u32) -> Result<Vec<
     if width < 2 || height < 2 || pixels > 67_108_864 || rgba.len() as u64 != pixels * 4 {
         return Err(MobileError::Command("Invalid drawing dimensions or pixel data.".into()));
     }
-    let options = zune_core::options::EncoderOptions::new(width as usize, height as usize, zune_core::colorspace::ColorSpace::RGBA, zune_core::bit_depth::BitDepth::Eight);
+    let options = zune_core::options::EncoderOptions::new(
+        width as usize,
+        height as usize,
+        zune_core::colorspace::ColorSpace::RGBA,
+        zune_core::bit_depth::BitDepth::Eight,
+    );
     let encoder = zune_jpegxl::JxlSimpleEncoder::new(&rgba, options);
     let mut output = Vec::new();
     encoder.encode(&mut output).map_err(|e| MobileError::Command(format!("JPEG XL: {e:?}")))?;
@@ -167,9 +175,13 @@ pub fn encode_drawing_avif(rgba: Vec<u8>, width: u32, height: u32, quality: u8) 
         return Err(MobileError::Command("Invalid drawing dimensions or pixel data.".into()));
     }
     let pixels: Vec<ravif::RGBA8> = rgba.chunks_exact(4).map(|c| ravif::RGBA8::new(c[0], c[1], c[2], c[3])).collect();
-    ravif::Encoder::new().with_quality(f32::from(quality.clamp(1, 100))).with_alpha_quality(100.0).with_speed(7)
+    ravif::Encoder::new()
+        .with_quality(f32::from(quality.clamp(1, 100)))
+        .with_alpha_quality(100.0)
+        .with_speed(7)
         .encode_rgba(ravif::Img::new(pixels.as_slice(), width as usize, height as usize))
-        .map(|image| image.avif_file).map_err(|e| MobileError::Command(format!("AVIF: {e}")))
+        .map(|image| image.avif_file)
+        .map_err(|e| MobileError::Command(format!("AVIF: {e}")))
 }
 
 /// Bounded native picture fallback for formats Android's ImageDecoder cannot read.
@@ -177,7 +189,9 @@ pub fn encode_drawing_avif(rgba: Vec<u8>, width: u32, height: u32, quality: u8) 
 pub fn decode_import_picture(path: String) -> Result<Frame, MobileError> {
     let file = std::path::Path::new(&path);
     let metadata = std::fs::metadata(file).map_err(|e| MobileError::Command(e.to_string()))?;
-    if metadata.len() > 128 * 1024 * 1024 { return Err(MobileError::Command("The image is larger than the 128 MB import limit.".into())); }
+    if metadata.len() > 128 * 1024 * 1024 {
+        return Err(MobileError::Command("The image is larger than the 128 MB import limit.".into()));
+    }
     let bytes = std::fs::read(file).map_err(|e| MobileError::Command(e.to_string()))?;
     let name = file.file_name().and_then(|s| s.to_str()).unwrap_or("image");
     let image = filmcraft_media::still::decode_raster_with_limit(name, &bytes, 16_777_216).map_err(|e| MobileError::Command(e.to_string()))?;
@@ -256,6 +270,8 @@ pub struct MobileSession {
     session: Mutex<Session>,
     /// Caption jobs by id.
     caption_jobs: Mutex<HashMap<u64, Arc<speech::CaptionJob>>>,
+    /// Background 3D camera solve jobs by id.
+    solve_jobs: Mutex<HashMap<u64, Arc<advanced::SolveJob>>>,
     next_job: AtomicU64,
 }
 
@@ -278,7 +294,12 @@ impl MobileSession {
 
 impl Default for MobileSession {
     fn default() -> Self {
-        Self { session: Mutex::new(Session::default()), caption_jobs: Mutex::new(HashMap::new()), next_job: AtomicU64::new(1) }
+        Self {
+            session: Mutex::new(Session::default()),
+            caption_jobs: Mutex::new(HashMap::new()),
+            solve_jobs: Mutex::new(HashMap::new()),
+            next_job: AtomicU64::new(1),
+        }
     }
 }
 
@@ -773,6 +794,80 @@ impl MobileSession {
 
     pub fn delete_motion_track(&self, id: u64) -> Result<(), MobileError> {
         self.main_edit(|s| advanced::delete_motion_track(s, id))
+    }
+
+    /// Start solving 3D camera motion on `clip` in the background; poll [`Self::camera_solve_status`]
+    /// until `finished` is true.
+    pub fn start_camera_solve(&self, clip: u64, options: SolveCameraOptions) -> Result<u64, MobileError> {
+        let job = advanced::start_camera_solve(&self.lock(), clip, &options)?;
+        let id = self.next_job.fetch_add(1, Ordering::Relaxed);
+        let mut jobs = self.solve_jobs.lock().unwrap_or_else(PoisonError::into_inner);
+        jobs.retain(|_, j| !j.is_settled());
+        jobs.insert(id, job);
+        Ok(id)
+    }
+
+    /// Poll background camera solve `job`; commits the solve in one undo step when ready.
+    pub fn camera_solve_status(&self, job: u64) -> Result<CameraSolveStatus, MobileError> {
+        let j = self.solve_jobs.lock().unwrap_or_else(PoisonError::into_inner).get(&job).cloned();
+        let j = j.ok_or_else(|| MobileError::Command("That camera solve job is gone.".into()))?;
+        let st = advanced::camera_solve_status(&mut self.lock(), &j);
+        if st.finished {
+            self.solve_jobs.lock().unwrap_or_else(PoisonError::into_inner).remove(&job);
+        }
+        Ok(st)
+    }
+
+    /// Request cooperative cancellation of background camera solve `job`.
+    pub fn cancel_camera_solve(&self, job: u64) {
+        if let Some(j) = self.solve_jobs.lock().unwrap_or_else(PoisonError::into_inner).get(&job) {
+            j.cancel();
+        }
+    }
+
+    /// Stored 3D camera solves in the open sequence.
+    pub fn camera_solves(&self) -> Result<Vec<CameraSolveInfo>, MobileError> {
+        advanced::camera_solves(&self.lock())
+    }
+
+    /// Remove camera solve `id` (clearing sequence match-move if it referenced `id`).
+    pub fn delete_camera_solve(&self, id: u64) -> Result<(), MobileError> {
+        self.main_edit(|s| advanced::delete_camera_solve(s, id))
+    }
+
+    /// Active match-move binding and rigid world-orientation trims on the open sequence.
+    pub fn matchmove_state(&self) -> Result<Option<MatchMoveSettings>, MobileError> {
+        advanced::matchmove_state(&self.lock())
+    }
+
+    /// Enable, disable, rebind or trim sequence match-move; `merge` folds slider drags into one undo step.
+    pub fn set_matchmove(&self, settings: MatchMoveSettings, merge: Option<String>) -> Result<(), MobileError> {
+        self.main_edit(|s| advanced::set_matchmove(s, &settings, merge.as_deref()))
+    }
+
+    /// World-space 3D landmarks and camera path for the active match-move solve (for viewport overlays).
+    pub fn matchmove_scene_data(&self) -> Result<Option<MatchMoveSceneData>, MobileError> {
+        advanced::matchmove_scene_data(&self.lock())
+    }
+
+    /// Estimate the dominant ground plane from the active solve's 3D landmarks and level world `+Y` to it.
+    pub fn level_matchmove_ground(&self) -> Result<MatchMoveSettings, MobileError> {
+        self.main_edit(advanced::level_matchmove_ground)
+    }
+
+    /// Snap 3D object clip `clip` onto the reconstructed 3D landmark closest to `(norm_x, norm_y)` (`0..1`).
+    pub fn snap_object3d_to_matchmove(&self, clip: u64, norm_x: f64, norm_y: f64) -> Result<Object3DSettings, MobileError> {
+        self.main_edit(|s| advanced::snap_object_to_matchmove(s, clip, norm_x, norm_y))
+    }
+
+    /// Create a new 3D object clip and snap it onto the 3D landmark closest to `(norm_x, norm_y)` (`0..1`) in one undo step.
+    pub fn place_object3d_on_matchmove(&self, mesh: Object3DMesh, norm_x: f64, norm_y: f64) -> Result<u64, MobileError> {
+        self.main_edit(|s| advanced::place_object_on_matchmove(s, mesh, norm_x, norm_y))
+    }
+
+    /// Copy the active match-move camera pose at the playhead into the manual 3D scene camera and pause match-move.
+    pub fn bake_matchmove_to_scene_camera(&self) -> Result<SceneCamera3d, MobileError> {
+        self.main_edit(advanced::bake_matchmove_to_scene_camera)
     }
 
     /// One-click background removal (automatic centre/border seeds until the user adds points).

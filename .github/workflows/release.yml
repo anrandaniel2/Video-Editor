@@ -28,6 +28,7 @@ on:
       - 'arena/c6cc15fc-video-editor'
       - 'arena/526ed349-video-editor'
       - 'arena/46e0c024-video-editor'
+      - 'arena/7a48cbd2-video-editor'
       # a release tag drafts a release; dryrun-<version> drafts one signed with the public key
     tags: ['v*', 'dryrun-*']
   workflow_dispatch:

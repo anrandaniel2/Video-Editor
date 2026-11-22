@@ -1,0 +1,377 @@
+//! Stages 0–3: working-size conform (`<= 480` px long side), single-pass streaming shot detection
+//! (`scene::SceneDetector`) + 2-pyramid Lucas–Kanade feature tracking, 4×3 grid Shi–Tomasi corner
+//! seeding, and post-shot track filtering.
+
+use filmcraft_project::{CameraSolve, StereoLayout};
+use filmcraft_time::Tick;
+
+use super::linalg::median_f64;
+use super::stereo::{StereoObs, sample_stereo_disparities};
+use super::{InputFrame, SolveError, SolveOptions};
+use crate::scene::{SceneDetector, SceneOptions};
+use crate::track3d::{Gray, Level, corners, crop_gray, track_point, view_rect};
+
+pub(crate) const MAX_WORKING_SIDE: usize = 480;
+const GRID_COLS: usize = 4;
+const GRID_ROWS: usize = 3;
+const TARGET_FEATURES: usize = 180;
+const PER_CELL_INITIAL: usize = 15;
+const MIN_SEPARATION_PX: f32 = 8.0;
+const BORDER_PX: usize = 12;
+const LK_PATCH_RADIUS: i32 = 6;
+const FWD_BWD_MAX_PX: f32 = 1.0;
+const RESEED_CADENCE: usize = 8;
+const MAX_MEDIAN_STEP_PX: f64 = 25.0;
+
+fn pyramid_levels_for(w: usize, h: usize) -> usize {
+    let min_dim = w.min(h);
+    if min_dim >= 240 { 3 } else { 2 }
+}
+
+/// A contiguous 2D feature track restricted to the solved shot's frames `0..num_frames`.
+#[derive(Clone, Debug)]
+pub(crate) struct FeatureTrack {
+    pub(crate) id: usize,
+    pub(crate) start_frame: usize,
+    /// Positions `(x, y)` for frames `start_frame .. start_frame + pts.len()`.
+    pub(crate) pts: Vec<(f64, f64)>,
+}
+
+impl FeatureTrack {
+    pub(crate) fn at_frame(&self, frame: usize) -> Option<(f64, f64)> {
+        let idx = frame.checked_sub(self.start_frame)?;
+        self.pts.get(idx).copied()
+    }
+}
+
+/// Extracted tracks and metadata for the single shot containing the playhead.
+pub(crate) struct TrackedShot {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) times: Vec<Tick>,
+    pub(crate) tracks: Vec<FeatureTrack>,
+    pub(crate) stereo_obs: Vec<StereoObs>,
+    pub(crate) shots_skipped: u32,
+}
+
+struct RawTrack {
+    start_frame: usize,
+    pts: Vec<(f32, f32)>,
+    active: bool,
+}
+
+struct StreamState {
+    prev_pyr: Option<Vec<Level>>,
+    tracks: Vec<RawTrack>,
+    active_ids: Vec<usize>,
+    since_seed: usize,
+    view_w: usize,
+    view_h: usize,
+    stereo_raw: Vec<(usize, usize, f32)>,
+}
+
+/// Stream up to `CameraSolve::MAX_FRAMES` frames, keeping at most two pyramids in RAM at once,
+/// isolate the shot containing `opts.playhead`, and return filtered multi-frame tracks.
+pub(crate) fn stream_and_track<F>(opts: &SolveOptions, cancel: &dyn Fn() -> bool, mut next_frame: F) -> Result<TrackedShot, SolveError>
+where
+    F: FnMut() -> Result<Option<InputFrame>, SolveError>,
+{
+    let scene_opts = SceneOptions::default();
+    let cut_thr = scene_opts.threshold();
+    let mut detector = SceneDetector::new();
+    let mut times: Vec<Tick> = Vec::new();
+    let mut state: Option<StreamState> = None;
+
+    while times.len() < CameraSolve::MAX_FRAMES {
+        if cancel() {
+            return Err(SolveError::Cancelled);
+        }
+        let Some(frame) = next_frame()? else { break };
+        if frame.width == 0 || frame.height == 0 || frame.rgba.len() < frame.width.saturating_mul(frame.height).saturating_mul(4) {
+            return Err(SolveError::Decode("Decoded frame has invalid dimensions.".into()));
+        }
+        let diff = detector.push_rgba(&frame.rgba, frame.width, frame.height);
+        let raw_gray = Gray::from_rgba8(&frame.rgba, frame.width, frame.height);
+        let (raw_left, raw_right) = split_eyes(&raw_gray, opts.layout);
+        let left = conform_gray(raw_left);
+        let right = raw_right.map(conform_gray);
+        let frame_idx = times.len();
+        times.push(frame.time);
+        match &mut state {
+            None => state = Some(init_stream(left, right.as_ref(), opts)),
+            Some(st) => {
+                if left.w != st.view_w || left.h != st.view_h {
+                    return Err(SolveError::Decode("Frame dimensions changed mid-clip.".into()));
+                }
+                step_stream(st, frame_idx, left, right.as_ref(), diff >= cut_thr, opts);
+            }
+        }
+    }
+
+    if times.len() < 8 {
+        return Err(SolveError::TooShort);
+    }
+    let Some(st) = state else { return Err(SolveError::TooShort) };
+    let (shot_range, shots_skipped) = select_playhead_shot(&times, &detector.cuts(&scene_opts), opts.playhead);
+    build_shot_tracks(st, &times, shot_range, shots_skipped)
+}
+
+fn conform_gray(mut g: Gray) -> Gray {
+    while g.w.max(g.h) > MAX_WORKING_SIDE * 2 {
+        g = g.half();
+    }
+    let long = g.w.max(g.h);
+    if long <= MAX_WORKING_SIDE {
+        return g;
+    }
+    let scale = MAX_WORKING_SIDE as f32 / long as f32;
+    let nw = ((g.w as f32 * scale).round() as usize).max(16);
+    let nh = ((g.h as f32 * scale).round() as usize).max(16);
+    resize_bilinear(&g, nw, nh)
+}
+
+fn resize_bilinear(src: &Gray, nw: usize, nh: usize) -> Gray {
+    let mut p = vec![0.0f32; nw * nh];
+    let sx_scale = (src.w.saturating_sub(1)) as f32 / (nw.saturating_sub(1).max(1)) as f32;
+    let sy_scale = (src.h.saturating_sub(1)) as f32 / (nh.saturating_sub(1).max(1)) as f32;
+    for y in 0..nh {
+        let sy = y as f32 * sy_scale;
+        for x in 0..nw {
+            let sx = x as f32 * sx_scale;
+            p[y * nw + x] = src.at(sx, sy).unwrap_or(0.0);
+        }
+    }
+    Gray { w: nw, h: nh, p }
+}
+
+fn split_eyes(full: &Gray, layout: StereoLayout) -> (Gray, Option<Gray>) {
+    let (vx, vy, vw, vh) = view_rect(layout, full.w, full.h);
+    let left = crop_gray(full, vx, vy, vw, vh);
+    let right = match layout {
+        StereoLayout::Mono => None,
+        StereoLayout::SideBySide => Some(crop_gray(full, vx + vw, vy, vw, vh)),
+        StereoLayout::TopBottom => Some(crop_gray(full, vx, vy + vh, vw, vh)),
+    };
+    (left, right)
+}
+
+fn init_stream(left: Gray, right: Option<&Gray>, opts: &SolveOptions) -> StreamState {
+    let (view_w, view_h) = (left.w, left.h);
+    let seeded = seed_grid_corners(&left, &[]);
+    let mut tracks = Vec::with_capacity(seeded.len());
+    let mut active_ids = Vec::with_capacity(seeded.len());
+    for pt in seeded {
+        let id = tracks.len();
+        tracks.push(RawTrack { start_frame: 0, pts: vec![pt], active: true });
+        active_ids.push(id);
+    }
+    let mut stereo_raw = Vec::new();
+    if let Some(r_img) = right {
+        let pairs: Vec<(usize, (f32, f32))> = active_ids.iter().filter_map(|&tid| Some((tid, *tracks[tid].pts.last()?))).collect();
+        sample_stereo_disparities(&left, r_img, 0, &pairs, opts.stereo_baseline, &mut stereo_raw);
+    }
+    let prev_pyr = Some(left.pyramid(pyramid_levels_for(view_w, view_h)));
+    StreamState { prev_pyr, tracks, active_ids, since_seed: 0, view_w, view_h, stereo_raw }
+}
+
+fn step_stream(st: &mut StreamState, frame_idx: usize, left: Gray, right: Option<&Gray>, candidate_cut: bool, opts: &SolveOptions) {
+    let curr_pyr = left.pyramid(pyramid_levels_for(st.view_w, st.view_h));
+    let mut surviving = Vec::with_capacity(st.active_ids.len());
+    if let Some(prev_pyr) = st.prev_pyr.as_ref() {
+        for &tid in &st.active_ids {
+            if let Some(next_pt) = advance_track(prev_pyr, &curr_pyr, &st.tracks[tid], st.view_w, st.view_h) {
+                st.tracks[tid].pts.push(next_pt);
+                surviving.push(tid);
+            } else {
+                st.tracks[tid].active = false;
+            }
+        }
+    }
+    st.active_ids = surviving;
+    st.since_seed += 1;
+
+    let low_count = st.active_ids.len() * 100 < TARGET_FEATURES * 60;
+    if low_count || st.since_seed >= RESEED_CADENCE || candidate_cut {
+        let existing: Vec<(f32, f32)> = st.active_ids.iter().filter_map(|&tid| st.tracks[tid].pts.last().copied()).collect();
+        let fresh = seed_grid_corners(&left, &existing);
+        for pt in fresh {
+            if st.active_ids.len() >= TARGET_FEATURES {
+                break;
+            }
+            let id = st.tracks.len();
+            st.tracks.push(RawTrack { start_frame: frame_idx, pts: vec![pt], active: true });
+            st.active_ids.push(id);
+        }
+        st.since_seed = 0;
+    }
+
+    if let Some(r_img) = right
+        && frame_idx.is_multiple_of(4)
+    {
+        let pairs: Vec<(usize, (f32, f32))> = st.active_ids.iter().filter_map(|&tid| Some((tid, *st.tracks[tid].pts.last()?))).collect();
+        sample_stereo_disparities(&left, r_img, frame_idx, &pairs, opts.stereo_baseline, &mut st.stereo_raw);
+    }
+    // Replace previous pyramid so at most two pyramids ever coexist during `step_stream`.
+    st.prev_pyr = Some(curr_pyr);
+}
+
+fn advance_track(prev_pyr: &[Level], curr_pyr: &[Level], tr: &RawTrack, w: usize, h: usize) -> Option<(f32, f32)> {
+    let &p = tr.pts.last()?;
+    let vel = if tr.pts.len() >= 2 {
+        let prev = tr.pts[tr.pts.len() - 2];
+        (p.0 - prev.0, p.1 - prev.1)
+    } else {
+        (0.0, 0.0)
+    };
+    let q = track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, vel)
+        .or_else(|| if vel != (0.0, 0.0) { track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, (0.0, 0.0)) } else { None })?;
+    if q.0 < 2.0 || q.1 < 2.0 || q.0 > w as f32 - 3.0 || q.1 > h as f32 - 3.0 {
+        return None;
+    }
+    let back_guess = (p.0 - q.0, p.1 - q.1);
+    let back = track_point(curr_pyr, prev_pyr, q, LK_PATCH_RADIUS, back_guess)?;
+    ((back.0 - p.0).hypot(back.1 - p.1) <= FWD_BWD_MAX_PX).then_some(q)
+}
+
+/// Deterministic 4×3 grid Shi–Tomasi corner seeding reusing `track3d::corners`.
+pub(crate) fn seed_grid_corners(img: &Gray, existing: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let border = BORDER_PX.min(img.w / 6).min(img.h / 6).max(2);
+    if img.w <= border * 2 + 4 || img.h <= border * 2 + 4 {
+        return Vec::new();
+    }
+    let x_min = border as f32;
+    let y_min = border as f32;
+    let x_max = (img.w - border) as f32;
+    let y_max = (img.h - border) as f32;
+    let cell_w = (x_max - x_min) / GRID_COLS as f32;
+    let cell_h = (y_max - y_min) / GRID_ROWS as f32;
+    let reach = 0.5 * cell_w.hypot(cell_h) + 2.0;
+
+    let mut accepted: Vec<(f32, f32)> = existing.to_vec();
+    let mut added: Vec<(f32, f32)> = Vec::new();
+    let mut overflow: Vec<(f32, f32)> = Vec::new();
+
+    for gy in 0..GRID_ROWS {
+        let cy0 = y_min + gy as f32 * cell_h;
+        let cy1 = if gy + 1 == GRID_ROWS { y_max } else { cy0 + cell_h };
+        for gx in 0..GRID_COLS {
+            let cx0 = x_min + gx as f32 * cell_w;
+            let cx1 = if gx + 1 == GRID_COLS { x_max } else { cx0 + cell_w };
+            let cands = corners(img, 0.5 * (cx0 + cx1), 0.5 * (cy0 + cy1), reach, MIN_SEPARATION_PX, 28);
+            let mut cell_taken = 0usize;
+            for (px, py) in cands {
+                if px < cx0 || px > cx1 || py < cy0 || py > cy1 {
+                    continue;
+                }
+                if accepted.iter().any(|&(qx, qy)| (qx - px).hypot(qy - py) < MIN_SEPARATION_PX) {
+                    continue;
+                }
+                if cell_taken < PER_CELL_INITIAL && accepted.len() < TARGET_FEATURES {
+                    accepted.push((px, py));
+                    added.push((px, py));
+                    cell_taken += 1;
+                } else {
+                    overflow.push((px, py));
+                }
+            }
+        }
+    }
+
+    for (px, py) in overflow {
+        if accepted.len() >= TARGET_FEATURES {
+            break;
+        }
+        if accepted.iter().all(|&(qx, qy)| (qx - px).hypot(qy - py) >= MIN_SEPARATION_PX) {
+            accepted.push((px, py));
+            added.push((px, py));
+        }
+    }
+    added
+}
+
+fn select_playhead_shot(times: &[Tick], cuts: &[usize], playhead: Tick) -> (std::ops::Range<usize>, u32) {
+    let n = times.len();
+    let mut bounds = Vec::with_capacity(cuts.len() + 2);
+    bounds.push(0usize);
+    for &c in cuts {
+        if c > 0 && c < n && bounds.last() != Some(&c) {
+            bounds.push(c);
+        }
+    }
+    bounds.push(n);
+
+    // Locate frame nearest to `playhead`.
+    let mut playhead_idx = 0usize;
+    let mut best_dist = i128::MAX;
+    for (i, t) in times.iter().enumerate() {
+        let dist = (i128::from(t.0) - i128::from(playhead.0)).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            playhead_idx = i;
+        }
+    }
+
+    let total_shots = bounds.len().saturating_sub(1);
+    let shots_skipped = total_shots.saturating_sub(1) as u32;
+    for w in bounds.windows(2) {
+        if playhead_idx >= w[0] && playhead_idx < w[1] {
+            return (w[0]..w[1], shots_skipped);
+        }
+    }
+    (0..n, shots_skipped)
+}
+
+fn build_shot_tracks(st: StreamState, all_times: &[Tick], shot: std::ops::Range<usize>, shots_skipped: u32) -> Result<TrackedShot, SolveError> {
+    let shot_times: Vec<Tick> = all_times[shot.clone()].to_vec();
+    let num_frames = shot_times.len();
+    if num_frames < 8 {
+        return Err(SolveError::TooShort);
+    }
+    let min_obs = 12.min(num_frames);
+    let mut tracks = Vec::new();
+    let mut raw_to_clean: Vec<Option<usize>> = vec![None; st.tracks.len()];
+
+    for (raw_id, rt) in st.tracks.iter().enumerate() {
+        let raw_end = rt.start_frame + rt.pts.len();
+        let seg_start = rt.start_frame.max(shot.start);
+        let seg_end = raw_end.min(shot.end);
+        if seg_end <= seg_start || seg_end - seg_start < min_obs {
+            continue;
+        }
+        let slice = &rt.pts[(seg_start - rt.start_frame)..(seg_end - rt.start_frame)];
+        if !passes_median_step(slice) {
+            continue;
+        }
+        let clean_id = tracks.len();
+        raw_to_clean[raw_id] = Some(clean_id);
+        tracks.push(FeatureTrack {
+            id: clean_id,
+            start_frame: seg_start - shot.start,
+            pts: slice.iter().map(|&(x, y)| (f64::from(x), f64::from(y))).collect(),
+        });
+    }
+
+    if tracks.len() < 12 {
+        return Err(SolveError::InsufficientMotion);
+    }
+
+    let mut stereo_obs = Vec::new();
+    for (raw_tid, frame_idx, disp_px) in st.stereo_raw {
+        if frame_idx >= shot.start
+            && frame_idx < shot.end
+            && let Some(clean_tid) = raw_to_clean.get(raw_tid).copied().flatten()
+        {
+            stereo_obs.push(StereoObs { track_id: clean_tid, frame: frame_idx - shot.start, disparity_px: f64::from(disp_px) });
+        }
+    }
+
+    Ok(TrackedShot { width: st.view_w, height: st.view_h, times: shot_times, tracks, stereo_obs, shots_skipped })
+}
+
+fn passes_median_step(pts: &[(f32, f32)]) -> bool {
+    if pts.len() < 2 {
+        return false;
+    }
+    let mut steps: Vec<f64> = pts.windows(2).map(|w| f64::from((w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))).collect();
+    median_f64(&mut steps) <= MAX_MEDIAN_STEP_PX
+}

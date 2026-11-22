@@ -19,11 +19,12 @@ pub mod gtemplate;
 pub mod keyframe;
 pub mod lighting;
 pub mod mask;
+pub mod matchmove;
 pub mod mixer;
 pub mod multicam;
 pub mod narration;
-pub mod transcript;
 pub mod tracking;
+pub mod transcript;
 pub mod vtransition;
 
 use std::collections::BTreeMap;
@@ -41,11 +42,12 @@ pub use graphic_design::{CharStyle, GraphicMeta, LayerExtra, Pin, PinTarget, Rol
 pub use keyframe::{Interpolation, Keyframe, Param, ParamValue};
 pub use lighting::{CLASSIC_FOV, Light3D, LightKind, SceneCamera3D, SceneLighting};
 pub use mask::{Mask, MaskMode, MaskPath, MaskVertex, TrackMethod};
+pub use matchmove::{CameraSolve, EvaluatedMatchMoveFrame, SequenceMatchMove, SolvedFrame, SolvedPoint, euler_from_view_rotation};
 pub use mixer::{AutomationMode, InputMap, MixerStrip, TrackSend};
 pub use multicam::{Camera, MergedClip, MulticamAudio, MulticamSel, MulticamSource};
 pub use narration::{Narration, VocalPitch};
-pub use transcript::{Speaker, Transcript, Word};
 pub use tracking::{MotionTrack, StereoLayout, TrackSample};
+pub use transcript::{Speaker, Transcript, Word};
 
 macro_rules! id_type {
     ($name:ident) => {
@@ -185,6 +187,13 @@ impl Project {
                 ItemKind::Sequence(s) => {
                     s.markers.iter().for_each(|mk| see(mk.id.0));
                     s.motion_tracks.iter().for_each(|t| see(t.id));
+                    s.camera_solves.iter().for_each(|c| {
+                        see(c.id);
+                        see(c.clip.0);
+                    });
+                    if let Some(mm) = &s.matchmove {
+                        see(mm.solve);
+                    }
                     mixer(&s.master_mixer).for_each(&mut see);
                     for t in s.all_tracks().chain(&s.submix_tracks) {
                         see(t.id.0);
@@ -378,6 +387,8 @@ impl Project {
             multicam: None,
             merged: None,
             motion_tracks: Vec::new(),
+            camera_solves: Vec::new(),
+            matchmove: None,
             scene_lighting: Default::default(),
             scene_camera: None,
             split: SplitMarks::default(),

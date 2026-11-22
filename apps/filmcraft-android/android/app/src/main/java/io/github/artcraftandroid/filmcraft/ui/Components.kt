@@ -191,6 +191,7 @@ fun ToolPanel(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val toolIcon = when {
+                        title.contains("match-move", true) -> Glyphs.Camera3D
                         title.contains("3D", true) -> Glyphs.Object3D
                         title.contains("keyframe", true) -> LucideIcons.ChartSpline.glyph()
                         title.contains("speed", true) -> LucideIcons.Gauge.glyph()

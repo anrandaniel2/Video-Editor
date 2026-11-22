@@ -169,6 +169,12 @@ pub struct Sequence {
     /// Motion analyses shared by 3D layers (schema v16). Older files have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub motion_tracks: Vec<crate::tracking::MotionTrack>,
+    /// Offline 3D camera match-move solves on clips in this sequence (schema v17).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub camera_solves: Vec<crate::matchmove::CameraSolve>,
+    /// Active camera match-move binding driving 3D layers when enabled (schema v17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matchmove: Option<crate::matchmove::SequenceMatchMove>,
     /// Scene lights shared by the 3D layers. Empty = the classic single light each object
     /// carries from its `light_angle`/`light_elevation`.
     #[serde(default, skip_serializing_if = "crate::lighting::SceneLighting::is_default")]
@@ -263,6 +269,42 @@ impl Sequence {
     pub fn frame_rate(&self) -> FrameRate {
         self.settings.frame_rate
     }
+    /// The solved 3D camera at sequence `timeline` time when [`Self::matchmove`] is enabled and
+    /// points to a non-empty [`crate::matchmove::CameraSolve`]. Holds the last confident pose
+    /// whenever a frame's confidence drops below [`crate::matchmove::CameraSolve::LOST_CONFIDENCE`].
+    pub fn matchmove_camera_at(&self, timeline: Tick) -> Option<crate::lighting::SceneCamera3D> {
+        let mm = self.matchmove.as_ref().filter(|m| m.enabled)?;
+        let solve = self.camera_solves.iter().find(|s| s.id == mm.solve)?;
+        let start = self.find_item(solve.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
+        let sample = solve.confident_sample_at(Tick(timeline.0.saturating_sub(start.0)))?;
+        Some(mm.apply_to_sample(&sample))
+    }
+    /// Every sample of the active match-move solve mapped onto sequence timeline ticks and
+    /// calibrated world coordinates, holding the last confident pose across lost frames.
+    pub fn evaluated_matchmove_frames(&self) -> Option<Vec<crate::matchmove::EvaluatedMatchMoveFrame>> {
+        let mm = self.matchmove.as_ref().filter(|m| m.enabled)?;
+        let solve = self.camera_solves.iter().find(|s| s.id == mm.solve)?;
+        if solve.frames.is_empty() {
+            return None;
+        }
+        let base = self.find_item(solve.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
+        let first_confident = solve.frames.iter().find(|f| f.is_confident()).copied().unwrap_or(solve.frames[0]);
+        let mut held = first_confident;
+        let mut out = Vec::with_capacity(solve.frames.len());
+        for f in &solve.frames {
+            if f.is_confident() {
+                held = *f;
+            }
+            out.push(crate::matchmove::EvaluatedMatchMoveFrame {
+                timeline: Tick(base.0.saturating_add(f.time.0)),
+                camera: mm.apply_to_sample(&held),
+                rms_px: f.rms_px,
+                confidence: f.confidence,
+                lost: !f.is_confident(),
+            });
+        }
+        Some(out)
+    }
     /// Sorted, de-duplicated edit points (clip boundaries) on all tracks.
     pub fn edit_points(&self) -> Vec<Tick> {
         let mut v: Vec<Tick> = self.all_tracks().flat_map(|t| t.items.iter().flat_map(|i| [i.start, i.end()])).collect();
@@ -295,6 +337,9 @@ impl Sequence {
         }
         for t in &self.caption_tracks {
             t.check_bounds()?;
+        }
+        if !self.camera_solves.iter().all(crate::matchmove::CameraSolve::is_finite) || self.matchmove.is_some_and(|m| !m.is_finite()) {
+            return Err("sequence camera match-move data contains non-finite values or exceeds bounds".into());
         }
         Ok(())
     }

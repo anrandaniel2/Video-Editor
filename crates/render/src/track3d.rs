@@ -35,9 +35,7 @@ fn sample(p: &[f32], w: usize, h: usize, x: f32, y: f32) -> Option<f32> {
     let x1 = (x0 + 1).min(w - 1);
     let y1 = (y0 + 1).min(h - 1);
     let (fx, fy) = (x - x0 as f32, y - y0 as f32);
-    Some(
-        p[y0 * w + x0] * (1.0 - fx) * (1.0 - fy) + p[y0 * w + x1] * fx * (1.0 - fy) + p[y1 * w + x0] * (1.0 - fx) * fy + p[y1 * w + x1] * fx * fy,
-    )
+    Some(p[y0 * w + x0] * (1.0 - fx) * (1.0 - fy) + p[y0 * w + x1] * fx * (1.0 - fy) + p[y1 * w + x0] * (1.0 - fx) * fy + p[y1 * w + x1] * fx * fy)
 }
 
 impl Gray {
@@ -49,12 +47,12 @@ impl Gray {
         Self { w, h, p }
     }
 
-    fn at(&self, x: f32, y: f32) -> Option<f32> {
+    pub(crate) fn at(&self, x: f32, y: f32) -> Option<f32> {
         sample(&self.p, self.w, self.h, x, y)
     }
 
     /// Half size, low-passed first so the coarse levels do not alias (a 5-tap binomial).
-    fn half(&self) -> Gray {
+    pub(crate) fn half(&self) -> Gray {
         let (w, h) = ((self.w / 2).max(1), (self.h / 2).max(1));
         let mut p = vec![0.0; w * h];
         let k = [1.0f32, 4.0, 6.0, 4.0, 1.0];
@@ -79,10 +77,10 @@ impl Gray {
 
     /// Levels 0 (this picture) .. n-1, each half the one before, with their gradients. The
     /// gradients are computed once per frame and shared by every feature and both directions.
-    fn pyramid(&self, levels: usize) -> Vec<Level> {
+    pub(crate) fn pyramid(&self, levels: usize) -> Vec<Level> {
         let mut imgs = vec![self.clone()];
         while imgs.len() < levels {
-            let last = imgs.last().unwrap();
+            let Some(last) = imgs.last() else { break };
             if last.w < 24 || last.h < 24 {
                 break;
             }
@@ -97,8 +95,8 @@ impl Gray {
     }
 
     /// Central differences, zero at the border.
-    fn gradients(&self) -> (Vec<f32>, Vec<f32>) {
-        let (mut ix, mut iy) = (vec![0.0; self.w * self.h], vec![0.0; self.w * self.h]);
+    pub(crate) fn gradients(&self) -> (Vec<f32>, Vec<f32>) {
+        let (mut ix, mut iy) = (vec![0.0; self.w * self.h], vec![0.0; self.h * self.w]);
         for y in 1..self.h.saturating_sub(1) {
             for x in 1..self.w.saturating_sub(1) {
                 let i = y * self.w + x;
@@ -110,11 +108,38 @@ impl Gray {
     }
 }
 
+/// Active primary-eye rectangle `(x0, y0, width, height)` for a stereoscopic packing layout.
+pub fn view_rect(layout: filmcraft_project::StereoLayout, w: usize, h: usize) -> (usize, usize, usize, usize) {
+    match layout {
+        filmcraft_project::StereoLayout::Mono => (0, 0, w, h),
+        filmcraft_project::StereoLayout::SideBySide => (0, 0, w / 2, h),
+        filmcraft_project::StereoLayout::TopBottom => (0, 0, w, h / 2),
+    }
+}
+
+/// Extract a sub-rectangle from a [`Gray`] plane, clamping out-of-range coordinates.
+pub fn crop_gray(g: &Gray, x0: usize, y0: usize, w: usize, h: usize) -> Gray {
+    let w = w.max(1);
+    let h = h.max(1);
+    let mut p = vec![0.0; w * h];
+    if g.p.is_empty() || g.w == 0 || g.h == 0 {
+        return Gray { w, h, p };
+    }
+    for y in 0..h {
+        for x in 0..w {
+            let sx = (x0 + x).min(g.w.saturating_sub(1));
+            let sy = (y0 + y).min(g.h.saturating_sub(1));
+            p[y * w + x] = g.p[sy * g.w + sx];
+        }
+    }
+    Gray { w, h, p }
+}
+
 /// One pyramid level: the picture and its gradients.
-struct Level {
-    img: Gray,
-    ix: Vec<f32>,
-    iy: Vec<f32>,
+pub(crate) struct Level {
+    pub(crate) img: Gray,
+    pub(crate) ix: Vec<f32>,
+    pub(crate) iy: Vec<f32>,
 }
 
 /// One tracked sample in view pixels, with relative depth/scale/rotation.
@@ -151,12 +176,8 @@ fn template(l: &Level, x: f32, y: f32, r: i32) -> Option<Template> {
         return None;
     }
     let count = ((2 * r + 1) * (2 * r + 1)) as f32;
-    let (mut t, mut gxx, mut gyy, mut gxy) = (
-        Template { dx: Vec::new(), dy: Vec::new(), v: Vec::new(), ix: Vec::new(), iy: Vec::new(), h: [0.0; 4] },
-        0.0f32,
-        0.0f32,
-        0.0f32,
-    );
+    let (mut t, mut gxx, mut gyy, mut gxy) =
+        (Template { dx: Vec::new(), dy: Vec::new(), v: Vec::new(), ix: Vec::new(), iy: Vec::new(), h: [0.0; 4] }, 0.0f32, 0.0f32, 0.0f32);
     for oy in -r..=r {
         for ox in -r..=r {
             let (sx, sy) = (x + ox as f32, y + oy as f32);
@@ -218,7 +239,7 @@ fn lk_level(next: &Gray, t: &Template, px: f32, py: f32, guess: (f32, f32)) -> O
 
 /// Pyramidal track of one point from `prev` to `next`, coarse to fine, starting from `initial`
 /// (a velocity or a correlation match, in level-0 pixels).
-fn track_point(prev: &[Level], next: &[Level], p: (f32, f32), r: i32, initial: (f32, f32)) -> Option<(f32, f32)> {
+pub(crate) fn track_point(prev: &[Level], next: &[Level], p: (f32, f32), r: i32, initial: (f32, f32)) -> Option<(f32, f32)> {
     let levels = prev.len().min(next.len());
     if levels == 0 {
         return None;
@@ -311,7 +332,7 @@ fn search(prev: &[Level], next: &[Level], p: (f32, f32), r: i32, reach: f32) -> 
 }
 
 /// Shi–Tomasi corners near (`x`, `y`), best first, at least `apart` pixels from each other.
-fn corners(img: &Gray, x: f32, y: f32, reach: f32, apart: f32, want: usize) -> Vec<(f32, f32)> {
+pub(crate) fn corners(img: &Gray, x: f32, y: f32, reach: f32, apart: f32, want: usize) -> Vec<(f32, f32)> {
     let r = (reach as i32).max(4);
     let (cx, cy) = (x as i32, y as i32);
     let win = 3i32;
@@ -397,12 +418,8 @@ fn similarity(from: &[(f32, f32)], to: &[(f32, f32)]) -> Option<(f32, f32, f32, 
     let all = vec![true; from.len()];
     let first = fit(&all)?;
     let (a, b, tx, ty) = first;
-    let mut res: Vec<(usize, f32)> = from
-        .iter()
-        .zip(to)
-        .enumerate()
-        .map(|(i, (f, t))| (i, (a * f.0 - b * f.1 + tx - t.0).hypot(b * f.0 + a * f.1 + ty - t.1)))
-        .collect();
+    let mut res: Vec<(usize, f32)> =
+        from.iter().zip(to).enumerate().map(|(i, (f, t))| (i, (a * f.0 - b * f.1 + tx - t.0).hypot(b * f.0 + a * f.1 + ty - t.1))).collect();
     res.sort_by(|x, y| x.1.partial_cmp(&y.1).unwrap_or(std::cmp::Ordering::Equal));
     let cut = (res[res.len() / 2].1 * 2.5).max(1.0);
     let mut keep = vec![false; from.len()];
@@ -412,7 +429,7 @@ fn similarity(from: &[(f32, f32)], to: &[(f32, f32)]) -> Option<(f32, f32, f32, 
     fit(&keep).or(Some(first))
 }
 
-fn disparity(left: &Gray, right: &Gray, pt: (f32, f32), radius: i32, max_disp: f32) -> f32 {
+pub(crate) fn disparity(left: &Gray, right: &Gray, pt: (f32, f32), radius: i32, max_disp: f32) -> f32 {
     let r = radius.clamp(3, 9);
     let score = |d: f32| -> Option<f32> {
         let (mut sum, mut n) = (0.0f32, 0usize);

@@ -13,6 +13,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import io.github.artcraftandroid.filmcraft.core.BackgroundSettings
 import io.github.artcraftandroid.filmcraft.core.BackgroundState
+import io.github.artcraftandroid.filmcraft.core.CameraSolveInfo
+import io.github.artcraftandroid.filmcraft.core.CameraSolveStatus
 import io.github.artcraftandroid.filmcraft.core.CaptionInfo
 import io.github.artcraftandroid.filmcraft.core.CaptionLook
 import io.github.artcraftandroid.filmcraft.core.CaptionStatus
@@ -25,6 +27,9 @@ import io.github.artcraftandroid.filmcraft.core.MaskPoint
 import io.github.artcraftandroid.filmcraft.core.MaskSettings
 import io.github.artcraftandroid.filmcraft.core.MaskShape
 import io.github.artcraftandroid.filmcraft.core.MaskState
+import io.github.artcraftandroid.filmcraft.core.MatchMovePose
+import io.github.artcraftandroid.filmcraft.core.MatchMoveSceneData
+import io.github.artcraftandroid.filmcraft.core.MatchMoveSettings
 import io.github.artcraftandroid.filmcraft.core.MobileSession
 import io.github.artcraftandroid.filmcraft.core.MotionTrackInfo
 import io.github.artcraftandroid.filmcraft.core.NormPoint
@@ -33,6 +38,7 @@ import io.github.artcraftandroid.filmcraft.core.Object3DSettings
 import io.github.artcraftandroid.filmcraft.core.Object3DState
 import io.github.artcraftandroid.filmcraft.core.Renderer
 import io.github.artcraftandroid.filmcraft.core.SessionStatus
+import io.github.artcraftandroid.filmcraft.core.SolveCameraOptions
 import io.github.artcraftandroid.filmcraft.core.SpeechAudio
 import io.github.artcraftandroid.filmcraft.core.SpeechSettings
 import io.github.artcraftandroid.filmcraft.core.StereoLayout
@@ -76,6 +82,8 @@ sealed interface Panel {
     data object Lights : Panel
     data object Keyframes : Panel
     data object Tracking : Panel
+    /** 3D camera match-move solver and sequence world alignment. */
+    data object MatchMove : Panel
     data object Background : Panel
     data object Filters : Panel
     data object Effects : Panel
@@ -302,6 +310,8 @@ class EditorController(
         timeline = t
         playhead = t.playhead
         refreshStatus()
+        loadSceneCamera()
+        loadMatchMove()
         newRenderer()
         if (fresh) save()
         lastSaved = t.revision.toLong()
@@ -314,6 +324,7 @@ class EditorController(
 
     private suspend fun newRenderer() {
         val r = runCatching { engine.command { renderer() } }.getOrNull() ?: return
+        matchmovePose = runCatching { r.matchmovePose(playhead) }.getOrNull()
         pushOrbitCamera(r)
         renderer = r
         media.renderer = r
@@ -328,6 +339,8 @@ class EditorController(
         playhead = if (t.playhead > t.duration) engine.command { setPlayhead(t.duration) } else t.playhead
         refreshStatus()
         if (changed) {
+            loadSceneCamera()
+            loadMatchMove()
             newRenderer()
             scheduleSave()
         }
@@ -373,6 +386,7 @@ class EditorController(
     suspend fun close() {
         stop()
         captionJob?.let { job -> runCatching { engine.command { cancelCaptions(job) } } }
+        cameraSolveJob?.let { job -> runCatching { engine.command { cancelCameraSolve(job) } } }
         refreshJob?.join()
         refineJob?.cancel()
         saveJob?.cancel()
@@ -528,10 +542,16 @@ class EditorController(
                 else -> previewSide
             }
             val started = System.nanoTime()
-            val frame = withContext(engine.preview) { runCatching { r.frame(req.time, side.toUInt(), req.draft, null) }.getOrNull() } ?: return@collect
+            val (frame, pose) = withContext(engine.preview) {
+                val f = runCatching { r.frame(req.time, side.toUInt(), req.draft, null) }.getOrNull()
+                val p = runCatching { r.matchmovePose(req.time) }.getOrNull()
+                f to p
+            }
+            if (frame == null) return@collect
             val bmp = frame.intoBitmap(bitmaps[nextBitmap]) ?: return@collect
             bitmaps[nextBitmap] = bmp
             nextBitmap = 1 - nextBitmap
+            matchmovePose = pose
             picture = bmp.asImageBitmap()
             if (req.interactive) {
                 val elapsed = System.nanoTime() - started
@@ -908,18 +928,23 @@ class EditorController(
                         val edits = liveEdits.values.toList()
                         liveEdits.clear()
                         val errors = mutableListOf<String>()
-                        val snapshot = try {
+                        val queryScene = panel == Panel.Scene || panel == Panel.MatchMove
+                        val result = try {
                             engine.command {
                                 edits.forEach { edit ->
                                     try { edit.operation.invoke(this, edit.begin) }
                                     catch (e: Exception) { errors += e.userMessage }
                                 }
-                                renderer()
+                                val scene = if (queryScene) runCatching { matchmoveSceneData() }.getOrNull() else null
+                                renderer() to scene
                             }
                         } catch (e: CancellationException) { throw e }
                         catch (e: Exception) { errors += e.userMessage; null }
                         errors.firstOrNull()?.let { host.tell(it) }
-                        if (snapshot != null) {
+                        if (result != null) {
+                            val (snapshot, scene) = result
+                            if (queryScene) matchmoveSceneData = scene
+                            matchmovePose = runCatching { snapshot.matchmovePose(playhead) }.getOrNull()
                             pushOrbitCamera(snapshot)
                             renderer = snapshot
                             media.renderer = snapshot
@@ -1142,7 +1167,7 @@ class EditorController(
     /** Editor-only: point the preview's snapshot at the orbit camera (or clear it). */
     private fun pushOrbitCamera(r: Renderer) {
         val inScene = panel == Panel.Scene
-        val cam = if (inScene) sceneOrbit.toCamera(sceneCamera?.fov ?: CLASSIC_FOV).toNative() else null
+        val cam = if (inScene) sceneOrbit.toCamera(activeRenderCamera?.fov ?: CLASSIC_FOV).toNative() else null
         runCatching { r.setScenePreviewCamera(cam) }
         runCatching { r.setSceneSolo3d(inScene && !sceneShowVideo) }
     }
@@ -1381,6 +1406,209 @@ class EditorController(
     fun followTrack(trackId: ULong, follow: Boolean) {
         val st = object3DState?.settings ?: return
         setObject(st.copy(followTrack = follow, trackId = trackId))
+    }
+
+    // ---- 3D camera match-move ----
+
+    var cameraSolveProgress by mutableStateOf<CameraSolveStatus?>(null)
+        private set
+    private var cameraSolveJob: ULong? = null
+    var cameraSolves by mutableStateOf<List<CameraSolveInfo>>(emptyList())
+        private set
+    var matchmoveState by mutableStateOf<MatchMoveSettings?>(null)
+        private set
+    var matchmoveSceneData by mutableStateOf<MatchMoveSceneData?>(null)
+        private set
+    var matchmovePose by mutableStateOf<MatchMovePose?>(null)
+        private set
+    var matchmoveShowMarkers by mutableStateOf(true)
+    var matchmoveTapToPlace by mutableStateOf(false)
+
+    val matchmoveActive: Boolean
+        get() = matchmoveState?.let { it.enabled && it.solve != 0uL } == true
+
+    /** Effective camera driving 3D objects and lights at the playhead (solved match-move pose, else manual camera). */
+    val activeRenderCamera: SceneCamera?
+        get() = effectiveRenderCamera(
+            if (matchmoveActive) matchmovePose?.camera?.let(SceneCamera::fromNative) else null,
+            sceneCamera,
+        )
+
+    /** Video clip targeted by a new camera solve: selected video clip, else main-track video under playhead, else first video clip. */
+    val matchmoveTargetClip: ClipInfo?
+        get() = selectedClip?.takeIf { it.kind == ClipKind.VIDEO }
+            ?: mainClips.firstOrNull { it.kind == ClipKind.VIDEO && playhead >= it.start && playhead < it.start + it.duration }
+            ?: mainClips.firstOrNull { it.kind == ClipKind.VIDEO }
+            ?: timeline?.lanes?.firstNotNullOfOrNull { l -> l.clips.firstOrNull { it.kind == ClipKind.VIDEO } }
+
+    suspend fun loadMatchMove() {
+        val (solves, state, scene) = runCatching {
+            engine.command { Triple(cameraSolves(), matchmoveState(), matchmoveSceneData()) }
+        }.getOrElse { Triple(emptyList(), null, null) }
+        cameraSolves = solves
+        matchmoveState = state
+        matchmoveSceneData = scene
+    }
+
+    fun solveCamera(
+        clipId: ULong? = null,
+        options: SolveCameraOptions = SolveCameraOptions(15.0, true, StereoLayout.MONO, 64.0),
+    ) {
+        if (cameraSolveProgress != null) return
+        val target = clipId ?: matchmoveTargetClip?.id
+        if (target == null) {
+            host.tell("Add or select a video clip to solve 3D camera motion.")
+            return
+        }
+        stop()
+        cameraSolveProgress = CameraSolveStatus(0.0, "Preparing footage…", false, null, null)
+        scope.launch {
+            try {
+                val job = engine.command { startCameraSolve(target, options) }
+                cameraSolveJob = job
+                while (true) {
+                    val st = engine.command { cameraSolveStatus(job) }
+                    cameraSolveProgress = st
+                    if (st.finished) {
+                        val s = st.solve
+                        when {
+                            st.error == "cancelled" -> {}
+                            st.error != null -> host.tell(st.error ?: "")
+                            s != null -> {
+                                val rms = "%.2f".format(java.util.Locale.US, s.medianRmsPx)
+                                val cuts = if (s.shotsSkipped > 0u) " · ${s.shotsSkipped} cut skipped" else ""
+                                val lost = if (s.lost > 0u) " · ${s.lost} lost" else ""
+                                host.tell(
+                                    if (s.rotationOnly) "Solved ${s.frames} frames (tripod pan/tilt · $rms px RMS)$cuts$lost"
+                                    else "Solved ${s.frames} frames · ${s.points} 3D points · $rms px RMS$cuts$lost",
+                                )
+                            }
+                        }
+                        break
+                    }
+                    delay(150)
+                }
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            } finally {
+                cameraSolveJob = null
+                cameraSolveProgress = null
+            }
+            loadMatchMove()
+            refresh()
+        }
+    }
+
+    fun cancelCameraSolve() {
+        val job = cameraSolveJob ?: return
+        scope.launch { runCatching { engine.command { cancelCameraSolve(job) } } }
+    }
+
+    fun setMatchMove(settings: MatchMoveSettings, merge: String? = null) {
+        stop()
+        matchmoveState = if (settings.solve == 0uL) null else settings
+        if (merge != null) {
+            queueLiveEdit("matchmove") { setMatchmove(settings, merge) }
+            return
+        }
+        scope.launch {
+            try {
+                engine.command { setMatchmove(settings, null) }
+                loadMatchMove()
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
+    }
+
+    fun clearMatchMove() {
+        setMatchMove(MatchMoveSettings(0uL, false, 700.0, 0.0, 0.0, 0.0), null)
+    }
+
+    fun deleteCameraSolve(id: ULong) {
+        stop()
+        scope.launch {
+            try {
+                engine.command { deleteCameraSolve(id) }
+                loadMatchMove()
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
+    }
+
+    fun levelMatchMoveGround() {
+        stop()
+        scope.launch {
+            try {
+                matchmoveState = engine.command { levelMatchmoveGround() }
+                loadMatchMove()
+                host.tell("Ground plane leveled to 3D landmarks.")
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
+    }
+
+    fun snapObjectToMatchMove(normX: Double = 0.5, normY: Double = 0.5) {
+        val c = selectedClip ?: return
+        stop()
+        scope.launch {
+            try {
+                val updated = engine.command { snapObject3dToMatchmove(c.id, normX, normY) }
+                object3DState = object3DState?.copy(settings = updated)
+                host.tell("Snapped 3D object onto nearest 3D track point.")
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
+    }
+
+    fun tapMatchMoveLandmark(normX: Double, normY: Double) {
+        matchmoveTapToPlace = false
+        stop()
+        val existing3d = selectedClip?.takeIf { it.has3d }
+        scope.launch {
+            try {
+                if (existing3d != null) {
+                    val updated = engine.command { snapObject3dToMatchmove(existing3d.id, normX, normY) }
+                    object3DState = object3DState?.copy(settings = updated)
+                    refresh()
+                    panel = Panel.Object3D
+                    loadObject3D(existing3d.id)
+                    host.tell("Snapped 3D object to tapped landmark.")
+                } else {
+                    val createdId = engine.command { placeObject3dOnMatchmove(Object3DMesh.CUBE, normX, normY) }
+                    refresh()
+                    panel = Panel.Object3D
+                    loadObject3D(createdId)
+                    host.tell("Placed 3D object onto tapped landmark.")
+                }
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+                refresh()
+            }
+        }
+    }
+
+    fun bakeMatchMoveCamera() {
+        stop()
+        scope.launch {
+            try {
+                val baked = engine.command { bakeMatchmoveToSceneCamera() }
+                sceneCamera = SceneCamera.fromNative(baked)
+                sceneCameraRemoved = false
+                loadMatchMove()
+                host.tell("Baked solved pose into manual 3D camera.")
+            } catch (e: Exception) {
+                host.tell(e.userMessage)
+            }
+            refresh()
+        }
     }
 
     fun removeBackground() {

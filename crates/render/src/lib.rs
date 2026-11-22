@@ -23,15 +23,16 @@ pub mod image;
 pub mod lumetri_presets;
 pub mod luts;
 pub mod mask;
+pub mod matchmove;
 pub mod mixer;
 pub mod model;
-pub mod scene3d;
 pub mod multicam;
 pub mod offline;
 pub mod plan;
 pub mod preview;
 pub mod remix;
 pub mod scene;
+pub mod scene3d;
 pub mod stretch;
 pub mod track;
 pub mod track3d;
@@ -318,9 +319,7 @@ fn track_has_3d(track: &filmcraft_project::Track, t: Tick) -> bool {
         .transitions
         .iter()
         .find(|tr| tr.range().contains(t))
-        .is_some_and(|tr| {
-            [tr.from, tr.to].into_iter().flatten().any(|id| track.item(id).is_some_and(has_3d))
-        })
+        .is_some_and(|tr| [tr.from, tr.to].into_iter().flatten().any(|id| track.item(id).is_some_and(has_3d)))
 }
 
 fn is_adjustment(project: &Project, item: &TrackItem) -> bool {

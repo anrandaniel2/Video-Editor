@@ -41,6 +41,8 @@
 //!   would drop them when saving.
 //! - **v16**: sequence motion tracks (`Sequence::motion_tracks`) for 3D layer follow. No-op step;
 //!   older builds would drop the analyses when saving.
+//! - **v17**: sequence 3D camera match-move solves (`Sequence::camera_solves`, `Sequence::matchmove`).
+//!   No-op step; older builds would drop the solves when saving.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
@@ -61,8 +63,10 @@ pub type Migration = fn(Value) -> Result<Value, String>;
 
 /// `MIGRATIONS[i]` upgrades schema `i + 1` to `i + 2`. Append one function per schema bump; never
 /// edit a shipped one.
-pub const MIGRATIONS: &[Migration] =
-    &[v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9, v9_to_v10, v10_to_v11, v11_to_v12, v12_to_v13, v13_to_v14, v14_to_v15, v15_to_v16];
+pub const MIGRATIONS: &[Migration] = &[
+    v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9, v9_to_v10, v10_to_v11, v11_to_v12, v12_to_v13, v13_to_v14, v14_to_v15,
+    v15_to_v16, v16_to_v17,
+];
 
 /// The schema version this build writes (and the newest it reads).
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32 + 1;
@@ -399,13 +403,64 @@ fn v15_to_v16(doc: Value) -> Result<Value, String> {
     Ok(doc)
 }
 
+/// v16 → v17: sequence 3D camera match-move solves. Existing data needs no change.
+fn v16_to_v17(doc: Value) -> Result<Value, String> {
+    Ok(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn schema_version_matches_table() {
-        assert_eq!(SCHEMA_VERSION, 16);
+        assert_eq!(SCHEMA_VERSION, 17);
+    }
+
+    #[test]
+    fn v16_upgrades_to_v17_and_camera_solves_roundtrip() {
+        use filmcraft_project::{CLASSIC_FOV, CameraSolve, ClipId, SequenceMatchMove, SequenceSettings, SolvedFrame, SolvedPoint, StereoLayout};
+        use filmcraft_time::Tick;
+
+        let mut legacy = Project::new("v16 Legacy");
+        let seq = legacy.new_sequence("Sequence 01", SequenceSettings::default(), 1, 1, None);
+        let mut doc: Value = serde_json::from_slice(&encode(&legacy, false)).unwrap();
+        doc["schema_version"] = Value::from(16);
+        let loaded = decode(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert_eq!(loaded.schema_version, 16);
+        assert!(loaded.migrated());
+        let s = loaded.project.sequence(seq).unwrap();
+        assert!(s.camera_solves.is_empty());
+        assert!(s.matchmove.is_none());
+        assert!(s.matchmove_camera_at(Tick::ZERO).is_none());
+
+        let mut p = loaded.project;
+        p.sequence_mut(seq).unwrap().camera_solves.push(CameraSolve {
+            id: 900,
+            clip: ClipId(50),
+            name: "Camera Match 1".into(),
+            layout: StereoLayout::Mono,
+            rotation_only: false,
+            shots_skipped: 0,
+            frames: vec![SolvedFrame {
+                time: Tick::ZERO,
+                position: [0.0, 0.0, 0.0],
+                yaw: 0.0,
+                pitch: 0.0,
+                roll: 0.0,
+                fov: CLASSIC_FOV,
+                rms_px: 0.4,
+                confidence: 1.0,
+            }],
+            points: vec![SolvedPoint { position: [0.0, 0.0, 1.0], observations: 16, rms_px: 0.4 }],
+        });
+        p.sequence_mut(seq).unwrap().matchmove = Some(SequenceMatchMove::new(900));
+        let upgraded = decode(&encode(&p, true)).unwrap();
+        assert_eq!(upgraded.schema_version, 17);
+        assert!(!upgraded.migrated());
+        assert!(upgraded.project.next_id > 900);
+        assert_eq!(upgraded.project.sequence(seq).unwrap().camera_solves.len(), 1);
+        assert_eq!(upgraded.project.sequence(seq).unwrap().matchmove, Some(SequenceMatchMove::new(900)));
     }
 
     #[test]

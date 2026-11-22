@@ -716,11 +716,14 @@ fn mask_settings(feather: f64) -> masks::MaskSettings {
 fn mask_rect(x0: f64, y0: f64, x1: f64, y1: f64) -> masks::MaskPath {
     masks::MaskPath {
         closed: true,
-        vertices: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().map(|(x, y)| masks::MaskVertex {
-            point: masks::MaskPoint { x, y },
-            handle_in: masks::MaskPoint { x: 0.0, y: 0.0 },
-            handle_out: masks::MaskPoint { x: 0.0, y: 0.0 },
-        }).collect(),
+        vertices: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+            .into_iter()
+            .map(|(x, y)| masks::MaskVertex {
+                point: masks::MaskPoint { x, y },
+                handle_in: masks::MaskPoint { x: 0.0, y: 0.0 },
+                handle_out: masks::MaskPoint { x: 0.0, y: 0.0 },
+            })
+            .collect(),
     }
 }
 
@@ -764,7 +767,9 @@ fn clip_masks_cut_out_the_picture_and_every_shape_and_control_round_trips() {
     let triangle = vec![masks::MaskPoint { x: 4.0, y: 4.0 }, masks::MaskPoint { x: 20.0, y: 6.0 }, masks::MaskPoint { x: 10.0, y: 22.0 }];
     let st = m.add_clip_mask(id, masks::MaskShape::Polygon, triangle).unwrap();
     assert_eq!(st.masks.len(), 4);
-    for combine in [masks::MaskCombine::Subtract, masks::MaskCombine::Intersect, masks::MaskCombine::Lighten, masks::MaskCombine::Darken, masks::MaskCombine::Difference] {
+    for combine in
+        [masks::MaskCombine::Subtract, masks::MaskCombine::Intersect, masks::MaskCombine::Lighten, masks::MaskCombine::Darken, masks::MaskCombine::Difference]
+    {
         settings.combine = combine;
         m.set_clip_mask(id, 3, settings, None).unwrap();
         assert_eq!(m.clip_masks(id).unwrap().masks[3].settings.combine, combine);
@@ -830,7 +835,8 @@ fn mask_overlay_transform_follows_placement_and_mirror() {
     m.set_placement(id, 300.0, 700.0, p.scale * 0.5, 30.0, false).unwrap();
     let st = m.clip_masks(id).unwrap();
     let center = filmcraft_geom::Vec2::new(f64::from(st.source_width) / 2.0, f64::from(st.source_height) / 2.0);
-    let mapped = filmcraft_geom::Affine { a: st.transform.a, b: st.transform.b, c: st.transform.c, d: st.transform.d, e: st.transform.e, f: st.transform.f }.apply(center);
+    let mapped = filmcraft_geom::Affine { a: st.transform.a, b: st.transform.b, c: st.transform.c, d: st.transform.d, e: st.transform.e, f: st.transform.f }
+        .apply(center);
     assert!((mapped.x - 300.0).abs() < 1e-6 && (mapped.y - 700.0).abs() < 1e-6);
     m.set_flip(id, true, true).unwrap();
     let flipped = m.clip_masks(id).unwrap();
@@ -846,7 +852,9 @@ fn mask_vertex_tools_keep_a_closed_shape_and_reject_other_clip_kinds() {
     assert_eq!(st.masks[0].path.vertices.len(), 6);
     let st = m.remove_clip_mask_vertex(id, 0, 1).unwrap();
     assert_eq!(st.masks[0].path.vertices.len(), 5);
-    for i in (3..5).rev() { m.remove_clip_mask_vertex(id, 0, i).unwrap(); }
+    for i in (3..5).rev() {
+        m.remove_clip_mask_vertex(id, 0, i).unwrap();
+    }
     assert!(m.remove_clip_mask_vertex(id, 0, 0).is_err(), "a mask keeps at least three points");
     let text = m.add_text("hello".into()).unwrap().unwrap();
     assert!(m.clip_masks(text).is_err());
@@ -884,11 +892,14 @@ fn exported_video_keeps_the_mask_from_the_preview() {
     let preview = m.renderer().unwrap().frame(0, 64, false, None).unwrap();
     let out = d.join("masked.mp4").to_string_lossy().into_owned();
     // The phone's own export path (not a separate renderer): 144 px is its smallest short side.
-    let job = m.start_export(out.clone(), export::ExportSettings { short_side: 144, fps: 30, quality: export::ExportQuality::High, ..Default::default() }).unwrap();
+    let job =
+        m.start_export(out.clone(), export::ExportSettings { short_side: 144, fps: 30, quality: export::ExportQuality::High, ..Default::default() }).unwrap();
     let start = std::time::Instant::now();
     let status = loop {
         let st = m.export_status(job).unwrap();
-        if st.finished || start.elapsed().as_secs() > 120 { break st; }
+        if st.finished || start.elapsed().as_secs() > 120 {
+            break st;
+        }
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
     assert!(status.finished && status.error.is_none(), "{status:?}");
@@ -902,7 +913,9 @@ fn exported_video_keeps_the_mask_from_the_preview() {
         session.media.open_file(&out, session.services.as_ref())
     }
     .unwrap_or_else(|e| panic!("export wrote {written} bytes to {out} but it does not open: {e}"));
-    let frame = src.video_frame(filmcraft_media::FrameRequest { time: Tick::ZERO, scale: 1.0 }).unwrap_or_else(|e| panic!("opened {written} bytes but the first frame does not decode: {e}"));
+    let frame = src
+        .video_frame(filmcraft_media::FrameRequest { time: Tick::ZERO, scale: 1.0 })
+        .unwrap_or_else(|e| panic!("opened {written} bytes but the first frame does not decode: {e}"));
     assert_eq!((frame.width, frame.height), (144, 144));
     let rgba = frame.to_rgba8();
     let at = |x: usize, y: usize| rgba[(y * frame.width as usize + x) * 4];
@@ -1436,40 +1449,40 @@ fn advanced_motion_tracking_stores_a_track_a_3d_object_can_follow() {
     assert!(m.motion_tracks().unwrap().is_empty());
 }
 
-
 #[test]
 fn advanced_model_gesture_placement_keeps_animation_at_the_playhead() {
-    let m=MobileSession::new();
-    m.new_project("Gestures".into(),1080,1920,30).unwrap();
-    let id=m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
-    let initial=m.placement(id).unwrap();
-    m.execute("animation.all".into(),serde_json::json!({"clip":id,"action":"enable"}).to_string()).unwrap();
-    let now=m.set_playhead(TICKS_PER_SECOND);
-    assert!(now>0);
-    m.set_placement(id,300.0,700.0,initial.scale*0.5,25.0,false).unwrap();
-    let at_key=m.placement(id).unwrap();
-    assert_eq!((at_key.x,at_key.y,at_key.rotation),(300.0,700.0,25.0));
+    let m = MobileSession::new();
+    m.new_project("Gestures".into(), 1080, 1920, 30).unwrap();
+    let id = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    let initial = m.placement(id).unwrap();
+    m.execute("animation.all".into(), serde_json::json!({"clip":id,"action":"enable"}).to_string()).unwrap();
+    let now = m.set_playhead(TICKS_PER_SECOND);
+    assert!(now > 0);
+    m.set_placement(id, 300.0, 700.0, initial.scale * 0.5, 25.0, false).unwrap();
+    let at_key = m.placement(id).unwrap();
+    assert_eq!((at_key.x, at_key.y, at_key.rotation), (300.0, 700.0, 25.0));
     m.set_playhead(0);
-    let at_start=m.placement(id).unwrap();
-    assert_eq!((at_start.x,at_start.y,at_start.rotation),(initial.x,initial.y,initial.rotation));
-    assert_eq!(at_start.scale,initial.scale);
-    let out:serde_json::Value=serde_json::from_str(&m.execute("animation.list".into(),serde_json::json!({"clip":id}).to_string()).unwrap()).unwrap();
-    assert!(out["lanes"].as_array().unwrap().iter().all(|l|l["animated"]==true));
+    let at_start = m.placement(id).unwrap();
+    assert_eq!((at_start.x, at_start.y, at_start.rotation), (initial.x, initial.y, initial.rotation));
+    assert_eq!(at_start.scale, initial.scale);
+    let out: serde_json::Value = serde_json::from_str(&m.execute("animation.list".into(), serde_json::json!({"clip":id}).to_string()).unwrap()).unwrap();
+    assert!(out["lanes"].as_array().unwrap().iter().all(|l| l["animated"] == true));
 }
-
 
 #[test]
 fn advanced_model_transform_gestures_have_separate_undo_steps() {
-    let m=MobileSession::new();
-    m.new_project("Gesture undo".into(),1080,1920,30).unwrap();
-    let id=m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
-    let initial=m.placement(id).unwrap();
-    m.set_placement(id,300.0,700.0,1.0,0.0,false).unwrap();
-    m.set_placement(id,320.0,720.0,1.0,0.0,true).unwrap();
-    m.set_placement(id,500.0,900.0,1.0,0.0,false).unwrap();
-    m.set_placement(id,520.0,920.0,1.0,0.0,true).unwrap();
-    m.undo();assert_eq!(m.placement(id).unwrap().x,320.0);
-    m.undo();assert_eq!(m.placement(id).unwrap().x,initial.x);
+    let m = MobileSession::new();
+    m.new_project("Gesture undo".into(), 1080, 1920, 30).unwrap();
+    let id = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    let initial = m.placement(id).unwrap();
+    m.set_placement(id, 300.0, 700.0, 1.0, 0.0, false).unwrap();
+    m.set_placement(id, 320.0, 720.0, 1.0, 0.0, true).unwrap();
+    m.set_placement(id, 500.0, 900.0, 1.0, 0.0, false).unwrap();
+    m.set_placement(id, 520.0, 920.0, 1.0, 0.0, true).unwrap();
+    m.undo();
+    assert_eq!(m.placement(id).unwrap().x, 320.0);
+    m.undo();
+    assert_eq!(m.placement(id).unwrap().x, initial.x);
 }
 
 #[test]
@@ -1508,4 +1521,418 @@ fn drawing_jpeg_xl_has_a_real_codestream_and_validates_pixel_dimensions() {
     assert!(encode_drawing_jxl(vec![0; 3], 4, 4).is_err());
     assert!(encode_drawing_jxl(Vec::new(), 0, 4).is_err());
     assert!(encode_drawing_jxl(Vec::new(), u32::MAX, u32::MAX).is_err());
+}
+
+fn synthetic_camera_mp4(dir: &Path, name: &str, frames: i64, flat: bool) -> String {
+    struct SynthCamSource {
+        info: filmcraft_media::MediaInfo,
+        rate: FrameRate,
+        frames: i64,
+        flat: bool,
+    }
+    impl MediaSource for SynthCamSource {
+        fn info(&self) -> &filmcraft_media::MediaInfo {
+            &self.info
+        }
+        fn video_frame(&self, req: filmcraft_media::FrameRequest) -> filmcraft_media::Result<Arc<filmcraft_frame::VideoFrame>> {
+            let (w, h) = (320usize, 180usize);
+            let mut rgba = vec![24u8; w * h * 4];
+            for px in rgba.as_chunks_mut::<4>().0 {
+                px[3] = 255;
+            }
+            if !self.flat {
+                let idx = self.rate.frame_at(req.time).clamp(0, (self.frames - 1).max(1)) as f32;
+                let u = idx / (self.frames - 1).max(1) as f32;
+                let cam = filmcraft_project::SceneCamera3D { position: [65.0 * u, 0.0, 90.0 * u], yaw: 8.0 * u, ..Default::default() };
+                let vr = cam.view_rotation();
+                let focal = cam.focal(h as f32);
+                let mut seed = 0x517cc1b727220a95u64;
+                for i in 0..180usize {
+                    let mut next = || {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        (seed % 10_000) as f32 / 10_000.0
+                    };
+                    let z = 360.0 + next() * 720.0;
+                    let x = (next() * 2.0 - 1.0) * 420.0;
+                    let y = (next() * 2.0 - 1.0) * 240.0;
+                    let d = [x - cam.position[0], y - cam.position[1], z - cam.position[2]];
+                    let pc = [
+                        vr[0][0] * d[0] + vr[0][1] * d[1] + vr[0][2] * d[2],
+                        vr[1][0] * d[0] + vr[1][1] * d[1] + vr[1][2] * d[2],
+                        vr[2][0] * d[0] + vr[2][1] * d[1] + vr[2][2] * d[2],
+                    ];
+                    if pc[2] <= 20.0 {
+                        continue;
+                    }
+                    let sx = (w as f32 * 0.5 + focal * pc[0] / pc[2]).round() as i32;
+                    let sy = (h as f32 * 0.5 + focal * pc[1] / pc[2]).round() as i32;
+                    let val = 175u8.saturating_add(((i % 4) * 20) as u8);
+                    for dy in -2..=2 {
+                        for dx in -2..=2 {
+                            let (px_x, px_y) = (sx + dx, sy + dy);
+                            if px_x >= 0 && px_x < w as i32 && px_y >= 0 && px_y < h as i32 {
+                                let off = (px_y as usize * w + px_x as usize) * 4;
+                                rgba[off] = val;
+                                rgba[off + 1] = val;
+                                rgba[off + 2] = val;
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Arc::new(filmcraft_frame::VideoFrame::rgba8(w as u32, h as u32, rgba).with_pts(req.time)))
+        }
+        fn audio(&self, _: i64, _: usize, _: u32) -> filmcraft_media::Result<filmcraft_frame::AudioBuffer> {
+            Err(filmcraft_media::MediaError::NoStream("audio"))
+        }
+    }
+
+    let path = dir.join(name);
+    let (w, h, rate) = (320, 180, FrameRate::FPS_24);
+    let dur = rate.tick_of(frames);
+    let base = GeneratorSource::new(Generator::ColorMatte { color: [0.1, 0.1, 0.1, 1.0] }, w, h, rate, dur);
+    let src = SynthCamSource { info: base.info().clone(), rate, frames, flat };
+    let mut p = Project::new("mm_fixture");
+    let clip = MediaClip {
+        media: MediaRef::Generator(Generator::ColorMatte { color: [0.1, 0.1, 0.1, 1.0] }),
+        info: src.info.clone(),
+        interpret: Default::default(),
+        mark_in: None,
+        mark_out: None,
+        markers: vec![],
+        offline: false,
+        proxy: None,
+        identity: None,
+    };
+    let item = p.add_item("cam", Label::Iris, ItemKind::Media(Box::new(clip)), None);
+    let seq = p.new_sequence("s", SequenceSettings { width: w, height: h, frame_rate: rate, ..Default::default() }, 1, 0, None);
+    let v = p.make_track_item(item, TrackKind::Video, Tick::ZERO, TimeRange::new(Tick::ZERO, dur), rate).unwrap();
+    p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
+    let settings = fx::ExportSettings { format: fx::Format::H264, path: path.to_string_lossy().into_owned(), bitrate_kbps: 2_400, ..Default::default() };
+    let shared: filmcraft_media::SharedSource = Arc::new(src);
+    let provider = move |id: ItemId| (id == item).then(|| shared.clone());
+    fx::export(&Arc::new(p), seq, &settings, &provider, &Default::default()).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+fn poll_camera_solve(m: &MobileSession, job: u64) -> advanced::CameraSolveStatus {
+    for _ in 0..400 {
+        let st = m.camera_solve_status(job).unwrap();
+        if st.finished {
+            return st;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    panic!("camera solve job {job} timed out");
+}
+
+#[test]
+fn advanced_matchmove_lifecycle_undo_redo_merge_and_renderer_pose() {
+    let d = tmp();
+    let clip_path = synthetic_camera_mp4(&d, "dolly_pan.mp4", 24, false);
+    let m = MobileSession::new();
+    m.new_project("MatchMove".into(), 320, 180, 24).unwrap();
+    let cid = m.add_media(vec![clip_path]).unwrap()[0];
+    let _sphere = m.add_object3d(advanced::Object3DMesh::Sphere).unwrap();
+    m.forget_history();
+
+    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st = poll_camera_solve(&m, job);
+    assert!(st.error.is_none(), "expected solve success, got {st:?}");
+    let info = st.solve.expect("completed solve info");
+    assert_eq!(info.clip, cid);
+    assert!(info.frames >= 20 && info.median_rms_px < 2.0, "{info:?}");
+    assert_eq!(m.camera_solves().unwrap().len(), 1);
+    let mm0 = m.matchmove_state().unwrap().expect("match-move auto-enabled");
+    assert!(mm0.enabled && mm0.solve == info.id);
+
+    let scene = m.matchmove_scene_data().unwrap().expect("scene data");
+    assert!(!scene.path.is_empty() && !scene.points.is_empty());
+
+    let r = m.renderer().unwrap();
+    let pose = r.matchmove_pose(SEC / 2).expect("pose at 0.5 s");
+    assert!(pose.confidence > 0.0 && pose.camera.fov > 10.0);
+
+    // AC9: orbit preview camera overrides frame() but never still() (capture/export parity).
+    r.set_scene_preview_camera(Some(advanced::SceneCamera3d { position: vec![120.0, 40.0, -80.0], yaw: 22.0, pitch: -8.0, roll: 0.0, fov: 50.0 }));
+    let orbit_frame = r.frame(SEC / 2, 320, false, None).unwrap();
+    let capture_still = r.still(SEC / 2, 320, None).unwrap();
+    r.set_scene_preview_camera(None);
+    let normal_frame = r.frame(SEC / 2, 320, false, None).unwrap();
+    assert_eq!(capture_still.rgba, normal_frame.rgba);
+    assert_ne!(orbit_frame.rgba, normal_frame.rgba);
+
+    // AC6: merged drag collapses into one undo step.
+    let mut drag = mm0.clone();
+    drag.scale_px = 900.0;
+    m.set_matchmove(drag.clone(), Some("mm-scale".into())).unwrap();
+    drag.scale_px = 1100.0;
+    m.set_matchmove(drag, Some("mm-scale".into())).unwrap();
+    assert!((m.matchmove_state().unwrap().unwrap().scale_px - 1100.0).abs() < 1e-4);
+    m.undo().unwrap();
+    assert!((m.matchmove_state().unwrap().unwrap().scale_px - mm0.scale_px).abs() < 1e-4);
+
+    // AC6: single undo reverts Solve Camera; redo restores both solve and active binding.
+    m.undo().unwrap();
+    assert!(m.camera_solves().unwrap().is_empty());
+    assert!(m.matchmove_state().unwrap().is_none());
+    m.redo().unwrap();
+    assert_eq!(m.camera_solves().unwrap().len(), 1);
+    assert!(m.matchmove_state().unwrap().is_some());
+
+    // Delete camera solve + undo.
+    m.delete_camera_solve(info.id).unwrap();
+    assert!(m.camera_solves().unwrap().is_empty());
+    assert!(m.matchmove_state().unwrap().is_none());
+    m.undo().unwrap();
+    assert_eq!(m.camera_solves().unwrap().len(), 1);
+}
+
+#[test]
+fn advanced_matchmove_cancel_short_clip_and_flat_footage_errors() {
+    let d = tmp();
+    let long_clip = synthetic_camera_mp4(&d, "cancel_src.mp4", 48, false);
+    let short_clip = synthetic_camera_mp4(&d, "short_src.mp4", 4, false);
+    let flat_clip = synthetic_camera_mp4(&d, "flat_src.mp4", 16, true);
+
+    let m = MobileSession::new();
+    m.new_project("EdgeCases".into(), 320, 180, 24).unwrap();
+    let ids = m.add_media(vec![long_clip, short_clip, flat_clip]).unwrap();
+
+    // AC7: immediate cancellation aborts cleanly and leaves sequence untouched.
+    let job_cancel = m.start_camera_solve(ids[0], advanced::SolveCameraOptions::default()).unwrap();
+    m.cancel_camera_solve(job_cancel);
+    let st_cancel = poll_camera_solve(&m, job_cancel);
+    assert_eq!(st_cancel.error.as_deref(), Some("cancelled"));
+    assert!(m.camera_solves().unwrap().is_empty());
+
+    // AC7: short clip (< 8 frames) fails cleanly.
+    let job_short = m.start_camera_solve(ids[1], advanced::SolveCameraOptions::default()).unwrap();
+    let st_short = poll_camera_solve(&m, job_short);
+    assert!(st_short.error.is_some());
+    assert!(m.camera_solves().unwrap().is_empty());
+
+    // AC12: featureless flat clip fails with user-actionable clean-motion message.
+    let job_flat = m.start_camera_solve(ids[2], advanced::SolveCameraOptions::default()).unwrap();
+    let st_flat = poll_camera_solve(&m, job_flat);
+    let msg = st_flat.error.unwrap_or_default();
+    assert!(msg.contains("not enough clean motion to solve the camera"), "unexpected error: {msg}");
+    assert!(m.camera_solves().unwrap().is_empty());
+}
+
+#[test]
+fn phase6_save_reopen_v17_lights_export_and_engine_commands() {
+    let d = tmp();
+    let clip_path = synthetic_camera_mp4(&d, "phase6_cam.mp4", 24, false);
+    let proj_path = d.join("matchmove_v17.fcp").to_string_lossy().into_owned();
+
+    let m = MobileSession::new();
+    m.new_project("Phase6".into(), 320, 180, 24).unwrap();
+    let cid = m.add_media(vec![clip_path]).unwrap()[0];
+    let _cube = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+    // Add a world-space point light so both 3D geometry and scene lighting render through the solved camera.
+    m.execute(
+        "lights.set".into(),
+        r#"{"id":0,"name":"Key","enabled":true,"kind":"point","color":[1.0,0.85,0.7],"intensity":1.8,"position":[120.0,-60.0,650.0],"angle":135.0,"elevation":45.0,"range":900.0,"cone":35.0,"softness":0.5}"#.into(),
+    )
+    .unwrap();
+
+    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st = poll_camera_solve(&m, job);
+    let info = st.solve.expect("solve succeeded");
+
+    // Exercise engine JSON commands (`scene.cameraSolves`, `scene.setMatchmove` with merge, `scene.matchmove`).
+    let solves_json: serde_json::Value = serde_json::from_str(&m.execute("scene.cameraSolves".into(), "{}".into()).unwrap()).unwrap();
+    assert_eq!(solves_json["solves"].as_array().unwrap().len(), 1);
+    m.execute(
+        "scene.setMatchmove".into(),
+        format!(r#"{{"solve":{},"enabled":true,"scalePx":820.0,"yawTrim":6.5,"pitchTrim":-3.0,"rollTrim":1.5,"merge":"trim"}}"#, info.id),
+    )
+    .unwrap();
+    m.execute(
+        "scene.setMatchmove".into(),
+        format!(r#"{{"solve":{},"enabled":true,"scalePx":880.0,"yawTrim":7.5,"pitchTrim":-3.0,"rollTrim":1.5,"merge":"trim"}}"#, info.id),
+    )
+    .unwrap();
+    let mm_json: serde_json::Value = serde_json::from_str(&m.execute("scene.matchmove".into(), "{}".into()).unwrap()).unwrap();
+    assert!((mm_json["scalePx"].as_f64().unwrap() - 880.0).abs() < 1e-3);
+
+    let r_before = m.renderer().unwrap();
+    let frame_t0 = r_before.still(0, 320, None).unwrap();
+    let frame_t1 = r_before.still(SEC / 2, 320, None).unwrap();
+    assert_ne!(frame_t0.rgba, frame_t1.rgba, "camera motion must move world-space 3D cube and light across time");
+    let pose_before = r_before.matchmove_pose(SEC / 2).expect("pose before save");
+    let scene_before = m.matchmove_scene_data().unwrap().expect("scene before save");
+
+    // Save as schema v17 and reopen in a fresh MobileSession.
+    m.save_project(proj_path.clone()).unwrap();
+    let reopened = MobileSession::new();
+    reopened.open_project(proj_path).unwrap();
+    assert_eq!(reopened.camera_solves().unwrap().len(), 1);
+    let mm_after = reopened.matchmove_state().unwrap().expect("matchmove restored");
+    assert_eq!(mm_after.solve, info.id);
+    assert!(mm_after.enabled);
+    assert!((mm_after.scale_px - 880.0).abs() < 1e-3);
+    assert!((mm_after.yaw_trim - 7.5).abs() < 1e-3);
+
+    let scene_after = reopened.matchmove_scene_data().unwrap().expect("scene after reopen");
+    assert_eq!(scene_before.points.len(), scene_after.points.len());
+    assert_eq!(scene_before.path.len(), scene_after.path.len());
+
+    let r_after = reopened.renderer().unwrap();
+    let pose_after = r_after.matchmove_pose(SEC / 2).expect("pose after reopen");
+    assert!((pose_before.camera.yaw - pose_after.camera.yaw).abs() < 1e-5);
+    assert_eq!(frame_t1.rgba, r_after.still(SEC / 2, 320, None).unwrap().rgba, "v17 save/reopen must render bit-identical pixels");
+}
+
+#[test]
+fn phase7_ground_plane_leveling_and_snap_3d_object_to_landmark() {
+    use filmcraft_project::{CameraSolve, SequenceMatchMove, SolvedPoint, StereoLayout};
+
+    // 1. Direct algebra check: tilted floor plane rotated 18 deg pitch + 11 deg roll levels cleanly onto world +Y.
+    let tilt_cam = filmcraft_project::SceneCamera3D { position: [0.0; 3], yaw: 0.0, pitch: 18.0, roll: -11.0, fov: 53.13 };
+    let vr_tilt = tilt_cam.view_rotation();
+    // Construct 16 floor points whose tilted `y_local == 1.2` plus 3 outlier wall/sky points.
+    let mut pts = Vec::new();
+    for ix in -2..=1 {
+        for iz in 1..=4 {
+            let p_floor = [ix as f32 * 0.4, 1.2, iz as f32 * 0.6];
+            // Map into raw solver frame via vr_tilt^T.
+            let raw = [
+                vr_tilt[0][0] * p_floor[0] + vr_tilt[1][0] * p_floor[1] + vr_tilt[2][0] * p_floor[2],
+                vr_tilt[0][1] * p_floor[0] + vr_tilt[1][1] * p_floor[1] + vr_tilt[2][1] * p_floor[2],
+                vr_tilt[0][2] * p_floor[0] + vr_tilt[1][2] * p_floor[1] + vr_tilt[2][2] * p_floor[2],
+            ];
+            pts.push(SolvedPoint { position: raw, observations: 8, rms_px: 0.25 });
+        }
+    }
+    pts.push(SolvedPoint { position: [0.2, -3.5, 4.0], observations: 5, rms_px: 0.8 });
+    pts.push(SolvedPoint { position: [-1.8, -2.2, 2.5], observations: 5, rms_px: 0.8 });
+
+    let cs = CameraSolve {
+        id: 7,
+        clip: filmcraft_project::ClipId(1),
+        name: "Floor".into(),
+        layout: StereoLayout::Mono,
+        rotation_only: false,
+        shots_skipped: 0,
+        frames: vec![],
+        points: pts.clone(),
+    };
+    let (normal, _) = cs.fit_ground_plane().expect("RANSAC must recover tilted floor plane");
+    let mut mm = SequenceMatchMove::new(7);
+    assert!(mm.level_to_normal(normal));
+    // Every floor inlier's world Y coordinate must now be constant (`scale_px * 1.2 = 840.0` within 0.5 px)!
+    let leveled_ys: Vec<f32> = pts[..16].iter().map(|p| mm.apply_to_point(p.position)[1]).collect();
+    let y0 = leveled_ys[0];
+    for &y in &leveled_ys {
+        assert!((y - y0).abs() < 0.5, "expected flat world Y after leveling, got {leveled_ys:?}");
+    }
+
+    // 2. End-to-end MobileSession snap_object3d_to_matchmove places 3D object directly onto a solved landmark.
+    let d = tmp();
+    let clip_path = synthetic_camera_mp4(&d, "phase7_snap.mp4", 24, false);
+    let m = MobileSession::new();
+    m.new_project("Phase7".into(), 320, 180, 24).unwrap();
+    let cid = m.add_media(vec![clip_path]).unwrap()[0];
+    let obj_id = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+
+    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st = poll_camera_solve(&m, job);
+    assert!(st.error.is_none());
+
+    let snapped = m.snap_object3d_to_matchmove(obj_id, 0.5, 0.5).unwrap();
+    let scene = m.matchmove_scene_data().unwrap().expect("scene data");
+    // Reconstruct the 3D object's world origin `((x - fw/2)*z/fh, (y - fh/2)*z/fh, z)` and verify it matches a real solved 3D landmark!
+    let (fw, fh) = (320.0, 180.0);
+    let ox = (snapped.x - fw * 0.5) * snapped.z / fh;
+    let oy = (snapped.y - fh * 0.5) * snapped.z / fh;
+    let oz = snapped.z;
+    let min_dist = scene.points.iter().map(|pt| ((pt.x - ox).powi(2) + (pt.y - oy).powi(2) + (pt.z - oz).powi(2)).sqrt()).fold(f64::INFINITY, f64::min);
+    assert!(min_dist < 1e-2, "snapped object world origin ({ox}, {oy}, {oz}) must coincide with a solved 3D landmark (min_dist={min_dist})");
+
+    // 3. Exercise MobileSession::level_matchmove_ground + undo + engine JSON `scene.levelMatchmove`.
+    let leveled = m.level_matchmove_ground().unwrap();
+    assert!(leveled.pitch_trim.is_finite() && leveled.roll_trim.is_finite() && leveled.yaw_trim.is_finite());
+    m.undo().unwrap();
+    let restored = m.matchmove_state().unwrap().unwrap();
+    assert!(restored.pitch_trim.abs() < 1e-4 && restored.roll_trim.abs() < 1e-4);
+    let level_json: serde_json::Value = serde_json::from_str(&m.execute("scene.levelMatchmove".into(), "{}".into()).unwrap()).unwrap();
+    assert!(level_json["pitchTrim"].is_f64() && level_json["rollTrim"].is_f64());
+}
+
+#[test]
+fn phase8_tap_place_bake_camera_and_export_matchmove_track() {
+    let d = tmp();
+    let clip_path = synthetic_camera_mp4(&d, "phase8_cam.mp4", 24, false);
+    let m = MobileSession::new();
+    m.new_project("Phase8".into(), 320, 180, 24).unwrap();
+    let cid = m.add_media(vec![clip_path]).unwrap()[0];
+
+    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st = poll_camera_solve(&m, job);
+    assert!(st.error.is_none());
+
+    // 1. Atomic tap-to-place (`place_object3d_on_matchmove`) creates + snaps in ONE undoable edit group.
+    m.set_playhead(SEC / 2);
+    let placed_id = m.place_object3d_on_matchmove(advanced::Object3DMesh::Sphere, 0.22, 0.72).unwrap();
+    let placed_st = m.object3d_state(placed_id).unwrap().settings;
+    // Snapping to the opposite upper-right quadrant picks a distinct 3D landmark.
+    let upper_right = m.snap_object3d_to_matchmove(placed_id, 0.80, 0.24).unwrap();
+    assert!(
+        (placed_st.x - upper_right.x).abs() > 5.0 || (placed_st.y - upper_right.y).abs() > 5.0,
+        "tapping opposite screen quadrants must snap onto distinct 3D landmarks ({placed_st:?} vs {upper_right:?})"
+    );
+    // Undo snap -> back to placed_st; one more undo -> removes the placed 3D clip completely!
+    m.undo().unwrap();
+    assert!((m.object3d_state(placed_id).unwrap().settings.x - placed_st.x).abs() < 1e-3);
+    m.undo().unwrap();
+    assert!(m.timeline().unwrap().lanes.iter().all(|l| l.clips.iter().all(|c| c.id != placed_id)), "single undo must remove atomic placed 3D clip");
+    // Redo restores the placed 3D sphere on the landmark so rendering below has 3D geometry in frame.
+    m.redo().unwrap();
+
+    // 2. `scene.exportMatchmove` exports calibrated world-space camera animation + 3D point cloud.
+    let mm_trimmed = advanced::MatchMoveSettings {
+        solve: m.matchmove_state().unwrap().unwrap().solve,
+        enabled: true,
+        scale_px: 910.0,
+        yaw_trim: 9.0,
+        pitch_trim: -4.0,
+        roll_trim: 2.5,
+    };
+    m.set_matchmove(mm_trimmed, None).unwrap();
+    let exported: serde_json::Value = serde_json::from_str(&m.execute("scene.exportMatchmove".into(), "{}".into()).unwrap()).unwrap();
+    let scene = m.matchmove_scene_data().unwrap().expect("scene data");
+    assert_eq!(exported["frames"].as_array().unwrap().len(), scene.path.len());
+    assert_eq!(exported["points"].as_array().unwrap().len(), scene.points.len());
+    assert!((exported["scalePx"].as_f64().unwrap() - 910.0).abs() < 1e-3);
+
+    // 3. `bake_matchmove_to_scene_camera` copies the exact solved pose at playhead into `scene_camera`,
+    //    pauses match-move, preserves bit-identical rendered pixels at the baked frame, and undoes in one step.
+    let r_before = m.renderer().unwrap();
+    let pose_at_ph = r_before.matchmove_pose(SEC / 2).expect("active pose at 0.5 s");
+    let frame_before_bake = r_before.still(SEC / 2, 320, None).unwrap();
+
+    let baked = m.bake_matchmove_to_scene_camera().unwrap();
+    assert!(!m.matchmove_state().unwrap().unwrap().enabled, "baking pauses match-move so manual scene_camera drives the scene");
+    let sc = m.scene_camera().expect("manual scene_camera populated");
+    assert!((sc.yaw - pose_at_ph.camera.yaw).abs() < 1e-4 && (baked.fov - pose_at_ph.camera.fov).abs() < 1e-4);
+
+    let r_after = m.renderer().unwrap();
+    let frame_after_bake = r_after.still(SEC / 2, 320, None).unwrap();
+    assert_eq!(frame_before_bake.rgba, frame_after_bake.rgba, "baked manual camera must render bit-identically at the baked playhead");
+
+    // Single undo restores active match-move and clears manual scene_camera!
+    m.undo().unwrap();
+    assert!(m.matchmove_state().unwrap().unwrap().enabled);
+    assert!(m.scene_camera().is_none());
+
+    // Engine JSON `scene.bakeMatchmoveFrame` with `disableMatchmove: false` keeps match-move enabled while populating `scene_camera`.
+    let bake_json: serde_json::Value =
+        serde_json::from_str(&m.execute("scene.bakeMatchmoveFrame".into(), r#"{"disableMatchmove":false}"#.into()).unwrap()).unwrap();
+    assert!((bake_json["yaw"].as_f64().unwrap() - pose_at_ph.camera.yaw).abs() < 1e-4);
+    assert!(m.matchmove_state().unwrap().unwrap().enabled);
+    assert!(m.scene_camera().is_some());
 }

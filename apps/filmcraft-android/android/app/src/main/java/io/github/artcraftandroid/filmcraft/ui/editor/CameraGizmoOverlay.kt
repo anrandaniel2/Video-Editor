@@ -15,9 +15,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import kotlin.math.*
 
-/** Move/rotate handles for the scene's render camera. */
+/** Move/rotate handles for the scene's manual render camera (suppressed while Match-Move drives the camera). */
 @Composable
 internal fun CameraGizmoOverlay(ed: EditorController, fw: Float, fh: Float, modifier: Modifier = Modifier) {
+    if (ed.matchmoveActive) return
     val camera by rememberUpdatedState(ed.sceneCamera)
     val orbit by rememberUpdatedState(ed.sceneOrbit)
     val colors = listOf(Color(0xFFFF6575), Color(0xFF6FE295), Color(0xFF669FFF))

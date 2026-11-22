@@ -1,21 +1,64 @@
 package io.github.artcraftandroid.filmcraft.ui.editor
 
+import androidx.compose.ui.graphics.Color
 import io.github.artcraftandroid.filmcraft.core.SceneCamera3d
 import org.json.JSONObject
 
 /**
  * The camera the preview is rendering through right now, as a [ViewProjection] for overlay
- * gizmos — the orbit view while the scene panel is open, the sequence's scene camera
- * otherwise, `null` for the classic fixed camera.
+ * gizmos — the orbit view while the scene panel is open, the sequence's effective render camera
+ * (active match-move pose, else manual scene camera) otherwise, `null` for the classic fixed camera.
  */
 internal fun viewFor(ed: EditorController, fw: Double, fh: Double, w: Double, h: Double): ViewProjection? {
     if (ed.panel == Panel.Scene) {
         val o = ed.sceneOrbit
-        val fov = ed.sceneCamera?.fov ?: CLASSIC_FOV
+        val fov = ed.activeRenderCamera?.fov ?: CLASSIC_FOV
         return ViewProjection(GizmoVec(o.target[0], o.target[1], o.target[2]), o.yaw, o.pitch, 0.0, fov, fw, fh, w, h, o.distance)
     }
-    val c = ed.sceneCamera ?: return null
+    return cameraProjection(ed.activeRenderCamera, fw, fh, w, h)
+}
+
+/** Effective render camera at the playhead: active match-move pose takes precedence over manual scene camera. */
+internal fun effectiveRenderCamera(matchmoveCamera: SceneCamera?, manualCamera: SceneCamera?): SceneCamera? =
+    matchmoveCamera ?: manualCamera
+
+/** Build a [ViewProjection] from a resolved [SceneCamera], or `null` when using the classic fixed camera. */
+internal fun cameraProjection(c: SceneCamera?, fw: Double, fh: Double, w: Double, h: Double): ViewProjection? {
+    if (c == null) return null
     return ViewProjection(GizmoVec(c.position[0], c.position[1], c.position[2]), c.yaw, c.pitch, c.roll, c.fov, fw, fh, w, h)
+}
+
+/** Colour-code solved 3D landmarks by reprojection RMS error in working pixels. */
+internal fun landmarkColor(rmsPx: Double): Color = when {
+    rmsPx <= 1.0 -> Color(0xFF6FE295)
+    rmsPx <= 2.5 -> Color(0xFFFFC947)
+    else -> Color(0xFFFF6575)
+}
+
+/**
+ * Convert a tap `(tapX, tapY)` in a preview container of size `(viewW, viewH)` to normalized
+ * `0..1` frame coordinates for a fitted `(frameW, frameH)` video picture, or `null` if the tap
+ * falls on letterbox/pillarbox bars or dimensions are non-positive.
+ */
+internal fun frameNormalizedAtTap(
+    tapX: Float,
+    tapY: Float,
+    viewW: Float,
+    viewH: Float,
+    frameW: Float,
+    frameH: Float,
+): Pair<Double, Double>? {
+    if (viewW <= 0f || viewH <= 0f || frameW <= 0f || frameH <= 0f) return null
+    val k = kotlin.math.min(viewW / frameW, viewH / frameH)
+    if (k <= 0f || !k.isFinite()) return null
+    val iw = frameW * k
+    val ih = frameH * k
+    val ox = (viewW - iw) * 0.5f
+    val oy = (viewH - ih) * 0.5f
+    if (tapX < ox || tapX > ox + iw || tapY < oy || tapY > oy + ih) return null
+    val nx = ((tapX - ox) / iw).toDouble().coerceIn(0.0, 1.0)
+    val ny = ((tapY - oy) / ih).toDouble().coerceIn(0.0, 1.0)
+    return nx to ny
 }
 
 /** The vertical field of view in degrees whose focal equals the frame height (classic camera). */
@@ -57,6 +100,20 @@ data class SceneCamera(
     )
 
     companion object {
+        val DEFAULT = SceneCamera()
+
+        fun fromNative(c: SceneCamera3d) = SceneCamera(
+            position = listOf(
+                c.position.getOrElse(0) { 0.0 },
+                c.position.getOrElse(1) { 0.0 },
+                c.position.getOrElse(2) { 0.0 },
+            ),
+            yaw = c.yaw,
+            pitch = c.pitch,
+            roll = c.roll,
+            fov = c.fov,
+        )
+
         fun from(json: String): SceneCamera? {
             val j = runCatching { JSONObject(json) }.getOrNull() ?: return null
             if (j.isNull("fov") && !j.has("position")) return null

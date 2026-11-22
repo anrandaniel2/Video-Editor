@@ -28,7 +28,8 @@ internal suspend fun EditorController.pickPreview(point: Offset, tolerance: Doub
             }
             // Do not use the full backing layer as a 3D object's hit region.
             val state = previewObjectSettings(clip.id) ?: continue
-            val g = GizmoGeometry(state, p, snapshot.width.toDouble(), snapshot.height.toDouble(), snapshot.width.toDouble(), snapshot.height.toDouble(), 1.0)
+            val fw = snapshot.width.toDouble(); val fh = snapshot.height.toDouble()
+            val g = GizmoGeometry(state, p, fw, fh, fw, fh, 1.0, viewFor(this, fw, fh, fw, fh))
             val half = state.size * state.scale / 200.0
             val halfDepth = if (state.depth > 0) state.depth * state.scale / 200.0 else half
             val halfWidth = if (state.text.isNotBlank()) half * state.text.lines().maxOf { it.length }.coerceAtLeast(1) * .7 else half

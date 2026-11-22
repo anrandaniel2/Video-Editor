@@ -6,19 +6,21 @@
 //! the renderer when an object's Follow Motion Track is on. Background removal is a point-seeded
 //! `background_removal` effect.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use filmcraft_engine::{EngineError, Session};
-use filmcraft_media::FrameRequest;
+use filmcraft_media::{FrameRequest, SharedSource};
 use filmcraft_project::{ClipId, EffectInstance, ItemKind, ParamValue, Sequence, TrackItem, find_effect, graphic};
 use filmcraft_render::SourceProvider;
-use filmcraft_render::track3d::{Gray, Tracker};
+use filmcraft_render::matchmove::{InputFrame, SolveError, SolveOptions, SolveReport, solve_camera};
+use filmcraft_render::track3d::{Gray, Tracker, crop_gray, view_rect};
 use filmcraft_time::Tick;
 use serde_json::json;
 
+use crate::MobileError;
 use crate::edits::{self, STILL_SECONDS, ex};
 use crate::model;
-use crate::MobileError;
 
 const OBJECT3D: &str = "object_3d";
 const BACKGROUND: &str = "background_removal";
@@ -233,26 +235,14 @@ impl Default for SceneCamera3d {
 
 impl From<filmcraft_project::SceneCamera3D> for SceneCamera3d {
     fn from(c: filmcraft_project::SceneCamera3D) -> Self {
-        Self {
-            position: c.position.map(|v| v as f64).to_vec(),
-            yaw: c.yaw as f64,
-            pitch: c.pitch as f64,
-            roll: c.roll as f64,
-            fov: c.fov as f64,
-        }
+        Self { position: c.position.map(|v| v as f64).to_vec(), yaw: c.yaw as f64, pitch: c.pitch as f64, roll: c.roll as f64, fov: c.fov as f64 }
     }
 }
 
 impl From<SceneCamera3d> for filmcraft_project::SceneCamera3D {
     fn from(c: SceneCamera3d) -> Self {
         let position: [f32; 3] = std::array::from_fn(|i| c.position.get(i).copied().unwrap_or(0.0) as f32);
-        Self {
-            position,
-            yaw: c.yaw as f32,
-            pitch: c.pitch as f32,
-            roll: c.roll as f32,
-            fov: (c.fov as f32).clamp(1.0, 179.0),
-        }
+        Self { position, yaw: c.yaw as f32, pitch: c.pitch as f32, roll: c.roll as f32, fov: (c.fov as f32).clamp(1.0, 179.0) }
     }
 }
 
@@ -298,6 +288,89 @@ pub struct MotionTrackInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SolveCameraOptions {
+    /// Maximum clip span to analyse in seconds (`0.5..=60.0`, default `15.0`).
+    pub max_seconds: f64,
+    /// Jointly refine camera focal length during bundle adjustment.
+    pub refine_focal: bool,
+    pub stereo: StereoLayout,
+    /// Maximum stereoscopic disparity in working pixels (depth sensitivity).
+    pub stereo_baseline: f64,
+}
+
+impl Default for SolveCameraOptions {
+    fn default() -> Self {
+        Self { max_seconds: 15.0, refine_focal: false, stereo: StereoLayout::Mono, stereo_baseline: 64.0 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CameraSolveInfo {
+    pub id: u64,
+    pub clip: u64,
+    pub name: String,
+    pub layout: StereoLayout,
+    pub rotation_only: bool,
+    pub shots_skipped: u32,
+    pub frames: u32,
+    pub points: u32,
+    pub start: i64,
+    pub end: i64,
+    pub median_rms_px: f64,
+    /// Median per-frame confidence, 0..100.
+    pub quality: f64,
+    pub lost: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CameraSolveStatus {
+    /// 0.0 to 1.0.
+    pub progress: f64,
+    pub stage: String,
+    pub finished: bool,
+    pub error: Option<String>,
+    pub solve: Option<CameraSolveInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct MatchMoveSettings {
+    pub solve: u64,
+    pub enabled: bool,
+    pub scale_px: f64,
+    pub yaw_trim: f64,
+    pub pitch_trim: f64,
+    pub roll_trim: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SolvedPoint3d {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub observations: u32,
+    pub rms_px: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct MatchMoveSceneData {
+    pub solve: u64,
+    pub rotation_only: bool,
+    pub points: Vec<SolvedPoint3d>,
+    pub path: Vec<SceneCamera3d>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct MatchMovePose {
+    pub camera: SceneCamera3d,
+    /// Raw sample confidence at this frame, 0..100.
+    pub confidence: f64,
+    pub rms_px: f64,
+    /// True when confidence fell below `LOST_CONFIDENCE` (holding last good pose).
+    pub lost: bool,
+    pub rotation_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct BackgroundSettings {
     pub threshold: f64,
     pub feather: f64,
@@ -311,7 +384,16 @@ pub struct BackgroundSettings {
 
 impl Default for BackgroundSettings {
     fn default() -> Self {
-        Self { threshold: 38.0, feather: 6.0, smooth: 2.0, invert: false, point_radius: 12.0, point_strength: 70.0, keep_points: Vec::new(), remove_points: Vec::new() }
+        Self {
+            threshold: 38.0,
+            feather: 6.0,
+            smooth: 2.0,
+            invert: false,
+            point_radius: 12.0,
+            point_strength: 70.0,
+            keep_points: Vec::new(),
+            remove_points: Vec::new(),
+        }
     }
 }
 
@@ -330,12 +412,7 @@ fn seq_id(s: &Session) -> Result<filmcraft_project::ItemId, MobileError> {
     s.state.active_sequence.ok_or(MobileError::NoSequence)
 }
 
-fn edit_seq<R>(
-    s: &mut Session,
-    label: &str,
-    merge: Option<&str>,
-    f: impl FnOnce(&mut Sequence) -> filmcraft_engine::Result<R>,
-) -> Result<R, MobileError> {
+fn edit_seq<R>(s: &mut Session, label: &str, merge: Option<&str>, f: impl FnOnce(&mut Sequence) -> filmcraft_engine::Result<R>) -> Result<R, MobileError> {
     let id = seq_id(s)?;
     let r = if let Some(key) = merge {
         s.edit_merged(label, key, |p, _| {
@@ -550,7 +627,26 @@ fn write_object(e: &mut EffectInstance, st: &Object3DSettings, t: Tick) {
 }
 
 const ANIMATED_PARAMS: &[&str] = &[
-    "position", "z", "rotation_x", "rotation_y", "rotation_z", "scale", "depth", "bevel", "color", "side_color", "metalness", "roughness", "env_reflection", "emissive", "light_angle", "light_elevation", "opacity", "track_depth", "model_time", "model_speed",
+    "position",
+    "z",
+    "rotation_x",
+    "rotation_y",
+    "rotation_z",
+    "scale",
+    "depth",
+    "bevel",
+    "color",
+    "side_color",
+    "metalness",
+    "roughness",
+    "env_reflection",
+    "emissive",
+    "light_angle",
+    "light_elevation",
+    "opacity",
+    "track_depth",
+    "model_time",
+    "model_speed",
 ];
 
 fn object_animated(e: &EffectInstance) -> bool {
@@ -563,7 +659,8 @@ pub(crate) fn add_object(s: &mut Session, mesh: Object3DMesh) -> Result<u64, Mob
 
 /// Validate and report a model's animation list before/after import.
 pub(crate) fn model_info(path: &str) -> Result<ModelInfo, MobileError> {
-    let m = filmcraft_render::model::load_cached(std::path::Path::new(path)).map_err(|e| MobileError::Command(format!("That model could not be opened: {e}")))?;
+    let m =
+        filmcraft_render::model::load_cached(std::path::Path::new(path)).map_err(|e| MobileError::Command(format!("That model could not be opened: {e}")))?;
     Ok(ModelInfo {
         name: m.name.clone(),
         meshes: m.meshes.len() as u32,
@@ -586,7 +683,9 @@ pub(crate) fn model_info(path: &str) -> Result<ModelInfo, MobileError> {
 
 pub(crate) fn add_model(s: &mut Session, path: &str) -> Result<u64, MobileError> {
     let info = model_info(path)?;
-    if info.triangles == 0 { return Err(MobileError::Command("That model has no triangles.".into())); }
+    if info.triangles == 0 {
+        return Err(MobileError::Command("That model has no triangles.".into()));
+    }
     add_object_with_path(s, Object3DMesh::Model, Some(path))
 }
 
@@ -732,28 +831,6 @@ pub(crate) fn extrude_text(s: &mut Session, id: u64, depth: f64, bevel: f64) -> 
     })
 }
 
-fn view_rect(layout: StereoLayout, w: usize, h: usize) -> (usize, usize, usize, usize) {
-    match layout {
-        StereoLayout::Mono => (0, 0, w, h),
-        StereoLayout::SideBySide => (0, 0, w / 2, h),
-        StereoLayout::TopBottom => (0, 0, w, h / 2),
-    }
-}
-
-fn crop_gray(g: &Gray, x0: usize, y0: usize, w: usize, h: usize) -> Gray {
-    let w = w.max(1);
-    let h = h.max(1);
-    let mut p = vec![0.0; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let sx = (x0 + x).min(g.w.saturating_sub(1));
-            let sy = (y0 + y).min(g.h.saturating_sub(1));
-            p[y * w + x] = g.p[sy * g.w + sx];
-        }
-    }
-    Gray { w, h, p }
-}
-
 pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Result<MotionTrackInfo, MobileError> {
     let (sid, seq) = model::sequence(s)?;
     let c = seq.find_item(ClipId(id)).map(|(_, c)| c.clone()).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
@@ -786,7 +863,7 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
         let rgba = f.to_rgba8();
         let g = Gray::from_rgba8(&rgba, f.width as usize, f.height as usize);
         let (full_w, full_h) = (g.w.max(1), g.h.max(1));
-        let (vx, vy, vw, vh) = view_rect(opts.stereo, g.w, g.h);
+        let (vx, vy, vw, vh) = view_rect(opts.stereo.project(), g.w, g.h);
         let left = crop_gray(&g, vx, vy, vw, vh);
         let right = match opts.stereo {
             StereoLayout::Mono => None,
@@ -917,4 +994,383 @@ pub(crate) fn set_background(s: &mut Session, id: u64, st: &BackgroundSettings, 
         set_points(e, "remove_points", &st.remove_points);
         Ok(())
     })
+}
+
+// ---- 3D camera match-move ----
+
+pub(crate) struct SolveJob {
+    seq: filmcraft_project::ItemId,
+    progress: AtomicU64,
+    stage: Mutex<String>,
+    cancel: AtomicBool,
+    solved: Mutex<Option<Result<SolveReport, String>>>,
+    applied: Mutex<Option<Result<CameraSolveInfo, String>>>,
+}
+
+impl SolveJob {
+    fn set(&self, progress: f64, stage: Option<&str>) {
+        self.progress.store(progress.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        if let Some(st) = stage {
+            *self.stage.lock().unwrap_or_else(PoisonError::into_inner) = st.to_string();
+        }
+    }
+
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_settled(&self) -> bool {
+        self.applied.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+            || (self.cancelled() && self.solved.lock().unwrap_or_else(PoisonError::into_inner).is_some())
+    }
+}
+
+struct SolveWorkerArgs {
+    clip: TrackItem,
+    source: SharedSource,
+    win_start: Tick,
+    win_end: Tick,
+    frame_step: Tick,
+    scale: f32,
+    opts: SolveOptions,
+}
+
+fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveReport, String> {
+    let est_frames = (((args.win_end - args.win_start).0 / args.frame_step.0).max(1) as usize).min(filmcraft_project::CameraSolve::MAX_FRAMES);
+    job.set(0.02, Some("Reading video frames…"));
+    let mut t = args.win_start;
+    let mut decoded = 0usize;
+    let cancel_fn = || job.cancelled();
+    let res = filmcraft_media::cancel::with_background(true, || {
+        solve_camera(&args.opts, &cancel_fn, || {
+            if job.cancelled() {
+                return Err(SolveError::Cancelled);
+            }
+            if t >= args.win_end || decoded >= filmcraft_project::CameraSolve::MAX_FRAMES {
+                job.set(0.50, Some("Solving 3D camera…"));
+                return Ok(None);
+            }
+            let cur = t;
+            t += args.frame_step;
+            let st = args.clip.source_time_at(cur);
+            let f = args.source.video_frame(FrameRequest { time: st, scale: args.scale }).map_err(|e| SolveError::Decode(e.to_string()))?;
+            decoded += 1;
+            job.set(0.46 * (decoded as f64 / est_frames as f64).clamp(0.0, 1.0), None);
+            Ok(Some(InputFrame { time: Tick(cur.0.saturating_sub(args.clip.start.0)), width: f.width as usize, height: f.height as usize, rgba: f.to_rgba8() }))
+        })
+    });
+    res.map_err(|e| match e {
+        SolveError::Cancelled => "cancelled".to_string(),
+        other_err => other_err.to_string(),
+    })
+}
+
+pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions) -> Result<Arc<SolveJob>, MobileError> {
+    let (sid, seq) = model::sequence(s)?;
+    let c = seq.find_item(ClipId(id)).map(|(_, c)| c.clone()).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
+    let pi = s.project.item(c.item).ok_or_else(|| MobileError::Command("That clip has no media.".into()))?;
+    if !matches!(&pi.kind, ItemKind::Media(m) if m.info.has_video()) {
+        return Err(MobileError::Command("Camera solving needs a video clip.".into()));
+    }
+    let provider = s.media.provider(s.project.clone(), s.services.clone());
+    let source = provider.source(c.item).ok_or_else(|| MobileError::Command("The clip's media could not be opened.".into()))?;
+
+    let rate = s.sequence_rate();
+    let frame_step = rate.frame_duration().max(Tick(1));
+    let max_sec = finite(opts.max_seconds, 15.0).clamp(0.5, 60.0);
+    let max_ticks = Tick::from_seconds_f64(max_sec);
+    let clamped_ph = s.playhead().max(c.start).min((c.end() - frame_step).max(c.start));
+    let clip_len = c.end() - c.start;
+    let (win_start, win_end) = if clip_len <= max_ticks {
+        (c.start, c.end())
+    } else {
+        let half = Tick(max_ticks.0 / 2);
+        let ws = (clamped_ph - half).max(c.start).min(c.end() - max_ticks);
+        (ws, (ws + max_ticks).min(c.end()))
+    };
+
+    let (src_w, src_h) = source.info().video.as_ref().map(|v| (v.width, v.height)).unwrap_or((seq.settings.width, seq.settings.height));
+    let target_long = match opts.stereo {
+        StereoLayout::Mono => 480.0f32,
+        StereoLayout::SideBySide | StereoLayout::TopBottom => 960.0f32,
+    };
+    let scale = (target_long / src_w.max(src_h).max(1) as f32).min(1.0);
+    let solve_opts = SolveOptions {
+        id: 0,
+        clip: c.id,
+        name: String::new(),
+        playhead: Tick(clamped_ph.0.saturating_sub(c.start.0)),
+        max_seconds: max_sec,
+        refine_focal: opts.refine_focal,
+        layout: opts.stereo.project(),
+        stereo_baseline: finite(opts.stereo_baseline, 64.0).clamp(4.0, 256.0) as f32,
+    };
+
+    let job = Arc::new(SolveJob {
+        seq: sid,
+        progress: AtomicU64::new(0),
+        stage: Mutex::new("Getting ready…".into()),
+        cancel: AtomicBool::new(false),
+        solved: Mutex::new(None),
+        applied: Mutex::new(None),
+    });
+    let worker_job = job.clone();
+    let args = SolveWorkerArgs { clip: c, source, win_start, win_end, frame_step, scale, opts: solve_opts };
+    std::thread::Builder::new()
+        .name("filmcraft-matchmove".into())
+        .spawn(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_solve_worker(&worker_job, args)))
+                .unwrap_or_else(|_| Err("Solving the camera failed.".to_string()));
+            *worker_job.solved.lock().unwrap_or_else(PoisonError::into_inner) = Some(r);
+        })
+        .map_err(|e| MobileError::Command(format!("Camera solve couldn't start: {e}")))?;
+    Ok(job)
+}
+
+fn solve_info(seq: &Sequence, cs: &filmcraft_project::CameraSolve) -> CameraSolveInfo {
+    let base = seq.find_item(cs.clip).map(|(_, c)| c.start.0).unwrap_or(0);
+    CameraSolveInfo {
+        id: cs.id,
+        clip: cs.clip.0,
+        name: cs.name.clone(),
+        layout: StereoLayout::from_project(cs.layout),
+        rotation_only: cs.rotation_only,
+        shots_skipped: cs.shots_skipped,
+        frames: cs.frames.len() as u32,
+        points: cs.points.len() as u32,
+        start: base.saturating_add(cs.frames.first().map(|f| f.time.0).unwrap_or(0)),
+        end: base.saturating_add(cs.frames.last().map(|f| f.time.0).unwrap_or(0)),
+        median_rms_px: f64::from(cs.median_rms()),
+        quality: (f64::from(cs.median_confidence()) * 100.0).clamp(0.0, 100.0),
+        lost: cs.lost_frames(),
+    }
+}
+
+pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolveStatus {
+    let finished_report = job.solved.lock().unwrap_or_else(PoisonError::into_inner).take();
+    if let Some(res) = finished_report {
+        let applied = if job.cancelled() {
+            Err("cancelled".to_string())
+        } else {
+            match res {
+                Ok(rep) => s
+                    .edit("Solve Camera", |p, _| {
+                        let id = p.alloc_id();
+                        let q = p.sequence_mut(job.seq).ok_or(EngineError::NoSequence)?;
+                        let name = format!("Solve {}", q.camera_solves.len() + 1);
+                        let mut solve = rep.solve;
+                        solve.id = id;
+                        solve.name = name;
+                        let info = solve_info(q, &solve);
+                        q.camera_solves.push(solve);
+                        q.matchmove = Some(filmcraft_project::SequenceMatchMove::new(id));
+                        Ok(info)
+                    })
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            }
+        };
+        *job.applied.lock().unwrap_or_else(PoisonError::into_inner) = Some(applied);
+    }
+    let progress = f64::from_bits(job.progress.load(Ordering::Relaxed));
+    let stage = job.stage.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    match job.applied.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        Some(Ok(info)) => CameraSolveStatus { progress: 1.0, stage: "Done".into(), finished: true, error: None, solve: Some(info.clone()) },
+        Some(Err(e)) => CameraSolveStatus { progress, stage, finished: true, error: Some(e.clone()), solve: None },
+        None => CameraSolveStatus { progress, stage, finished: false, error: None, solve: None },
+    }
+}
+
+pub(crate) fn camera_solves(s: &Session) -> Result<Vec<CameraSolveInfo>, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    Ok(seq.camera_solves.iter().map(|cs| solve_info(seq, cs)).collect())
+}
+
+pub(crate) fn delete_camera_solve(s: &mut Session, id: u64) -> Result<(), MobileError> {
+    edit_seq(s, "Delete Camera Solve", None, |q| {
+        q.camera_solves.retain(|cs| cs.id != id);
+        if q.matchmove.is_some_and(|m| m.solve == id) {
+            q.matchmove = None;
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn matchmove_state(s: &Session) -> Result<Option<MatchMoveSettings>, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    Ok(seq.matchmove.map(|m| MatchMoveSettings {
+        solve: m.solve,
+        enabled: m.enabled,
+        scale_px: f64::from(m.scale_px),
+        yaw_trim: f64::from(m.yaw_trim),
+        pitch_trim: f64::from(m.pitch_trim),
+        roll_trim: f64::from(m.roll_trim),
+    }))
+}
+
+pub(crate) fn set_matchmove(s: &mut Session, st: &MatchMoveSettings, merge: Option<&str>) -> Result<(), MobileError> {
+    edit_seq(s, "Edit Match-Move", merge, |q| {
+        if st.solve == 0 {
+            q.matchmove = None;
+            return Ok(());
+        }
+        if !q.camera_solves.iter().any(|cs| cs.id == st.solve) {
+            return Err(other("That camera solve is gone."));
+        }
+        q.matchmove = Some(filmcraft_project::SequenceMatchMove {
+            solve: st.solve,
+            enabled: st.enabled,
+            scale_px: finite(st.scale_px, f64::from(filmcraft_project::SequenceMatchMove::DEFAULT_SCALE_PX)).clamp(1.0, 100_000.0) as f32,
+            yaw_trim: finite(st.yaw_trim, 0.0).clamp(-180.0, 180.0) as f32,
+            pitch_trim: finite(st.pitch_trim, 0.0).clamp(-180.0, 180.0) as f32,
+            roll_trim: finite(st.roll_trim, 0.0).clamp(-180.0, 180.0) as f32,
+        });
+        Ok(())
+    })
+}
+
+pub(crate) fn matchmove_scene_data(s: &Session) -> Result<Option<MatchMoveSceneData>, MobileError> {
+    let (_, seq) = model::sequence(s)?;
+    let Some(mm) = seq.matchmove.filter(|m| m.enabled) else { return Ok(None) };
+    let Some(cs) = seq.camera_solves.iter().find(|c| c.id == mm.solve) else { return Ok(None) };
+    let points = cs
+        .points
+        .iter()
+        .map(|pt| {
+            let w = mm.apply_to_point(pt.position);
+            SolvedPoint3d { x: f64::from(w[0]), y: f64::from(w[1]), z: f64::from(w[2]), observations: pt.observations, rms_px: f64::from(pt.rms_px) }
+        })
+        .collect();
+    let max_path = 256usize;
+    let step = cs.frames.len().div_ceil(max_path).max(1);
+    let mut path: Vec<SceneCamera3d> = cs.frames.iter().step_by(step).map(|f| mm.apply_to_sample(f).into()).collect();
+    if cs.frames.len() > 1
+        && !(cs.frames.len() - 1).is_multiple_of(step)
+        && let Some(last) = cs.frames.last()
+    {
+        path.push(mm.apply_to_sample(last).into());
+    }
+    Ok(Some(MatchMoveSceneData { solve: cs.id, rotation_only: cs.rotation_only, points, path }))
+}
+
+pub(crate) fn matchmove_pose_at(seq: &Sequence, timeline: Tick) -> Option<MatchMovePose> {
+    let mm = seq.matchmove.filter(|m| m.enabled)?;
+    let cs = seq.camera_solves.iter().find(|c| c.id == mm.solve)?;
+    let camera = seq.matchmove_camera_at(timeline)?.into();
+    let start = seq.find_item(cs.clip).map(|(_, c)| c.start).unwrap_or(Tick::ZERO);
+    let local = Tick(timeline.0.saturating_sub(start.0));
+    let raw = cs.sample_at(local)?;
+    Some(MatchMovePose {
+        camera,
+        confidence: (f64::from(raw.confidence) * 100.0).clamp(0.0, 100.0),
+        rms_px: f64::from(raw.rms_px),
+        lost: !raw.is_confident(),
+        rotation_only: cs.rotation_only,
+    })
+}
+
+pub(crate) fn level_matchmove_ground(s: &mut Session) -> Result<MatchMoveSettings, MobileError> {
+    let normal = {
+        let (_, seq) = model::sequence(s)?;
+        let mm = seq.matchmove.ok_or_else(|| MobileError::Command("Solve or select a 3D camera track first.".into()))?;
+        let cs = seq.camera_solves.iter().find(|c| c.id == mm.solve).ok_or_else(|| MobileError::Command("That camera solve is gone.".into()))?;
+        cs.fit_ground_plane().map(|(n, _)| n).ok_or_else(|| MobileError::Command("Not enough floor landmarks in this clip to auto-level the ground.".into()))?
+    };
+    edit_seq(s, "Auto-Level Match-Move", None, |q| {
+        if let Some(mm) = q.matchmove.as_mut() {
+            mm.enabled = true;
+            let _ = mm.level_to_normal(normal);
+        }
+        Ok(())
+    })?;
+    matchmove_state(s)?.ok_or_else(|| MobileError::Command("No active match-move.".into()))
+}
+
+fn nearest_landmark_world(seq: &Sequence, timeline: Tick, norm_x: f64, norm_y: f64) -> Option<[f32; 3]> {
+    let mm = seq.matchmove.filter(|m| m.enabled)?;
+    let cs = seq.camera_solves.iter().find(|c| c.id == mm.solve)?;
+    let cam = seq.matchmove_camera_at(timeline)?;
+    let (fw, fh) = (seq.settings.width.max(1) as f32, seq.settings.height.max(1) as f32);
+    let tx = finite(norm_x, 0.5).clamp(0.0, 1.0) as f32 * fw;
+    let ty = finite(norm_y, 0.5).clamp(0.0, 1.0) as f32 * fh;
+    let vr = cam.view_rotation();
+    let focal = cam.focal(fh);
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for pt in &cs.points {
+        let w = mm.apply_to_point(pt.position);
+        if w[2] < 20.0 {
+            continue;
+        }
+        let d = [w[0] - cam.position[0], w[1] - cam.position[1], w[2] - cam.position[2]];
+        let vz = vr[2][0] * d[0] + vr[2][1] * d[1] + vr[2][2] * d[2];
+        if vz <= 10.0 {
+            continue;
+        }
+        let vx = vr[0][0] * d[0] + vr[0][1] * d[1] + vr[0][2] * d[2];
+        let vy = vr[1][0] * d[0] + vr[1][1] * d[1] + vr[1][2] * d[2];
+        let sx = fw * 0.5 + focal * vx / vz;
+        let sy = fh * 0.5 + focal * vy / vz;
+        let dist2 = (sx - tx) * (sx - tx) + (sy - ty) * (sy - ty);
+        if best.is_none_or(|(bd, _)| dist2 < bd) {
+            best = Some((dist2, w));
+        }
+    }
+    best.map(|(_, w)| w)
+}
+
+pub(crate) fn snap_object_to_matchmove(s: &mut Session, id: u64, norm_x: f64, norm_y: f64) -> Result<Object3DSettings, MobileError> {
+    let (fw, fh, world) = {
+        let (_, seq) = model::sequence(s)?;
+        let w = nearest_landmark_world(seq, s.playhead(), norm_x, norm_y)
+            .ok_or_else(|| MobileError::Command("No visible 3D track points at this frame to snap onto.".into()))?;
+        (f64::from(seq.settings.width.max(1)), f64::from(seq.settings.height.max(1)), w)
+    };
+    let cur = object_state(s, id)?;
+    if !cur.has_object {
+        return Err(MobileError::Command("Select a 3D object clip first.".into()));
+    }
+    let mut st = cur.settings;
+    let z = f64::from(world[2]).max(8.0);
+    st.z = z;
+    st.x = fw * 0.5 + f64::from(world[0]) * fh / z;
+    st.y = fh * 0.5 + f64::from(world[1]) * fh / z;
+    st.follow_track = false;
+    set_object(s, id, &st, None)?;
+    Ok(st)
+}
+
+pub(crate) fn place_object_on_matchmove(s: &mut Session, mesh: Object3DMesh, norm_x: f64, norm_y: f64) -> Result<u64, MobileError> {
+    {
+        let (_, seq) = model::sequence(s)?;
+        if nearest_landmark_world(seq, s.playhead(), norm_x, norm_y).is_none() {
+            return Err(MobileError::Command("No visible 3D track points at this frame to place onto.".into()));
+        }
+    }
+    let mut created = 0u64;
+    s.edit_group("Place 3D Object on Landmark", |s| {
+        let id = add_object(s, mesh).map_err(|e| EngineError::Other(e.to_string()))?;
+        snap_object_to_matchmove(s, id, norm_x, norm_y).map_err(|e| EngineError::Other(e.to_string()))?;
+        created = id;
+        Ok(())
+    })?;
+    Ok(created)
+}
+
+pub(crate) fn bake_matchmove_to_scene_camera(s: &mut Session) -> Result<SceneCamera3d, MobileError> {
+    let cam = {
+        let (_, seq) = model::sequence(s)?;
+        seq.matchmove_camera_at(s.playhead()).ok_or_else(|| MobileError::Command("Enable a 3D camera solve before baking to the scene camera.".into()))?
+    };
+    edit_seq(s, "Bake Match-Move Camera", None, |q| {
+        q.scene_camera = Some(cam);
+        if let Some(mm) = q.matchmove.as_mut() {
+            mm.enabled = false;
+        }
+        Ok(())
+    })?;
+    Ok(cam.into())
 }

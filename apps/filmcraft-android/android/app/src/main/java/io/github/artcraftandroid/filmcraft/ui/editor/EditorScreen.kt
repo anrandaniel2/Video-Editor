@@ -288,7 +288,10 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
         if (object3d && sel != null) ed.loadObject3D(sel.id)
         if (masking && sel != null) ed.loadMasks(sel.id)
     }
-    LaunchedEffect(ed.panel) { ed.applyScenePreviewCamera() }
+    LaunchedEffect(ed.panel) {
+        if (ed.panel != Panel.MatchMove) ed.matchmoveTapToPlace = false
+        ed.applyScenePreviewCamera()
+    }
     BoxWithConstraints(modifier.editorBackdropSource().background(Fc.Black).testTag("editor_player_area"), contentAlignment = Alignment.Center) {
         val aspect = if (t != null && t.height.toInt() > 0) t.width.toFloat() / t.height.toFloat() else 9f / 16f
         // an empty project shows the whole monitor; otherwise the frame, fitted
@@ -364,6 +367,10 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
                 .semantics { contentDescription = "Preview" },
         ) {
             ed.picture?.let { Image(it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+            val showMatchMove = ed.panel == Panel.MatchMove || (ed.matchmoveActive && ed.matchmovePose?.lost == true)
+            if (showMatchMove && t != null) {
+                MatchMoveOverlay(ed, t.width.toFloat(), t.height.toFloat(), Modifier.fillMaxSize())
+            }
             // the text being typed, where the new clip will put it
             if (ed.typing.isNotBlank() && t != null) {
                 val k = with(density) { boxW.toPx() } / t.width.toFloat()

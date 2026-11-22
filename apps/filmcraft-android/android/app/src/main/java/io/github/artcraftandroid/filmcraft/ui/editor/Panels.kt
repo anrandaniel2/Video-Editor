@@ -87,6 +87,7 @@ fun EditorPanel(ed: EditorController, panel: Panel, modifier: Modifier = Modifie
         Panel.Lights -> LightsPanel(ed, close, modifier)
         Panel.Keyframes -> KeyframesPanel(ed, close, modifier)
         Panel.Tracking -> clip?.let { TrackingPanel(ed, close, modifier) }
+        Panel.MatchMove -> MatchMovePanel(ed, close, modifier)
         Panel.Background -> clip?.let { BackgroundPanel(ed, close, modifier) }
         Panel.Filters -> clip?.let { LookPanel(ed, it, filters = true, close, modifier) }
         Panel.Effects -> clip?.let { LookPanel(ed, it, filters = false, close, modifier) }
