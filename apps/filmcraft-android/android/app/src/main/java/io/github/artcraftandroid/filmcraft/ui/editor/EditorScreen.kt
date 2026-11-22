@@ -280,7 +280,7 @@ private fun Preview(ed: EditorController, modifier: Modifier) {
     val masking = ed.panel == Panel.Mask && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
     val advanced = (ed.panel == Panel.Background || ed.panel == Panel.Tracking) && sel != null && (sel.kind == ClipKind.VIDEO || sel.kind == ClipKind.IMAGE)
     val object3d = sel?.has3d == true
-    val matchmovePlate = ed.matchmoveActive && sel != null && sel.id == ed.activeMatchMoveClipId && ed.panel != Panel.Transform
+    val matchmovePlate = ed.matchmoveActive && sel != null && sel.id == ed.activeMatchMoveClipId && ed.panel != Panel.Keyframes
     val movable = !object3d && !matchmovePlate && sel != null && sel.kind != ClipKind.AUDIO && sel.kind != ClipKind.MISSING && ed.panel !is Panel.TextInput && !masking && !advanced && ed.panel != Panel.Object3D && ed.panel != Panel.Scene
     var placement by remember { mutableStateOf<Placement?>(null) }
     LaunchedEffect(sel?.id, t?.revision, ed.playhead, movable) {
