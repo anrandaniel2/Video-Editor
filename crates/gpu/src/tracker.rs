@@ -307,17 +307,21 @@ impl GpuTrackerEngine {
         if self.build_rgba_pyramid(1, &rgba1, w, h, (0, 0, w, h), (w, h), 2, false).is_none() {
             return false;
         }
-        let Some(corners) = self.detect_corners(0, (16, 16, 32, 32), 16) else {
+        let Some(corners) = self.detect_corners(0, (16, 16, 48, 48), 16) else {
             return false;
         };
         if corners.is_empty() {
             return false;
         }
-        let pt = [corners[0][0], corners[0][1]];
-        let Some(tracked) = self.track_batch_fb(0, 1, &[pt], &[pt], 3, 1.5) else {
+        let pt = (corners[0].1, corners[0].2);
+        let q = GpuTrackQuery { pt, guess: (0.0, 0.0) };
+        let Some(tracked) = self.track_batch_fb(0, 1, &[q], 3, 1.5) else {
             return false;
         };
-        tracked.first().and_then(|o| *o).is_some_and(|p| (p[0] - (pt[0] + 2.0)).abs() < 0.85 && (p[1] - (pt[1] + 1.0)).abs() < 0.85)
+        tracked
+            .first()
+            .and_then(|o| *o)
+            .is_some_and(|p| (p.0 - (pt.0 + 2.0)).abs() < 0.85 && (p.1 - (pt.1 + 1.0)).abs() < 0.85)
     }
 
     fn init_buf(&self, label: &str, data: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
