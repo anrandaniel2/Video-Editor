@@ -97,10 +97,65 @@ fn main() {
     println!("cargo:rustc-link-lib=static=colmap_vlfeat");
 
     if is_android {
+        let mut probe = cc::Build::new();
+        probe.cpp(true);
+        let compiler = probe.get_compiler();
+        let mut search_dirs: Vec<PathBuf> = Vec::new();
+        let mut push_dir = |d: PathBuf| {
+            if d.exists() && !search_dirs.contains(&d) {
+                search_dirs.push(d);
+            }
+        };
+
+        for lib_name in ["libc++_static.a", "libc++abi.a", "libunwind.a"] {
+            if let Ok(out) = compiler.to_command().arg(format!("-print-file-name={lib_name}")).output() {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout);
+                    let p = PathBuf::from(s.trim());
+                    if p.is_absolute() && p.exists() {
+                        if let Some(parent) = p.parent() {
+                            push_dir(parent.to_path_buf());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback NDK sysroot lookup relative to `<ndk>/toolchains/llvm/prebuilt/<host>/bin/clang++`.
+        let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+        let ndk_triple = match target_arch.as_str() {
+            "aarch64" => "aarch64-linux-android",
+            "arm" => "arm-linux-androideabi",
+            "x86_64" => "x86_64-linux-android",
+            "x86" => "i686-linux-android",
+            _ => "aarch64-linux-android",
+        };
+        if let Some(prebuilt) = compiler.path().parent().and_then(Path::parent) {
+            push_dir(prebuilt.join("sysroot/usr/lib").join(ndk_triple));
+        }
+        for env_key in ["ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK_HOME"] {
+            if let Ok(ndk) = env::var(env_key) {
+                let prebuilts = PathBuf::from(ndk).join("toolchains/llvm/prebuilt");
+                if let Ok(entries) = fs::read_dir(prebuilts) {
+                    for entry in entries.flatten() {
+                        push_dir(entry.path().join("sysroot/usr/lib").join(ndk_triple));
+                    }
+                }
+            }
+        }
+
+        let has_unwind = search_dirs.iter().any(|d| d.join("libunwind.a").exists());
+        for dir in &search_dirs {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+        }
         println!("cargo:rustc-link-lib=static=c++_static");
         println!("cargo:rustc-link-lib=static=c++abi");
+        if has_unwind {
+            println!("cargo:rustc-link-lib=static=unwind");
+        }
         println!("cargo:rustc-link-lib=log");
         println!("cargo:rustc-link-lib=dl");
+        println!("cargo:rustc-link-lib=m");
     } else if target_os == "linux" {
         println!("cargo:rustc-link-lib=stdc++");
         println!("cargo:rustc-link-lib=dl");
