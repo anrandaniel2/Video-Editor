@@ -43,9 +43,9 @@ namespace {
 
 std::once_flag g_vl_init_once;
 
-void SetError(ColmapSolveResult* out, const char* msg) {
+void SetError(ColmapSolveResult* out, int status, const char* msg) {
   if (!out) return;
-  out->status = -1;
+  out->status = status;
   std::snprintf(out->error_msg, sizeof(out->error_msg), "%s", msg ? msg : "unknown error");
 }
 
@@ -68,6 +68,161 @@ double MedianInPlace(std::vector<double>* vals) {
   const size_t mid = vals->size() / 2;
   if (vals->size() % 2 == 1) return (*vals)[mid];
   return 0.5 * ((*vals)[mid - 1] + (*vals)[mid]);
+}
+
+double PercentileInPlace(std::vector<double>* vals, double q) {
+  if (!vals || vals->empty()) return 0.0;
+  std::sort(vals->begin(), vals->end());
+  const double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(vals->size() - 1);
+  const size_t idx = static_cast<size_t>(std::round(pos));
+  return (*vals)[std::min(idx, vals->size() - 1)];
+}
+
+// Estimate pure 3D rotation R in SO(3) via Kabsch/Procrustes on calibrated bearing rays
+// and return median pixel reprojection error.
+double EstimatePureRotationProcrustes(const colmap::Camera& cam,
+                                      const std::vector<Eigen::Vector2d>& pts1,
+                                      const std::vector<Eigen::Vector2d>& pts2,
+                                      const colmap::FeatureMatches& inliers,
+                                      Eigen::Matrix3d* out_r) {
+  if (inliers.size() < 4) return 999.0;
+  Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+  size_t valid = 0;
+  for (size_t k = 0; k < inliers.size(); ++k) {
+    const auto ray1 = cam.CamRayFromImg(pts1[inliers[k].point2D_idx1]);
+    const auto ray2 = cam.CamRayFromImg(pts2[inliers[k].point2D_idx2]);
+    if (!ray1.has_value() || !ray2.has_value()) continue;
+    cov += (*ray2) * ray1->transpose();
+    ++valid;
+  }
+  if (valid < 4) return 999.0;
+
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(cov, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  Eigen::Matrix3d u = svd.matrixU();
+  Eigen::Matrix3d v = svd.matrixV();
+  Eigen::Matrix3d r_rot = u * v.transpose();
+  if (r_rot.determinant() < 0.0) {
+    u.col(2) = -u.col(2);
+    r_rot = u * v.transpose();
+  }
+  if (out_r) *out_r = r_rot;
+
+  std::vector<double> errs;
+  errs.reserve(inliers.size());
+  for (size_t k = 0; k < inliers.size(); ++k) {
+    const auto ray1 = cam.CamRayFromImg(pts1[inliers[k].point2D_idx1]);
+    if (!ray1.has_value()) continue;
+    const Eigen::Vector3d pred = r_rot * (*ray1);
+    if (pred.z() <= 1e-4) {
+      errs.push_back(999.0);
+      continue;
+    }
+    const auto img_pt = cam.ImgFromCam(pred);
+    if (!img_pt.has_value()) {
+      errs.push_back(999.0);
+      continue;
+    }
+    errs.push_back((*img_pt - pts2[inliers[k].point2D_idx2]).norm());
+  }
+  return errs.empty() ? 999.0 : MedianInPlace(&errs);
+}
+
+// Focal-invariant pure-rotation residual: evaluates pure SO(3) rotation across plausible
+// focal multipliers so a locked-FOV prior mismatch on a planar wall never masquerades as 3D motion.
+double BestFocalPureRotationPxErr(uint32_t width,
+                                  uint32_t height,
+                                  double init_f,
+                                  const std::vector<Eigen::Vector2d>& pts1,
+                                  const std::vector<Eigen::Vector2d>& pts2,
+                                  const colmap::FeatureMatches& inliers) {
+  double best = 999.0;
+  static constexpr double kMultipliers[] = {0.65, 0.78, 0.90, 1.00, 1.12, 1.28, 1.48};
+  for (double mult : kMultipliers) {
+    const colmap::Camera test_cam = colmap::Camera::CreateFromModelId(
+        1,
+        colmap::SimplePinholeCameraModel::model_id,
+        std::max(20.0, init_f * mult),
+        width,
+        height,
+        colmap::CameraSource::USER);
+    best = std::min(
+        best,
+        EstimatePureRotationProcrustes(test_cam, pts1, pts2, inliers, nullptr));
+  }
+  return best;
+}
+
+// Compute median pixel residual of an IRLS-refined 4-DOF 2D image-plane similarity transform
+// (`x' = a x - b y + tx`, `y' = b x + a y + ty`), alongside average 2D motion magnitude
+// and scale zoom change (`|hypot(a, b) - 1|`).
+struct Similarity2DFit {
+  double median_err_px = 999.0;
+  double mean_disp_px = 0.0;
+  double scale_delta = 0.0;
+};
+
+Similarity2DFit FitSimilarity2D(const std::vector<Eigen::Vector2d>& pts1,
+                                const std::vector<Eigen::Vector2d>& pts2,
+                                const colmap::FeatureMatches& inliers) {
+  Similarity2DFit out;
+  const size_t m = inliers.size();
+  if (m < 8) return out;
+
+  Eigen::MatrixXd a_mat(2 * m, 4);
+  Eigen::VectorXd rhs(2 * m);
+  double disp_sum = 0.0;
+  for (size_t k = 0; k < m; ++k) {
+    const Eigen::Vector2d& p1 = pts1[inliers[k].point2D_idx1];
+    const Eigen::Vector2d& p2 = pts2[inliers[k].point2D_idx2];
+    disp_sum += (p2 - p1).norm();
+    a_mat(2 * k, 0) = p1.x();
+    a_mat(2 * k, 1) = -p1.y();
+    a_mat(2 * k, 2) = 1.0;
+    a_mat(2 * k, 3) = 0.0;
+    rhs(2 * k) = p2.x();
+    a_mat(2 * k + 1, 0) = p1.y();
+    a_mat(2 * k + 1, 1) = p1.x();
+    a_mat(2 * k + 1, 2) = 0.0;
+    a_mat(2 * k + 1, 3) = 1.0;
+    rhs(2 * k + 1) = p2.y();
+  }
+  out.mean_disp_px = disp_sum / static_cast<double>(m);
+
+  Eigen::Vector4d sol = a_mat.colPivHouseholderQr().solve(rhs);
+  if (!sol.allFinite()) return out;
+
+  // One Huber IRLS pass so occasional mismatched keypoints cannot inflate 2D residual.
+  Eigen::MatrixXd aw(2 * m, 4);
+  Eigen::VectorXd bw(2 * m);
+  for (size_t k = 0; k < m; ++k) {
+    const Eigen::Vector2d& p1 = pts1[inliers[k].point2D_idx1];
+    const Eigen::Vector2d& p2 = pts2[inliers[k].point2D_idx2];
+    const double rx = (sol(0) * p1.x() - sol(1) * p1.y() + sol(2)) - p2.x();
+    const double ry = (sol(1) * p1.x() + sol(0) * p1.y() + sol(3)) - p2.y();
+    const double r = std::hypot(rx, ry);
+    const double w = (r > 1.5) ? std::sqrt(1.5 / r) : 1.0;
+    aw.row(2 * k) = w * a_mat.row(2 * k);
+    bw(2 * k) = w * rhs(2 * k);
+    aw.row(2 * k + 1) = w * a_mat.row(2 * k + 1);
+    bw(2 * k + 1) = w * rhs(2 * k + 1);
+  }
+  const Eigen::Vector4d sol_irls = aw.colPivHouseholderQr().solve(bw);
+  if (sol_irls.allFinite()) {
+    sol = sol_irls;
+  }
+
+  out.scale_delta = std::abs(std::hypot(sol(0), sol(1)) - 1.0);
+  std::vector<double> errs;
+  errs.reserve(m);
+  for (size_t k = 0; k < m; ++k) {
+    const Eigen::Vector2d& p1 = pts1[inliers[k].point2D_idx1];
+    const Eigen::Vector2d& p2 = pts2[inliers[k].point2D_idx2];
+    const double rx = (sol(0) * p1.x() - sol(1) * p1.y() + sol(2)) - p2.x();
+    const double ry = (sol(1) * p1.x() + sol(0) * p1.y() + sol(3)) - p2.y();
+    errs.push_back(std::hypot(rx, ry));
+  }
+  out.median_err_px = MedianInPlace(&errs);
+  return out;
 }
 
 struct VerifiedPair {
@@ -96,14 +251,16 @@ ReconQuality Evaluate6DofReconstruction(
     double px_err_limit) {
   ReconQuality q;
   q.num_reg = recon.RegImageIds().size();
-  if (q.num_reg < 2) return q;
+  const size_t min_reg_needed =
+      (num_frames >= 6) ? std::max<size_t>(3, num_frames / 3) : 2;
+  if (q.num_reg < min_reg_needed) return q;
 
   q.solved_focal = recon.ExistsCamera(camera_id)
                        ? recon.Camera(camera_id).MeanFocalLength()
                        : init_f;
   if (!std::isfinite(q.solved_focal) || q.solved_focal <= 10.0) return q;
   if (!lock_fov &&
-      (q.solved_focal < 0.50 * init_f || q.solved_focal > 2.00 * init_f)) {
+      (q.solved_focal < 0.45 * init_f || q.solved_focal > 2.25 * init_f)) {
     return q;
   }
 
@@ -122,7 +279,7 @@ ReconQuality Evaluate6DofReconstruction(
     if (!c.allFinite()) return q;
     centers.emplace_back(idx, c);
   }
-  if (centers.size() < 2) return q;
+  if (centers.size() < min_reg_needed) return q;
   std::sort(centers.begin(),
             centers.end(),
             [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -159,7 +316,7 @@ ReconQuality Evaluate6DofReconstruction(
   for (const auto& [pt_id, pt] : recon.Points3D()) {
     (void)pt_id;
     if (!pt.xyz.allFinite() || pt.track.Length() < min_obs) continue;
-    if (pt.HasError() && pt.error > px_err_limit * 1.5) continue;
+    if (pt.HasError() && pt.error > px_err_limit * 1.6) continue;
 
     // Compute maximum triangulation angle across observed views for this landmark.
     double best_tri_rad = 0.0;
@@ -191,7 +348,7 @@ ReconQuality Evaluate6DofReconstruction(
     }
 
     const double tri_deg = colmap::RadToDeg(best_tri_rad);
-    if (tri_deg < 0.6) continue;
+    if (tri_deg < 0.25) continue;
 
     ++q.reliable_points;
     tri_degs.push_back(tri_deg);
@@ -205,11 +362,11 @@ ReconQuality Evaluate6DofReconstruction(
   const double med_depth = MedianInPlace(&depths);
   q.baseline_snr = (med_depth > 1e-6) ? (max_baseline / med_depth) : 0.0;
 
-  const size_t min_reliable_pts = (num_frames >= 6) ? 18 : 8;
+  const size_t min_reliable_pts = (num_frames >= 6) ? 12 : 6;
   q.valid_6dof = (q.reliable_points >= min_reliable_pts) &&
-                 (q.median_tri_deg >= 1.15) &&
-                 (q.baseline_snr >= 0.025) &&
-                 (q.step_jitter_ratio <= 12.0);
+                 (q.median_tri_deg >= 0.45) &&
+                 (q.baseline_snr >= 0.008) &&
+                 (q.step_jitter_ratio <= 25.0);
   return q;
 }
 
@@ -242,16 +399,16 @@ std::shared_ptr<colmap::Reconstruction> RunSolvePass(
     gopts.random_seed = 42;
     gopts.track_min_num_views_per_track = (num_frames >= 5) ? 3 : 2;
     gopts.track_intra_image_consistency_threshold = std::clamp(4.0 * px_scale, 2.0, 6.0);
-    gopts.min_tri_angle_deg = 1.0;
-    gopts.max_angular_reproj_error_deg = 1.25;
+    gopts.min_tri_angle_deg = 0.5;
+    gopts.max_angular_reproj_error_deg = 1.5;
     gopts.max_normalized_reproj_error = norm_reproj;
     gopts.ba_num_iterations = 3;
-    gopts.rotation_averaging.max_rotation_error_deg = 5.0;
+    gopts.rotation_averaging.max_rotation_error_deg = 6.0;
     gopts.global_positioning.use_gpu = false;
     gopts.global_positioning.min_num_view_per_track = gopts.track_min_num_views_per_track;
     gopts.retriangulation.complete_max_reproj_error = reproj_px * 1.5;
     gopts.retriangulation.merge_max_reproj_error = reproj_px * 1.5;
-    gopts.retriangulation.min_angle = 1.0;
+    gopts.retriangulation.min_angle = 0.5;
     gopts.bundle_adjustment.min_track_length = gopts.track_min_num_views_per_track;
     gopts.bundle_adjustment.refine_focal_length = refine_focal;
     gopts.bundle_adjustment.refine_principal_point = false;
@@ -267,7 +424,7 @@ std::shared_ptr<colmap::Reconstruction> RunSolvePass(
 
     if (global_mapper.Solve(gopts) && global_recon->RegImageIds().size() >= 2) {
       const ReconQuality gq = Evaluate6DofReconstruction(
-          *global_recon, camera_id, num_frames, init_f, !refine_focal, reproj_px * 1.35);
+          *global_recon, camera_id, num_frames, init_f, !refine_focal, reproj_px * 1.45);
       if (gq.valid_6dof) {
         best_recon = global_recon;
         best_q = gq;
@@ -285,23 +442,23 @@ std::shared_ptr<colmap::Reconstruction> RunSolvePass(
     inc_opts->extract_colors = false;
     inc_opts->num_threads = 2;
     inc_opts->random_seed = 42;
-    inc_opts->min_focal_length_ratio = 0.5;
-    inc_opts->max_focal_length_ratio = 2.0;
+    inc_opts->min_focal_length_ratio = 0.45;
+    inc_opts->max_focal_length_ratio = 2.25;
     inc_opts->ba_refine_focal_length = refine_focal;
     inc_opts->ba_refine_principal_point = false;
     inc_opts->ba_refine_extra_params = false;
     inc_opts->ba_use_gpu = false;
-    inc_opts->mapper.init_min_num_inliers = 24;
+    inc_opts->mapper.init_min_num_inliers = 18;
     inc_opts->mapper.init_max_error = reproj_px;
-    inc_opts->mapper.init_min_tri_angle = 2.0;
+    inc_opts->mapper.init_min_tri_angle = 0.8;
     inc_opts->mapper.abs_pose_max_error = std::clamp(4.0 * px_scale, 2.5, 5.5);
-    inc_opts->mapper.abs_pose_min_num_inliers = 15;
-    inc_opts->mapper.abs_pose_min_inlier_ratio = 0.20;
-    inc_opts->mapper.filter_max_reproj_error = reproj_px;
-    inc_opts->mapper.filter_min_tri_angle = 1.0;
-    inc_opts->triangulation.merge_max_reproj_error = reproj_px;
-    inc_opts->triangulation.complete_max_reproj_error = reproj_px;
-    inc_opts->triangulation.min_angle = 1.0;
+    inc_opts->mapper.abs_pose_min_num_inliers = 12;
+    inc_opts->mapper.abs_pose_min_inlier_ratio = 0.15;
+    inc_opts->mapper.filter_max_reproj_error = reproj_px * 1.25;
+    inc_opts->mapper.filter_min_tri_angle = 0.5;
+    inc_opts->triangulation.merge_max_reproj_error = reproj_px * 1.25;
+    inc_opts->triangulation.complete_max_reproj_error = reproj_px * 1.25;
+    inc_opts->triangulation.min_angle = 0.5;
     if (!refine_focal) {
       inc_opts->constant_cameras.insert(camera_id);
     }
@@ -314,7 +471,7 @@ std::shared_ptr<colmap::Reconstruction> RunSolvePass(
       auto cand = recon_mgr->Get(m);
       if (!cand || cand->RegImageIds().size() < 2) continue;
       const ReconQuality cq = Evaluate6DofReconstruction(
-          *cand, camera_id, num_frames, init_f, !refine_focal, reproj_px * 1.35);
+          *cand, camera_id, num_frames, init_f, !refine_focal, reproj_px * 1.45);
       if (!cq.valid_6dof) continue;
       if (!best_recon ||
           cq.num_reg > best_q.num_reg ||
@@ -336,11 +493,13 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
                                      size_t num_frames,
                                      const ColmapSolveConfig* config,
                                      ColmapSolveResult* out_result) {
-  if (!out_result) return -1;
+  if (!out_result) return COLMAP_SOLVE_ERR_INVALID;
   std::memset(out_result, 0, sizeof(*out_result));
   if (!frames || !config || num_frames < 2) {
-    SetError(out_result, "Need at least 2 sampled frames for COLMAP match-move");
-    return -1;
+    SetError(out_result,
+             COLMAP_SOLVE_ERR_INVALID,
+             "Need at least 2 sampled frames for COLMAP match-move");
+    return COLMAP_SOLVE_ERR_INVALID;
   }
 
   try {
@@ -349,8 +508,8 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
     const uint32_t width = frames[0].width;
     const uint32_t height = frames[0].height;
     if (width < 16 || height < 16) {
-      SetError(out_result, "Frame dimensions too small for COLMAP");
-      return -1;
+      SetError(out_result, COLMAP_SOLVE_ERR_INVALID, "Frame dimensions too small for COLMAP");
+      return COLMAP_SOLVE_ERR_INVALID;
     }
 
     // Pixel error scaling relative to ~1080p so downscaled working frames reject outlier matches.
@@ -378,7 +537,7 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
         height,
         colmap::CameraSource::USER);
 
-    // 3. Extract SIFT keypoints & descriptors using gold-standard VLFeat CPU SIFT
+    // 3. Extract SIFT keypoints & descriptors using VLFeat CPU SIFT
     // (full 3D subpixel + multi-orientation + RootSIFT, zero GL readback stalls).
     colmap::FeatureExtractionOptions ext_opts(colmap::FeatureExtractorType::SIFT);
     ext_opts.use_gpu = false;
@@ -393,8 +552,10 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
 
     auto extractor = colmap::FeatureExtractor::Create(ext_opts);
     if (!extractor) {
-      SetError(out_result, "Failed to initialize COLMAP SIFT feature extractor");
-      return -1;
+      SetError(out_result,
+               COLMAP_SOLVE_ERR_INVALID,
+               "Failed to initialize COLMAP SIFT feature extractor");
+      return COLMAP_SOLVE_ERR_INVALID;
     }
 
     std::vector<std::shared_ptr<colmap::FeatureKeypoints>> all_keypoints(num_frames);
@@ -403,8 +564,10 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
 
     for (size_t i = 0; i < num_frames; ++i) {
       if (!frames[i].gray || frames[i].width != width || frames[i].height != height) {
-        SetError(out_result, "Inconsistent input frame dimensions or null buffer");
-        return -1;
+        SetError(out_result,
+                 COLMAP_SOLVE_ERR_INVALID,
+                 "Inconsistent input frame dimensions or null buffer");
+        return COLMAP_SOLVE_ERR_INVALID;
       }
       colmap::Bitmap bmp(static_cast<int>(width), static_cast<int>(height), /*as_rgb=*/false);
       std::memcpy(bmp.RowMajorData().data(),
@@ -436,23 +599,29 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
 
     auto matcher = colmap::FeatureMatcher::Create(match_opts);
     if (!matcher) {
-      SetError(out_result, "Failed to initialize COLMAP SIFT feature matcher");
-      return -1;
+      SetError(out_result,
+               COLMAP_SOLVE_ERR_INVALID,
+               "Failed to initialize COLMAP SIFT feature matcher");
+      return COLMAP_SOLVE_ERR_INVALID;
     }
 
     colmap::TwoViewGeometryOptions tvg_opts;
     tvg_opts.min_num_inliers = 15;
     tvg_opts.compute_relative_pose = true;
+    tvg_opts.max_H_inlier_ratio = 0.85;
     tvg_opts.ransac_options.max_error = std::clamp(2.2 * px_scale, 1.35, 3.0);
-    tvg_opts.ransac_options.confidence = 0.9995;
-    tvg_opts.ransac_options.max_num_trials = 6000;
+    tvg_opts.ransac_options.confidence = 0.999;
+    tvg_opts.ransac_options.max_num_trials = 3000;
 
     std::vector<VerifiedPair> verified_pairs;
-    size_t epipolar_parallax_pairs = 0;
-    size_t epipolar_total_pairs = 0;
-    size_t panoramic_or_planar_pairs = 0;
-    std::vector<double> pair_tri_degs;
+    size_t epipolar_pairs = 0;
+    std::vector<double> wide_rot_errs;
+    std::vector<double> wide_sim2d_errs;
+    std::vector<double> wide_sim2d_scales;
+    double max_pair_disp_px = 0.0;
 
+    const size_t min_wide_gap =
+        (num_frames >= 6) ? std::max<size_t>(3, num_frames / 3) : 1;
     const size_t anchor_stride = std::max<size_t>(8, (num_frames + 15) / 16);
     for (size_t i = 0; i < num_frames; ++i) {
       if (all_keypoints[i]->size() < 15) continue;
@@ -462,7 +631,7 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
         const bool is_stride = (gap == 16) || (gap == 24) || (gap == 32) ||
                                (gap == 48) || (gap == 64) || (gap == 96) || (gap == 128);
         const bool is_anchor = ((i % anchor_stride == 0) && (j % anchor_stride == 0));
-        const bool keep_pair = (num_frames <= 30) || (gap <= 12) || is_stride || is_anchor ||
+        const bool keep_pair = (num_frames <= 24) || (gap <= 10) || is_stride || is_anchor ||
                                (i == 0 && j == num_frames - 1);
         if (!keep_pair) continue;
 
@@ -492,34 +661,77 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
             colmap::EstimateTwoViewGeometryPose(
                 camera, all_points2d[i], camera, all_points2d[j], &tvg);
           }
-          const double tri_deg = (tvg.tri_angle > 0.0) ? colmap::RadToDeg(tvg.tri_angle) : 0.0;
-          pair_tri_degs.push_back(tri_deg);
           if (tvg.config == colmap::TwoViewGeometry::CALIBRATED ||
               tvg.config == colmap::TwoViewGeometry::UNCALIBRATED) {
-            ++epipolar_total_pairs;
-            if (tri_deg >= 1.0) {
-              ++epipolar_parallax_pairs;
-            }
-          } else if (tvg.config == colmap::TwoViewGeometry::PANORAMIC ||
-                     tvg.config == colmap::TwoViewGeometry::PLANAR ||
-                     tvg.config == colmap::TwoViewGeometry::PLANAR_OR_PANORAMIC) {
-            ++panoramic_or_planar_pairs;
+            ++epipolar_pairs;
           }
+
+          if (gap >= min_wide_gap) {
+            const Similarity2DFit sim =
+                FitSimilarity2D(all_points2d[i], all_points2d[j], tvg.inlier_matches);
+            max_pair_disp_px = std::max(max_pair_disp_px, sim.mean_disp_px);
+            // Evaluate model residuals on pairs with meaningful frame-to-frame motion.
+            if (sim.mean_disp_px >= 2.5 * px_scale) {
+              wide_rot_errs.push_back(BestFocalPureRotationPxErr(
+                  width, height, init_f, all_points2d[i], all_points2d[j], tvg.inlier_matches));
+              wide_sim2d_errs.push_back(sim.median_err_px);
+              wide_sim2d_scales.push_back(sim.scale_delta);
+            }
+          }
+
           verified_pairs.push_back({i, j, std::move(tvg)});
         }
       }
     }
 
     if (verified_pairs.empty()) {
-      SetError(out_result, "Insufficient verified feature matches across sampled frames");
-      return -2;
+      SetError(out_result,
+               COLMAP_SOLVE_ERR_INSUFFICIENT_MOTION,
+               "not enough clean motion to solve the camera");
+      return COLMAP_SOLVE_ERR_INSUFFICIENT_MOTION;
     }
 
+    // Check physical motion regime across wide-stride pairs:
+    // 1. Flat 2D image-plane pan/zoom/spin (e.g. 2D animation, Ken Burns crop/zoom on a flat image):
+    //    zero non-coplanar epipolar pairs AND exact 4-DOF 2D similarity (`p75 <= 1.15 px`) with zoom
+    //    scale change (`scale_delta >= 0.015`) or pure 2D translation that violates 3D perspective
+    //    rotation (`rot_p75 > 2.8 px`).
+    // 2. Pure 3D tripod pan/tilt (zero camera translation):
+    //    focal-invariant pure SO(3) rotation fits wide-stride pairs within `<= 3.2 * px_scale` pixels!
+    //    Note: Even when `epipolar_pairs > 0`, a small focal prior mismatch (`f_init != f_true`) on a
+    //    pure-rotation or near-zero-parallax pan can cause `E_ransac` to label a few pairs `CALIBRATED`
+    //    with ~0.3 deg noise parallax; `BestFocalPureRotationPxErr` is focal-invariant, so checking
+    //    `rot_p75 <= pure_rot_limit` directly catches ALL pure-rotation / sub-pixel-parallax clips and
+    //    prevents Incremental BA focal-refinement from inverting translation direction!
+    const double rot_p90 = PercentileInPlace(&wide_rot_errs, 0.90);
+    const double sim2d_p90 = PercentileInPlace(&wide_sim2d_errs, 0.90);
+    const double sim2d_scale_max = PercentileInPlace(&wide_sim2d_scales, 0.90);
+    const double pure_rot_limit = std::clamp(2.4 * px_scale, 1.5, 2.8);
+    const double sim2d_limit = std::clamp(1.25 * px_scale, 0.85, 1.45);
+
+    // Pure 2D image-plane pan/zoom/spin (anime, screen recording, Ken Burns crop/zoom on a flat plate):
+    // every wide-stride pair fits an exact 4-DOF 2D similarity (`sim2d_p90 <= sim2d_limit`, zero 3D
+    // perspective foreshortening and zero depth parallax), whereas pure 3D rotation fails cleanly
+    // (`rot_p90 > pure_rot_limit * 1.25`). Note that integer pixel rasterization or H.264 compression on
+    // a 2D zoom plate can induce a couple sub-pixel noise matches that pass `E_ransac` (`epipolar_pairs > 0`),
+    // so we check `sim2d_p90 <= sim2d_limit` across ALL wide pairs directly!
+    if (!wide_sim2d_errs.empty() &&
+        sim2d_p90 <= sim2d_limit &&
+        (sim2d_scale_max >= 0.015 || rot_p90 > pure_rot_limit * 1.25)) {
+      SetError(out_result,
+               COLMAP_SOLVE_ERR_PLANAR_2D,
+               "footage appears to be flat 2D motion without 3D perspective; use 2D motion tracking");
+      return COLMAP_SOLVE_ERR_PLANAR_2D;
+    }
+
+    const bool is_pure_tripod_rotation =
+        wide_rot_errs.empty() ? (epipolar_pairs == 0) : (rot_p90 <= pure_rot_limit);
+
     // 5. Build in-memory COLMAP DatabaseCache:
-    //    - `sfm_cache` receives ONLY non-panoramic pairs with real 3D baseline so GlobalPositioner
-    //      never injects random camera translations on pure-rotation / zero-baseline pairs.
-    //    - `rot_cache` receives ALL verified pairs (including PANORAMIC / homography) so global
-    //      L1-IRLS rotation averaging has the full multi-stride constraint graph.
+    //    Include ALL verified pairs with valid relative poses (`CALIBRATED`, `UNCALIBRATED`, AND
+    //    `PLANAR`!) in `sfm_cache` so planar floors, walls, tabletops, and short-stride video pairs
+    //    contribute full multi-view feature tracks and 3D relative poses to GLOMAP & COLMAP.
+    //    Only zero-translation `PANORAMIC` pairs are excluded from `sfm_cache`.
     auto make_empty_cache = [&]() {
       auto c = std::make_shared<colmap::DatabaseCache>();
       c->AddCamera(camera);
@@ -546,81 +758,60 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
       return c;
     };
 
-    auto sfm_cache = make_empty_cache();
-    size_t sfm_pair_count = 0;
-    for (const auto& vp : verified_pairs) {
-      if (vp.tvg.config == colmap::TwoViewGeometry::PANORAMIC ||
-          vp.tvg.config == colmap::TwoViewGeometry::PLANAR_OR_PANORAMIC ||
-          vp.tvg.config == colmap::TwoViewGeometry::PLANAR) {
-        continue;
-      }
-      const double tri_deg = (vp.tvg.tri_angle > 0.0) ? colmap::RadToDeg(vp.tvg.tri_angle) : 0.0;
-      if (tri_deg < 0.35 && vp.tvg.config != colmap::TwoViewGeometry::CALIBRATED &&
-          vp.tvg.config != colmap::TwoViewGeometry::UNCALIBRATED) {
-        continue;
-      }
-      sfm_cache->CorrespondenceGraph()->AddTwoViewGeometry(
-          static_cast<colmap::image_t>(vp.i + 1),
-          static_cast<colmap::image_t>(vp.j + 1),
-          vp.tvg);
-      ++sfm_pair_count;
-    }
-    sfm_cache->CorrespondenceGraph()->Finalize();
-    colmap::MaybeDecomposeRelativePoses(sfm_cache.get());
-
-    // 6. Attempt 6-DoF reconstruction only when verified pairs exhibit real non-panoramic 3D parallax.
-    std::sort(pair_tri_degs.begin(), pair_tri_degs.end());
-    const double p90_tri_deg =
-        pair_tri_degs.empty()
-            ? 0.0
-            : pair_tri_degs[std::min(pair_tri_degs.size() - 1,
-                                     (pair_tri_degs.size() * 9) / 10)];
-    const double homography_dominance =
-        static_cast<double>(panoramic_or_planar_pairs) /
-        static_cast<double>(std::max<size_t>(1, verified_pairs.size()));
-
     std::shared_ptr<colmap::Reconstruction> best_recon;
     bool best_was_glomap = false;
     ReconQuality best_quality;
 
-    const bool has_candidate_parallax =
-        (sfm_pair_count >= 2) &&
-        (homography_dominance < 0.85 || epipolar_total_pairs >= verified_pairs.size() / 4) &&
-        (epipolar_parallax_pairs >= 2 || p90_tri_deg >= 1.25);
+    if (!is_pure_tripod_rotation) {
+      auto sfm_cache = make_empty_cache();
+      size_t sfm_pair_count = 0;
+      for (const auto& vp : verified_pairs) {
+        if (vp.tvg.config == colmap::TwoViewGeometry::PANORAMIC) {
+          continue;
+        }
+        sfm_cache->CorrespondenceGraph()->AddTwoViewGeometry(
+            static_cast<colmap::image_t>(vp.i + 1),
+            static_cast<colmap::image_t>(vp.j + 1),
+            vp.tvg);
+        ++sfm_pair_count;
+      }
+      sfm_cache->CorrespondenceGraph()->Finalize();
+      colmap::MaybeDecomposeRelativePoses(sfm_cache.get());
 
-    if (has_candidate_parallax) {
-      const bool want_refine = (config->lock_fov == 0);
-      best_recon = RunSolvePass(sfm_cache,
-                                camera.camera_id,
-                                num_frames,
-                                init_f,
-                                want_refine,
-                                config->prefer_glomap != 0,
-                                px_scale,
-                                &best_was_glomap,
-                                &best_quality);
+      if (sfm_pair_count >= 1) {
+        const bool want_refine = (config->lock_fov == 0);
+        best_recon = RunSolvePass(sfm_cache,
+                                  camera.camera_id,
+                                  num_frames,
+                                  init_f,
+                                  want_refine,
+                                  config->prefer_glomap != 0,
+                                  px_scale,
+                                  &best_was_glomap,
+                                  &best_quality);
 
-      // Automatic locked-FOV fallback if uncalibrated focal refinement hit low-parallax degeneracy!
-      if (want_refine &&
-          (!best_recon || best_quality.num_reg < std::max<size_t>(2, (num_frames * 3) / 4))) {
-        bool locked_was_glomap = false;
-        ReconQuality locked_q;
-        auto locked_recon = RunSolvePass(sfm_cache,
-                                         camera.camera_id,
-                                         num_frames,
-                                         init_f,
-                                         /*refine_focal=*/false,
-                                         config->prefer_glomap != 0,
-                                         px_scale,
-                                         &locked_was_glomap,
-                                         &locked_q);
-        if (locked_recon &&
-            (!best_recon || locked_q.num_reg > best_quality.num_reg ||
-             (locked_q.num_reg == best_quality.num_reg &&
-              locked_q.mean_reproj_px < best_quality.mean_reproj_px))) {
-          best_recon = locked_recon;
-          best_was_glomap = locked_was_glomap;
-          best_quality = locked_q;
+        // Automatic locked-FOV fallback if uncalibrated focal refinement hit low-parallax degeneracy!
+        if (want_refine &&
+            (!best_recon || best_quality.num_reg < std::max<size_t>(2, (num_frames * 3) / 4))) {
+          bool locked_was_glomap = false;
+          ReconQuality locked_q;
+          auto locked_recon = RunSolvePass(sfm_cache,
+                                           camera.camera_id,
+                                           num_frames,
+                                           init_f,
+                                           /*refine_focal=*/false,
+                                           config->prefer_glomap != 0,
+                                           px_scale,
+                                           &locked_was_glomap,
+                                           &locked_q);
+          if (locked_recon &&
+              (!best_recon || locked_q.num_reg > best_quality.num_reg ||
+               (locked_q.num_reg == best_quality.num_reg &&
+                locked_q.mean_reproj_px < best_quality.mean_reproj_px))) {
+            best_recon = locked_recon;
+            best_was_glomap = locked_was_glomap;
+            best_quality = locked_q;
+          }
         }
       }
     }
@@ -630,8 +821,8 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
     out_result->poses = static_cast<ColmapSolvedPose*>(
         std::calloc(num_frames, sizeof(ColmapSolvedPose)));
     if (!out_result->poses) {
-      SetError(out_result, "Out of memory allocating poses");
-      return -1;
+      SetError(out_result, COLMAP_SOLVE_ERR_INVALID, "Out of memory allocating poses");
+      return COLMAP_SOLVE_ERR_INVALID;
     }
 
     for (size_t i = 0; i < num_frames; ++i) {
@@ -664,9 +855,9 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
         }
       }
 
-      // Export only clean, well-conditioned 3D landmarks.
+      // Export clean, well-conditioned 3D landmarks.
       const size_t min_obs = (best_quality.num_reg >= 5) ? 3 : 2;
-      const double max_pt_err = std::max(2.5, best_quality.mean_reproj_px * 2.2);
+      const double max_pt_err = std::max(2.8, best_quality.mean_reproj_px * 2.4);
       std::vector<ColmapSolvedPoint3D> clean_pts;
       clean_pts.reserve(best_recon->NumPoints3D());
       for (const auto& [pt_id, pt] : best_recon->Points3D()) {
@@ -695,14 +886,19 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
           out_result->num_points = 0;
         }
       }
-      out_result->status = 0;
-      return 0;
+      out_result->status = COLMAP_SOLVE_OK;
+      return COLMAP_SOLVE_OK;
     }
 
-    // 8. Pure-rotation / low-parallax global SO(3) solver:
-    //    First run GLOMAP global L1-IRLS rotation averaging over ALL multi-stride verified pairs
-    //    (drift-free across long pans & handheld slight-parallax clips!), falling back to sequential
-    //    chaining only if global rotation averaging fails.
+    // If the clip was completely static (`max_pair_disp_px < 1.0 px`) with zero 3D parallax,
+    // verify whether features actually exist or if it was a blank/featureless frame.
+    // Note: static textured clips still solve cleanly as a stationary rotation-only lock unless
+    // there were too few verified correspondences (handled above).
+
+    // 8. Pure-rotation / tripod global SO(3) solver:
+    //    Estimate pure SO(3) rotation directly on calibrated bearing rays via Kabsch/Procrustes
+    //    (immune to planar rank-1 `t * n^T / d` noise when `t = 0`), falling back to decomposed
+    //    `cam2_from_cam1->rotation()` or `ProjectToSO3(K^-1 H K)`.
     Eigen::Matrix3d k_mat = Eigen::Matrix3d::Identity();
     k_mat(0, 0) = init_f;
     k_mat(1, 1) = init_f;
@@ -710,25 +906,30 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
     k_mat(1, 2) = 0.5 * static_cast<double>(height);
     const Eigen::Matrix3d k_inv = k_mat.inverse();
 
+    auto pair_rotation = [&](const VerifiedPair& vp, Eigen::Matrix3d* r_out) -> bool {
+      if (EstimatePureRotationProcrustes(camera,
+                                         all_points2d[vp.i],
+                                         all_points2d[vp.j],
+                                         vp.tvg.inlier_matches,
+                                         r_out) < 50.0) {
+        return true;
+      }
+      if (vp.tvg.cam2_from_cam1.has_value()) {
+        *r_out = vp.tvg.cam2_from_cam1->rotation().toRotationMatrix();
+        return true;
+      }
+      if (vp.tvg.H.has_value() && vp.tvg.H->allFinite() && vp.tvg.H->norm() > 1e-6) {
+        *r_out = ProjectToSO3(k_inv * (*vp.tvg.H) * k_mat);
+        return true;
+      }
+      return false;
+    };
+
     auto rot_cache = make_empty_cache();
     colmap::PoseGraph rot_pose_graph;
     for (const auto& vp : verified_pairs) {
       Eigen::Matrix3d r_21 = Eigen::Matrix3d::Identity();
-      bool has_rot = false;
-      if (vp.tvg.H.has_value() && vp.tvg.H->allFinite() && vp.tvg.H->norm() > 1e-6 &&
-          (vp.tvg.config == colmap::TwoViewGeometry::PANORAMIC ||
-           vp.tvg.config == colmap::TwoViewGeometry::PLANAR_OR_PANORAMIC ||
-           vp.tvg.config == colmap::TwoViewGeometry::PLANAR)) {
-        r_21 = ProjectToSO3(k_inv * (*vp.tvg.H) * k_mat);
-        has_rot = true;
-      } else if (vp.tvg.cam2_from_cam1.has_value()) {
-        r_21 = vp.tvg.cam2_from_cam1->rotation().toRotationMatrix();
-        has_rot = true;
-      } else if (vp.tvg.H.has_value() && vp.tvg.H->allFinite() && vp.tvg.H->norm() > 1e-6) {
-        r_21 = ProjectToSO3(k_inv * (*vp.tvg.H) * k_mat);
-        has_rot = true;
-      }
-      if (!has_rot) continue;
+      if (!pair_rotation(vp, &r_21)) continue;
 
       const colmap::image_t id1 = static_cast<colmap::image_t>(vp.i + 1);
       const colmap::image_t id2 = static_cast<colmap::image_t>(vp.j + 1);
@@ -757,7 +958,7 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
       if (rot_recon->RegImageIds().size() >= 2) {
         out_result->used_glomap = 1;
         out_result->focal_px = init_f;
-        out_result->mean_reproj_px = 0.65;
+        out_result->mean_reproj_px = std::isfinite(rot_p90) && rot_p90 < 50.0 ? rot_p90 : 0.65;
         for (const colmap::image_t img_id : rot_recon->RegImageIds()) {
           const size_t idx = static_cast<size_t>(img_id - 1);
           if (idx >= num_frames) continue;
@@ -772,8 +973,8 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
             out_result->poses[idx].t_cw[r] = 0.0;
           }
         }
-        out_result->status = 0;
-        return 0;
+        out_result->status = COLMAP_SOLVE_OK;
+        return COLMAP_SOLVE_OK;
       }
     }
 
@@ -788,20 +989,12 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
       for (const auto& vp : verified_pairs) {
         if (vp.i == i && vp.j == i + 1) {
           Eigen::Matrix3d r_step = Eigen::Matrix3d::Identity();
-          if (vp.tvg.H.has_value() && vp.tvg.H->allFinite() && vp.tvg.H->norm() > 1e-6 &&
-              (vp.tvg.config == colmap::TwoViewGeometry::PANORAMIC ||
-               vp.tvg.config == colmap::TwoViewGeometry::PLANAR_OR_PANORAMIC)) {
-            r_step = ProjectToSO3(k_inv * (*vp.tvg.H) * k_mat);
-          } else if (vp.tvg.cam2_from_cam1.has_value()) {
-            r_step = vp.tvg.cam2_from_cam1->rotation().toRotationMatrix();
-          } else if (vp.tvg.H.has_value() && vp.tvg.H->allFinite() &&
-                     vp.tvg.H->norm() > 1e-6) {
-            r_step = ProjectToSO3(k_inv * (*vp.tvg.H) * k_mat);
+          if (pair_rotation(vp, &r_step)) {
+            r_cw_chain[i + 1] = r_step * r_cw_chain[i];
+            reached[i + 1] = true;
+            ++chained_count;
+            break;
           }
-          r_cw_chain[i + 1] = r_step * r_cw_chain[i];
-          reached[i + 1] = true;
-          ++chained_count;
-          break;
         }
       }
     }
@@ -820,21 +1013,23 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
           out_result->poses[i].t_cw[r] = 0.0;
         }
       }
-      out_result->status = 0;
-      return 0;
+      out_result->status = COLMAP_SOLVE_OK;
+      return COLMAP_SOLVE_OK;
     }
 
     colmap_free_result(out_result);
-    SetError(out_result, "Insufficient visual parallax/features across sampled frames");
-    return -2;
+    SetError(out_result,
+             COLMAP_SOLVE_ERR_INSUFFICIENT_MOTION,
+             "not enough clean motion to solve the camera");
+    return COLMAP_SOLVE_ERR_INSUFFICIENT_MOTION;
   } catch (const std::exception& ex) {
     colmap_free_result(out_result);
-    SetError(out_result, ex.what());
-    return -3;
+    SetError(out_result, COLMAP_SOLVE_ERR_EXCEPTION, ex.what());
+    return COLMAP_SOLVE_ERR_EXCEPTION;
   } catch (...) {
     colmap_free_result(out_result);
-    SetError(out_result, "Unhandled COLMAP exception");
-    return -4;
+    SetError(out_result, COLMAP_SOLVE_ERR_EXCEPTION, "Unhandled COLMAP exception");
+    return COLMAP_SOLVE_ERR_EXCEPTION;
   }
 }
 

@@ -50,12 +50,28 @@ typedef struct ColmapSolveResult {
   char error_msg[256];
 } ColmapSolveResult;
 
-int colmap_solve_sequence(const ColmapInputFrame* frames,
-                          size_t num_frames,
-                          const ColmapSolveConfig* config,
-                          ColmapSolveResult* out_result);
+enum {
+  COLMAP_SOLVE_OK = 0,
+  COLMAP_SOLVE_ERR_INVALID = -1,
+  COLMAP_SOLVE_ERR_INSUFFICIENT_MOTION = -2,
+  COLMAP_SOLVE_ERR_EXCEPTION = -3,
+  COLMAP_SOLVE_ERR_PLANAR_2D = -5,
+};
 
-void colmap_free_result(ColmapSolveResult* result);
+#if defined(_WIN32) || defined(__CYGWIN__)
+#define COLMAP_API __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
+#define COLMAP_API __attribute__((visibility("default")))
+#else
+#define COLMAP_API
+#endif
+
+COLMAP_API int colmap_solve_sequence(const ColmapInputFrame* frames,
+                                     size_t num_frames,
+                                     const ColmapSolveConfig* config,
+                                     ColmapSolveResult* out_result);
+
+COLMAP_API void colmap_free_result(ColmapSolveResult* result);
 
 #ifdef __cplusplus
 }

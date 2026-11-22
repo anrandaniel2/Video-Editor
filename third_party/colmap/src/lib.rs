@@ -62,6 +62,28 @@ pub struct SequenceReconstruction {
     pub points: Vec<ReconstructedPoint3D>,
 }
 
+/// Structured failure modes returned by [`solve_sequence`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColmapError {
+    InvalidInput(String),
+    InsufficientMotion(String),
+    Planar2D(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for ColmapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInput(m)
+            | Self::InsufficientMotion(m)
+            | Self::Planar2D(m)
+            | Self::Internal(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for ColmapError {}
+
 mod ffi {
     use super::{c_char, c_int};
 
@@ -130,14 +152,18 @@ mod ffi {
 pub fn solve_sequence(
     frames: &[GrayFrame<'_>],
     config: &SolveConfig,
-) -> Result<SequenceReconstruction, String> {
+) -> Result<SequenceReconstruction, ColmapError> {
     if frames.len() < 2 {
-        return Err("Need at least 2 sampled frames for COLMAP match-move".to_string());
+        return Err(ColmapError::InvalidInput(
+            "Need at least 2 sampled frames for COLMAP match-move".to_string(),
+        ));
     }
     for (idx, f) in frames.iter().enumerate() {
         let expected = (f.width as usize).saturating_mul(f.height as usize);
         if f.width == 0 || f.height == 0 || f.gray.len() < expected {
-            return Err(format!("Invalid grayscale buffer on frame {idx}"));
+            return Err(ColmapError::InvalidInput(format!(
+                "Invalid grayscale buffer on frame {idx}"
+            )));
         }
     }
 
@@ -185,14 +211,21 @@ pub fn solve_sequence(
     let _guard = Guard(&mut raw);
 
     if rc != 0 || raw.status != 0 {
+        let code = if rc != 0 { rc } else { raw.status };
         let msg = unsafe { CStr::from_ptr(raw.error_msg.as_ptr()) }
             .to_string_lossy()
             .trim()
             .to_string();
-        return Err(if msg.is_empty() {
-            format!("COLMAP solver failed with status {rc}")
+        let text = if msg.is_empty() {
+            format!("COLMAP solver failed with status {code}")
         } else {
             msg
+        };
+        return Err(match code {
+            -1 => ColmapError::InvalidInput(text),
+            -2 => ColmapError::InsufficientMotion(text),
+            -5 => ColmapError::Planar2D(text),
+            _ => ColmapError::Internal(text),
         });
     }
 

@@ -7,7 +7,7 @@
 //! routed directly to the sequence's 3D Scene Camera (`Sequence::scene_camera` +
 //! `Sequence::scene_camera_tracks`).
 
-use filmcraft_colmap::{GrayFrame, SolveConfig, solve_sequence};
+use filmcraft_colmap::{ColmapError, GrayFrame, SolveConfig, solve_sequence};
 use filmcraft_project::{
     CameraSolve, ClipId, SolvedFrame, SolvedPoint, StereoLayout,
     euler_from_view_rotation,
@@ -116,13 +116,15 @@ impl std::fmt::Display for SolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Cancelled => write!(f, "camera solve cancelled"),
-            Self::TooShort => write!(f, "clip is too short to solve the camera (need at least 2 sampled frames)"),
-            Self::InsufficientMotion => write!(f, "not enough clean visual features or parallax to solve the camera"),
-            Self::Planar2DVideo => write!(f, "footage lacks 3D camera motion"),
+            Self::TooShort => write!(f, "clip is too short to solve the camera (need at least 3 sampled frames)"),
+            Self::InsufficientMotion => write!(f, "not enough clean motion to solve the camera"),
+            Self::Planar2DVideo => {
+                write!(f, "footage appears to be flat 2D motion without 3D perspective; use 2D motion tracking")
+            }
             Self::PoorQuality { median_rms_px, median_confidence } => {
                 write!(
                     f,
-                    "camera solve quality too low (RMS {median_rms_px:.2} px, confidence {median_confidence:.2})"
+                    "not enough clean motion to solve the camera (RMS {median_rms_px:.2} px, confidence {median_confidence:.2})"
                 )
             }
             Self::Decode(msg) => write!(f, "{msg}"),
@@ -353,7 +355,7 @@ where
         }
     }
 
-    if sampled.len() < 2 {
+    if sampled.len() < 3 {
         return Err(SolveError::TooShort);
     }
 
@@ -361,7 +363,7 @@ where
     let cuts = detector.cuts(&SceneOptions { sensitivity: 45.0, min_shot_frames: 2 });
     let (shot_range, shots_skipped) = select_playhead_shot(&times, &cuts, opts.playhead);
     let shot_frames = &sampled[shot_range];
-    if shot_frames.len() < 2 {
+    if shot_frames.len() < 3 {
         return Err(SolveError::TooShort);
     }
 
@@ -393,7 +395,12 @@ where
         prefer_glomap: true,
     };
 
-    let recon = solve_sequence(&colmap_inputs, &cfg).map_err(|_| SolveError::InsufficientMotion)?;
+    let recon = solve_sequence(&colmap_inputs, &cfg).map_err(|err| match err {
+        ColmapError::Planar2D(_) => SolveError::Planar2DVideo,
+        ColmapError::InvalidInput(_) | ColmapError::InsufficientMotion(_) | ColmapError::Internal(_) => {
+            SolveError::InsufficientMotion
+        }
+    })?;
     if cancel() {
         return Err(SolveError::Cancelled);
     }
@@ -456,7 +463,7 @@ where
         raw_eyes[i] = rel;
     }
 
-    let min_3d_landmarks = if shot_frames.len() >= 6 { 12usize } else { 6usize };
+    let min_3d_landmarks = if shot_frames.len() >= 6 { 8usize } else { 4usize };
     let rotation_only = pos_depths.len() < min_3d_landmarks || max_baseline <= 1e-5;
     let depth_scale = if !rotation_only && !pos_depths.is_empty() {
         median_f64(&mut pos_depths).max(1e-4)
