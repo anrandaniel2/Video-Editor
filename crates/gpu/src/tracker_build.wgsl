@@ -1,5 +1,5 @@
-// Module 1 of 3 for GPU motion tracking: RGBA8 -> Rec.709 luma + crop/conform,
-// 5x5 Gaussian pyramid downsampling, and 3x3 Scharr spatial gradients.
+// Module 1 of 3 for GPU motion tracking: RGBA8 -> Rec.709 luma + anti-aliased box-area
+// crop/conform, 5x5 Gaussian pyramid downsampling, and 3x3 Scharr spatial gradients.
 
 struct BuildParams {
     src_w: u32,
@@ -44,6 +44,23 @@ fn cs_rgba_to_luma(@builtin(global_invocation_id) gid: vec3<u32>) {
     var luma: f32 = 0.0;
     if ub.crop_w == ub.dst_w && ub.crop_h == ub.dst_h {
         luma = rgba_luma_clamped(i32(ub.crop_x + gid.x), i32(ub.crop_y + gid.y));
+    } else if ub.crop_w >= ub.dst_w * 2u || ub.crop_h >= ub.dst_h * 2u {
+        // Anti-aliased box-area integration when downsampling 1080p/4K frames to working size.
+        let fx0 = f32(ub.crop_x) + f32(gid.x) * f32(ub.crop_w) / f32(max(ub.dst_w, 1u));
+        let fx1 = f32(ub.crop_x) + f32(gid.x + 1u) * f32(ub.crop_w) / f32(max(ub.dst_w, 1u));
+        let fy0 = f32(ub.crop_y) + f32(gid.y) * f32(ub.crop_h) / f32(max(ub.dst_h, 1u));
+        let fy1 = f32(ub.crop_y) + f32(gid.y + 1u) * f32(ub.crop_h) / f32(max(ub.dst_h, 1u));
+        let ix0 = i32(floor(fx0));
+        let iy0 = i32(floor(fy0));
+        let span_x = clamp(i32(ceil(fx1)) - ix0, 1, 8);
+        let span_y = clamp(i32(ceil(fy1)) - iy0, 1, 8);
+        var acc: f32 = 0.0;
+        for (var dy: i32 = 0; dy < span_y; dy = dy + 1) {
+            for (var dx: i32 = 0; dx < span_x; dx = dx + 1) {
+                acc = acc + rgba_luma_clamped(ix0 + dx, iy0 + dy);
+            }
+        }
+        luma = acc / f32(span_x * span_y);
     } else {
         let sx = f32(ub.crop_x) + f32(gid.x) * f32(max(ub.crop_w, 1u) - 1u) / f32(max(ub.dst_w, 2u) - 1u);
         let sy = f32(ub.crop_y) + f32(gid.y) * f32(max(ub.crop_h, 1u) - 1u) / f32(max(ub.dst_h, 2u) - 1u);

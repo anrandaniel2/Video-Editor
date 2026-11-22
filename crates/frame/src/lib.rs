@@ -602,6 +602,23 @@ impl VideoFrame {
         }
     }
 
+    /// Convert to straight-alpha sRGB RGBA8, box-decimating by an integer factor when the frame's
+    /// longer dimension exceeds `max_long_side` so analysis/tracking callers get anti-aliased
+    /// working-resolution frames without allocating full-4K/8K RGBA buffers.
+    pub fn to_rgba8_max_side(&self, max_long_side: usize) -> (usize, usize, Vec<u8>) {
+        let (w, h) = (self.width as usize, self.height as usize);
+        let cap = max_long_side.max(16);
+        let n = w.max(h).div_ceil(cap).max(1);
+        if n <= 1 {
+            return (w, h, self.to_rgba8());
+        }
+        let (ow, oh, lin) = self.to_linear_f32_decimated(n);
+        let mut out = vec![0u8; ow * oh * 4];
+        out.par_chunks_mut(ow * 4).zip(lin.par_chunks(ow * 4)).for_each(|(o, s)| linear_premul_to_srgb8(s, o));
+        pool::recycle_f32(lin);
+        (ow, oh, out)
+    }
+
     /// Luma plane (8-bit, for scopes/thumbnails analysis).
     pub fn luma8(&self) -> Vec<u8> {
         match &self.data {

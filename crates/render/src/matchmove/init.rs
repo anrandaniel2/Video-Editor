@@ -13,7 +13,7 @@ use super::linalg::{
 use super::tracks::{FeatureTrack, TrackedShot};
 
 const RANSAC_ITERS: usize = 2000;
-const HOMOGRAPHY_THRESH_PX: f64 = 3.2;
+const HOMOGRAPHY_THRESH_PX: f64 = 2.5;
 const SAMPSON_THRESH_PX: f64 = 3.0;
 const PNP_INLIER_PX: f64 = 4.5;
 
@@ -364,11 +364,11 @@ fn is_planar_2d_shot(
     nat_rot: Option<&RotationInit>,
     ess_cand: Option<&EssentialInit>,
 ) -> bool {
-    // If multi-depth 3D parallax clearly exceeds any single plane (`ess.inliers` substantially beats
-    // planar homography `h_inliers` with >= 1.2° triangulation parallax), the scene has real 3D depth!
+    // If multi-depth 3D parallax clearly exceeds any single plane (`ess.inliers` beats planar
+    // homography `h_inliers` with >= 0.9° triangulation parallax), the scene has real 3D depth!
     if let Some(ess) = ess_cand
-        && ess.median_parallax_deg >= 1.2
-        && h_inliers * 100 < ess.inliers * 86
+        && ess.median_parallax_deg >= 0.9
+        && h_inliers * 100 < ess.inliers * 90
     {
         return false;
     }
@@ -400,7 +400,7 @@ fn is_planar_2d_shot(
             let (hm, hi) = ransac_homography(&m);
             let nr = estimate_pair_rotation(&m, hm, cx, cy, nominal_f);
             let ec = ransac_essential(&m, cx, cy, nominal_f);
-            let has_3d_depth = ec.as_ref().is_some_and(|e| e.median_parallax_deg >= 1.2 && hi * 100 < e.inliers * 86);
+            let has_3d_depth = ec.as_ref().is_some_and(|e| e.median_parallax_deg >= 0.9 && hi * 100 < e.inliers * 90);
             if !has_3d_depth && is_planar_2d_pair(&m, (cx, cy), nr.as_ref()) {
                 votes_2d += 1;
             }

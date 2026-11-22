@@ -43,6 +43,7 @@ struct GpuTrackerEngine {
     pipe_stereo: wgpu::ComputePipeline,
     slots: [Option<PyrSlot>; MAX_SLOTS],
     scratch_pyr: Option<(usize, wgpu::Buffer)>,
+    rgba_in: Option<(u64, wgpu::Buffer)>,
 }
 
 struct GpuTrackAdapter;
@@ -255,6 +256,7 @@ impl GpuTrackerEngine {
             pipe_stereo,
             slots: [None, None, None, None],
             scratch_pyr: None,
+            rgba_in: None,
         };
 
         // Run a live 32x32 RGBA -> pyramid -> corners -> LK readback self-test inside the
@@ -267,32 +269,55 @@ impl GpuTrackerEngine {
         }
         engine.slots = [None, None, None, None];
         engine.scratch_pyr = None;
+        engine.rgba_in = None;
         Some(engine)
     }
 
+    fn max_storage_bytes(&self) -> u64 {
+        let lim = self.device.limits();
+        (lim.max_storage_buffer_binding_size as u64).min(lim.max_buffer_size)
+    }
+
     fn run_hardware_self_test(&mut self) -> bool {
-        let (w, h) = (32usize, 32usize);
-        let mut rgba = vec![0u8; w * h * 4];
-        for y in 0..h {
-            for x in 0..w {
-                let checker = if ((x / 5) + (y / 5)) % 2 == 0 { 220u8 } else { 35u8 };
-                let idx = (y * w + x) * 4;
-                rgba[idx] = checker;
-                rgba[idx + 1] = checker;
-                rgba[idx + 2] = checker;
-                rgba[idx + 3] = 255;
+        let (w, h) = (64usize, 64usize);
+        let make_checker = |dx: usize, dy: usize| -> Vec<u8> {
+            let mut rgba = vec![0u8; w * h * 4];
+            for y in 0..h {
+                for x in 0..w {
+                    let sx = x.saturating_sub(dx);
+                    let sy = y.saturating_sub(dy);
+                    let checker = if ((sx / 8) + (sy / 8)) % 2 == 0 { 220u8 } else { 35u8 };
+                    let idx = (y * w + x) * 4;
+                    rgba[idx] = checker;
+                    rgba[idx + 1] = checker;
+                    rgba[idx + 2] = checker;
+                    rgba[idx + 3] = 255;
+                }
             }
-        }
-        let Some(luma) = self.build_rgba_pyramid(0, &rgba, w, h, (0, 0, w, h), (w, h), 2, true) else {
+            rgba
+        };
+        let rgba0 = make_checker(0, 0);
+        let rgba1 = make_checker(2, 1);
+        let Some(luma) = self.build_rgba_pyramid(0, &rgba0, w, h, (0, 0, w, h), (w, h), 2, true) else {
             return false;
         };
-        if luma.len() != w * h || (luma[0] - 220.0 / 255.0).abs() > 0.05 || (luma[6] - 35.0 / 255.0).abs() > 0.05 {
+        if luma.len() != w * h || (luma[0] - 220.0 / 255.0).abs() > 0.05 || (luma[9] - 35.0 / 255.0).abs() > 0.05 {
             return false;
         }
-        let Some(corners) = self.detect_corners(0, (0, 0, w, h), 16) else {
+        if self.build_rgba_pyramid(1, &rgba1, w, h, (0, 0, w, h), (w, h), 2, false).is_none() {
+            return false;
+        }
+        let Some(corners) = self.detect_corners(0, (16, 16, 32, 32), 16) else {
             return false;
         };
-        !corners.is_empty()
+        if corners.is_empty() {
+            return false;
+        }
+        let pt = [corners[0][0], corners[0][1]];
+        let Some(tracked) = self.track_batch_fb(0, 1, &[pt], &[pt], 3, 1.5) else {
+            return false;
+        };
+        tracked.first().and_then(|o| *o).is_some_and(|p| (p[0] - (pt[0] + 2.0)).abs() < 0.85 && (p[1] - (pt[1] + 1.0)).abs() < 0.85)
     }
 
     fn init_buf(&self, label: &str, data: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
@@ -342,11 +367,15 @@ impl GpuTrackerEngine {
             return None;
         }
         let (levels, meta, total_elems) = compute_level_layout(w0, h0, max_levels);
+        let pyr_bytes = (total_elems.max(1) as u64).saturating_mul(16);
+        if pyr_bytes > self.max_storage_bytes() {
+            return None;
+        }
         let need_alloc = self.slots[slot].as_ref().is_none_or(|s| s.total_elems < total_elems);
         if need_alloc {
             let pyr_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("tracker-pyr-slot"),
-                size: (total_elems.max(1) * 16) as u64,
+                size: pyr_bytes,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
@@ -359,7 +388,7 @@ impl GpuTrackerEngine {
         if need_scratch {
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("tracker-pyr-scratch"),
-                size: (total_elems.max(1) * 16) as u64,
+                size: pyr_bytes,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -381,16 +410,32 @@ impl GpuTrackerEngine {
         readback_luma: bool,
     ) -> Option<Vec<f32>> {
         let (dst_w, dst_h) = dst_dims;
-        if src_w == 0 || src_h == 0 || dst_w < 8 || dst_h < 8 || rgba.len() < src_w.saturating_mul(src_h).saturating_mul(4) {
+        let rgba_bytes = src_w.saturating_mul(src_h).saturating_mul(4);
+        let luma_bytes = (dst_w.saturating_mul(dst_h).saturating_mul(4)) as u64;
+        if src_w == 0 || src_h == 0 || dst_w < 8 || dst_h < 8 || rgba.len() < rgba_bytes {
+            return None;
+        }
+        let max_storage = self.max_storage_bytes();
+        if (rgba_bytes as u64) > max_storage || luma_bytes.max(16) > max_storage {
             return None;
         }
         let (meta, levels, _) = self.ensure_slot(slot, dst_w, dst_h, levels_req)?;
+        let need_rgba_buf = self.rgba_in.as_ref().is_none_or(|(cap, _)| *cap < rgba_bytes as u64);
+        if need_rgba_buf {
+            let cap = (rgba_bytes as u64).max(16);
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tracker-rgba-in"),
+                size: cap,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.rgba_in = Some((cap, buf));
+        }
+        let (_, rgba_buf) = self.rgba_in.as_ref()?;
+        self.queue.write_buffer(rgba_buf, 0, &rgba[..rgba_bytes]);
+
         let slot_ref = self.slots[slot].as_ref()?;
         let (_, scratch_buf) = self.scratch_pyr.as_ref()?;
-
-        let rgba_slice = &rgba[..src_w * src_h * 4];
-        let rgba_buf = self.init_buf("tracker-rgba-in", rgba_slice, wgpu::BufferUsages::STORAGE);
-        let luma_bytes = (dst_w * dst_h * 4) as u64;
         let luma_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tracker-luma-l0"),
             size: luma_bytes.max(16),

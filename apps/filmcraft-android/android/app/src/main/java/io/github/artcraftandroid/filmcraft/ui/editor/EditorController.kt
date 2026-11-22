@@ -1569,12 +1569,20 @@ class EditorController(
             sceneCamera,
         )
 
-    /** Video clip targeted by a new camera solve: selected video clip, else main-track video under playhead, else first video clip. */
+    /** Video clip targeted by a new camera solve: selected file-backed video clip, else video under playhead, else first video clip. */
     val matchmoveTargetClip: ClipInfo?
-        get() = selectedClip?.takeIf { it.kind == ClipKind.VIDEO }
-            ?: mainClips.firstOrNull { it.kind == ClipKind.VIDEO && playhead >= it.start && playhead < it.start + it.duration }
-            ?: mainClips.firstOrNull { it.kind == ClipKind.VIDEO }
-            ?: timeline?.lanes?.firstNotNullOfOrNull { l -> l.clips.firstOrNull { it.kind == ClipKind.VIDEO } }
+        get() {
+            fun ClipInfo.isFootageVideo(): Boolean = kind == ClipKind.VIDEO && !has3d && path.isNotEmpty()
+            return selectedClip?.takeIf { it.isFootageVideo() }
+                ?: mainClips.firstOrNull { it.isFootageVideo() && playhead >= it.start && playhead < it.start + it.duration }
+                ?: timeline?.lanes?.firstNotNullOfOrNull { l ->
+                    l.clips.firstOrNull { it.isFootageVideo() && playhead >= it.start && playhead < it.start + it.duration }
+                }
+                ?: mainClips.firstOrNull { it.isFootageVideo() }
+                ?: timeline?.lanes?.firstNotNullOfOrNull { l -> l.clips.firstOrNull { it.isFootageVideo() } }
+                ?: selectedClip?.takeIf { it.kind == ClipKind.VIDEO }
+                ?: mainClips.firstOrNull { it.kind == ClipKind.VIDEO }
+        }
 
     suspend fun loadMatchMove() {
         val (solves, state, scene) = runCatching {

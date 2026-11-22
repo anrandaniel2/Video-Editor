@@ -70,6 +70,7 @@ struct StreamState {
     view_w: usize,
     view_h: usize,
     stereo_raw: Vec<(usize, usize, f32)>,
+    frame_survival: Vec<f32>,
 }
 
 fn conformed_dims(w: usize, h: usize) -> (usize, usize) {
@@ -93,7 +94,7 @@ pub(crate) fn stream_and_track<F>(opts: &SolveOptions, cancel: &dyn Fn() -> bool
 where
     F: FnMut() -> Result<Option<InputFrame>, SolveError>,
 {
-    let scene_opts = SceneOptions::default();
+    let scene_opts = SceneOptions { sensitivity: 45.0, min_shot_frames: 8 };
     let cut_thr = scene_opts.threshold();
     let mut detector = SceneDetector::new();
     let mut times: Vec<Tick> = Vec::new();
@@ -164,7 +165,12 @@ where
         return Err(SolveError::TooShort);
     }
     let Some(st) = state else { return Err(SolveError::TooShort) };
-    let (shot_range, shots_skipped) = select_playhead_shot(&times, &detector.cuts(&scene_opts), opts.playhead);
+    let verified_cuts: Vec<usize> = detector
+        .cuts(&scene_opts)
+        .into_iter()
+        .filter(|&c| st.frame_survival.get(c).copied().unwrap_or(1.0) < 0.45)
+        .collect();
+    let (shot_range, shots_skipped) = select_playhead_shot(&times, &verified_cuts, opts.playhead);
     build_shot_tracks(st, &times, shot_range, shots_skipped)
 }
 
@@ -179,18 +185,29 @@ fn conform_gray(mut g: Gray) -> Gray {
     let scale = MAX_WORKING_SIDE as f32 / long as f32;
     let nw = ((g.w as f32 * scale).round() as usize).max(16);
     let nh = ((g.h as f32 * scale).round() as usize).max(16);
-    resize_bilinear(&g, nw, nh)
+    resize_box(&g, nw, nh)
 }
 
-fn resize_bilinear(src: &Gray, nw: usize, nh: usize) -> Gray {
+fn resize_box(src: &Gray, nw: usize, nh: usize) -> Gray {
     let mut p = vec![0.0f32; nw * nh];
-    let sx_scale = (src.w.saturating_sub(1)) as f32 / (nw.saturating_sub(1).max(1)) as f32;
-    let sy_scale = (src.h.saturating_sub(1)) as f32 / (nh.saturating_sub(1).max(1)) as f32;
+    let sx_ratio = src.w as f32 / nw.max(1) as f32;
+    let sy_ratio = src.h as f32 / nh.max(1) as f32;
     for y in 0..nh {
-        let sy = y as f32 * sy_scale;
+        let y0 = (y as f32 * sy_ratio).floor() as usize;
+        let y1 = (((y + 1) as f32 * sy_ratio).ceil() as usize).min(src.h).max(y0 + 1);
         for x in 0..nw {
-            let sx = x as f32 * sx_scale;
-            p[y * nw + x] = src.at(sx, sy).unwrap_or(0.0);
+            let x0 = (x as f32 * sx_ratio).floor() as usize;
+            let x1 = (((x + 1) as f32 * sx_ratio).ceil() as usize).min(src.w).max(x0 + 1);
+            let mut sum = 0.0f32;
+            let mut cnt = 0usize;
+            for sy in y0..y1.min(src.h) {
+                let row = &src.p[sy * src.w..];
+                for &val in &row[x0..x1.min(src.w)] {
+                    sum += val;
+                    cnt += 1;
+                }
+            }
+            p[y * nw + x] = if cnt > 0 { sum / cnt as f32 } else { 0.0 };
         }
     }
     Gray { w: nw, h: nh, p }
@@ -223,7 +240,18 @@ fn init_stream(left: Gray, right: Option<&Gray>, opts: &SolveOptions) -> StreamS
         sample_stereo_disparities(&left, r_img, 0, &pairs, opts.stereo_baseline, &mut stereo_raw);
     }
     let prev_pyr = Some(left.pyramid(pyramid_levels_for(view_w, view_h)));
-    StreamState { prev_pyr, prev_left: Some(left), gpu_prev_slot: None, tracks, active_ids, since_seed: 0, view_w, view_h, stereo_raw }
+    StreamState {
+        prev_pyr,
+        prev_left: Some(left),
+        gpu_prev_slot: None,
+        tracks,
+        active_ids,
+        since_seed: 0,
+        view_w,
+        view_h,
+        stereo_raw,
+        frame_survival: vec![1.0],
+    }
 }
 
 fn init_stream_gpu(
@@ -246,7 +274,18 @@ fn init_stream_gpu(
     if let Some(rs) = right_slot {
         sample_stereo_disparities_gpu(gpu, slot, rs, 0, &active_ids, &tracks, opts.stereo_baseline, &mut stereo_raw);
     }
-    StreamState { prev_pyr: None, prev_left: Some(left), gpu_prev_slot: Some(slot), tracks, active_ids, since_seed: 0, view_w, view_h, stereo_raw }
+    StreamState {
+        prev_pyr: None,
+        prev_left: Some(left),
+        gpu_prev_slot: Some(slot),
+        tracks,
+        active_ids,
+        since_seed: 0,
+        view_w,
+        view_h,
+        stereo_raw,
+        frame_survival: vec![1.0],
+    }
 }
 
 fn dominant_velocity_guess(st: &StreamState) -> (f32, f32) {
@@ -341,6 +380,9 @@ fn step_stream_gpu(
             return;
         }
     }
+    let prev_active = st.active_ids.len();
+    let survival = if prev_active > 0 { surviving.len() as f32 / prev_active as f32 } else { 0.0 };
+    st.frame_survival.push(survival);
     st.active_ids = surviving;
     st.since_seed += 1;
 
@@ -466,6 +508,9 @@ fn step_stream(st: &mut StreamState, frame_idx: usize, left: Gray, right: Option
             }
         }
     }
+    let prev_active = st.active_ids.len();
+    let survival = if prev_active > 0 { surviving.len() as f32 / prev_active as f32 } else { 0.0 };
+    st.frame_survival.push(survival);
     st.active_ids = surviving;
     st.since_seed += 1;
 

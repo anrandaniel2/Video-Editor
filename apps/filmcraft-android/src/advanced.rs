@@ -866,8 +866,10 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
         }
         let st = c.source_time_at(t);
         let Ok(f) = source.video_frame(FrameRequest { time: st, scale }) else { break };
-        let rgba = f.to_rgba8();
-        let (full_w, full_h) = ((f.width as usize).max(1), (f.height as usize).max(1));
+        let (full_w, full_h, rgba) = f.to_rgba8_max_side(match opts.stereo {
+            StereoLayout::Mono => 640,
+            StereoLayout::SideBySide | StereoLayout::TopBottom => 1280,
+        });
         let (vx, vy, vw, vh) = view_rect(opts.stereo.project(), full_w, full_h);
         let right_crop = match opts.stereo {
             StereoLayout::Mono => None,
@@ -1103,21 +1105,50 @@ fn pick_2d_track_target(g: &Gray) -> (f32, f32) {
     (best.1, best.2)
 }
 
-fn clip_has_trackable_texture(args: &SolveWorkerArgs) -> bool {
-    let st = args.clip.source_time_at(args.win_start);
-    let Ok(f) = args.source.video_frame(FrameRequest { time: st, scale: args.scale }) else {
+fn frame_has_visual_detail(rgba: &[u8], w: usize, h: usize) -> bool {
+    if w < 4 || h < 4 || rgba.len() < w.saturating_mul(h).saturating_mul(4) {
         return false;
-    };
-    let rgba = f.to_rgba8();
-    let (w, h) = ((f.width as usize).max(1), (f.height as usize).max(1));
-    let g0 = Gray::from_rgba8(&rgba, w, h);
-    let target = pick_2d_track_target_with_probe(&g0, None);
-    let tr = Tracker::new_rgba(&rgba, w, h, (0, 0, w, h), target, 19, 64.0);
-    tr.has_features()
+    }
+    let mut min_y = 255.0f32;
+    let mut max_y = 0.0f32;
+    for px in rgba[..w * h * 4].chunks_exact(4) {
+        let y = 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
+        if y < min_y {
+            min_y = y;
+        }
+        if y > max_y {
+            max_y = y;
+        }
+        if max_y - min_y >= 6.0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn clip_has_trackable_texture(args: &SolveWorkerArgs) -> bool {
+    let span = (args.win_end - args.win_start).0.max(1);
+    for frac in [0i64, 1, 2, 3] {
+        let sample_t = Tick(args.win_start.0.saturating_add(span.saturating_mul(frac) / 4))
+            .min((args.win_end - args.frame_step).max(args.win_start));
+        let st = args.clip.source_time_at(sample_t);
+        let Ok(f) = args.source.video_frame(FrameRequest { time: st, scale: args.scale }) else {
+            continue;
+        };
+        let (w, h, rgba) = f.to_rgba8_max_side(320);
+        if frame_has_visual_detail(&rgba, w, h) {
+            return true;
+        }
+    }
+    false
 }
 
 fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: usize) -> Result<SolveWorkerOutcome, String> {
     job.set(0.55, Some("2D footage detected — switching to 2D tracking…"));
+    let working_side = match args.opts.layout {
+        filmcraft_project::StereoLayout::Mono => 640,
+        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1280,
+    };
     let mut tracker: Option<Tracker> = None;
     let mut samples: Vec<filmcraft_project::TrackSample> = Vec::new();
     let mut t = args.win_start;
@@ -1130,7 +1161,21 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
         args.source
             .video_frame(FrameRequest { time: args.clip.source_time_at(probe_t), scale: args.scale })
             .ok()
-            .map(|pf| Gray::from_rgba8(&pf.to_rgba8(), pf.width as usize, pf.height as usize))
+            .map(|pf| {
+                let (pw, ph, prgba) = pf.to_rgba8_max_side(working_side);
+                let (vx, vy, vw, vh) = view_rect(args.opts.layout, pw, ph);
+                if vx == 0 && vy == 0 && vw == pw && vh == ph {
+                    Gray::from_rgba8(&prgba, pw, ph)
+                } else {
+                    let full = Gray::from_rgba8(&prgba, pw, ph);
+                    let mut sub = vec![0.0f32; vw * vh];
+                    for row in 0..vh {
+                        sub[row * vw..(row + 1) * vw]
+                            .copy_from_slice(&full.p[(vy + row) * pw + vx..(vy + row) * pw + vx + vw]);
+                    }
+                    Gray { w: vw, h: vh, p: sub }
+                }
+            })
     } else {
         None
     };
@@ -1141,23 +1186,54 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
         }
         let st = args.clip.source_time_at(t);
         let f = args.source.video_frame(FrameRequest { time: st, scale: args.scale }).map_err(|e| e.to_string())?;
-        let rgba = f.to_rgba8();
-        let (full_w, full_h) = ((f.width as usize).max(1), (f.height as usize).max(1));
+        let (full_w, full_h, rgba) = f.to_rgba8_max_side(working_side);
+        let (vx, vy, vw, vh) = view_rect(args.opts.layout, full_w, full_h);
+        let right_crop = match args.opts.layout {
+            filmcraft_project::StereoLayout::Mono => None,
+            filmcraft_project::StereoLayout::SideBySide => Some((vx + vw, vy, vw, vh)),
+            filmcraft_project::StereoLayout::TopBottom => Some((vx, vy + vh, vw, vh)),
+        };
         let p = match &mut tracker {
             None => {
-                let g0 = Gray::from_rgba8(&rgba, full_w, full_h);
+                // Wait to seed `Tracker` until after any initial fade-from-black frame, unless we are
+                // near the end of the clip window.
+                if !frame_has_visual_detail(&rgba, full_w, full_h) && t + args.frame_step + args.frame_step < args.win_end {
+                    samples.push(filmcraft_project::TrackSample {
+                        time: Tick(t.0.saturating_sub(args.clip.start.0)),
+                        x: 0.5,
+                        y: 0.5,
+                        z: 0.0,
+                        scale: 1.0,
+                        rotation: 0.0,
+                        confidence: 0.0,
+                    });
+                    idx += 1;
+                    t += args.frame_step;
+                    continue;
+                }
+                let full_g = Gray::from_rgba8(&rgba, full_w, full_h);
+                let g0 = if vx == 0 && vy == 0 && vw == full_w && vh == full_h {
+                    full_g
+                } else {
+                    let mut sub = vec![0.0f32; vw * vh];
+                    for row in 0..vh {
+                        sub[row * vw..(row + 1) * vw]
+                            .copy_from_slice(&full_g.p[(vy + row) * full_w + vx..(vy + row) * full_w + vx + vw]);
+                    }
+                    Gray { w: vw, h: vh, p: sub }
+                };
                 let target = pick_2d_track_target_with_probe(&g0, probe_gray.as_ref());
-                let tr = Tracker::new_rgba(&rgba, full_w, full_h, (0, 0, full_w, full_h), target, 19, 64.0);
+                let tr = Tracker::new_rgba(&rgba, full_w, full_h, (vx, vy, vw, vh), target, 19, 64.0);
                 let a = tr.anchor();
                 tracker = Some(tr);
                 a
             }
-            Some(tr) => tr.push_rgba(&rgba, full_w, full_h, (0, 0, full_w, full_h), None),
+            Some(tr) => tr.push_rgba(&rgba, full_w, full_h, (vx, vy, vw, vh), right_crop),
         };
         samples.push(filmcraft_project::TrackSample {
             time: Tick(t.0.saturating_sub(args.clip.start.0)),
-            x: (p.x / full_w as f32).clamp(0.0, 1.0),
-            y: (p.y / full_h as f32).clamp(0.0, 1.0),
+            x: ((vx as f32 + p.x) / full_w.max(1) as f32).clamp(0.0, 1.0),
+            y: ((vy as f32 + p.y) / full_h.max(1) as f32).clamp(0.0, 1.0),
             z: p.z,
             scale: p.scale,
             rotation: p.rotation,
@@ -1227,6 +1303,10 @@ fn pick_2d_track_target_with_probe(g: &Gray, probe: Option<&Gray>) -> (f32, f32)
 
 fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorkerOutcome, String> {
     let est_frames = (((args.win_end - args.win_start).0 / args.frame_step.0).max(1) as usize).min(filmcraft_project::CameraSolve::MAX_FRAMES);
+    let working_side = match args.opts.layout {
+        filmcraft_project::StereoLayout::Mono => 480,
+        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 960,
+    };
     job.set(0.02, Some("Reading video frames…"));
     let mut t = args.win_start;
     let mut decoded = 0usize;
@@ -1244,17 +1324,16 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorker
             t += args.frame_step;
             let st = args.clip.source_time_at(cur);
             let f = args.source.video_frame(FrameRequest { time: st, scale: args.scale }).map_err(|e| SolveError::Decode(e.to_string()))?;
+            let (w, h, rgba) = f.to_rgba8_max_side(working_side);
             decoded += 1;
             job.set(0.46 * (decoded as f64 / est_frames as f64).clamp(0.0, 1.0), None);
-            Ok(Some(InputFrame { time: Tick(cur.0.saturating_sub(args.clip.start.0)), width: f.width as usize, height: f.height as usize, rgba: f.to_rgba8() }))
+            Ok(Some(InputFrame { time: Tick(cur.0.saturating_sub(args.clip.start.0)), width: w, height: h, rgba }))
         })
     });
     match res {
         Ok(rep) => Ok(SolveWorkerOutcome::Camera3D(rep)),
         Err(SolveError::Planar2DVideo) => filmcraft_media::cancel::with_background(true, || run_fallback_2d_tracker(job, &args, est_frames)),
-        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. })
-            if args.opts.layout == filmcraft_project::StereoLayout::Mono && clip_has_trackable_texture(&args) =>
-        {
+        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if clip_has_trackable_texture(&args) => {
             filmcraft_media::cancel::with_background(true, || run_fallback_2d_tracker(job, &args, est_frames))
         }
         Err(SolveError::Cancelled) => Err("cancelled".to_string()),
@@ -1262,9 +1341,52 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorker
     }
 }
 
+fn is_solvable_video_item(s: &Session, item_id: filmcraft_project::ItemId) -> bool {
+    matches!(
+        s.project.item(item_id).map(|pi| &pi.kind),
+        Some(ItemKind::Media(m))
+            if m.info.has_video()
+                && !matches!(m.info.kind, filmcraft_media::MediaKind::Still)
+                && matches!(m.media, filmcraft_project::MediaRef::File { .. })
+    )
+}
+
 pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions) -> Result<Arc<SolveJob>, MobileError> {
     let (sid, seq) = model::sequence(s)?;
-    let c = seq.find_item(ClipId(id)).map(|(_, c)| c.clone()).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
+    let requested = seq.find_item(ClipId(id)).map(|(_, c)| c.clone());
+    let c = match requested {
+        Some(cand) if is_solvable_video_item(s, cand.item) => cand,
+        other => {
+            // If a 3D object / title / generator clip was selected in UI, automatically resolve the
+            // underlying file-backed camera video clip at playhead (or first video clip on timeline).
+            let ph = s.playhead();
+            let fallback = seq
+                .tracks
+                .iter()
+                .filter(|tr| tr.kind == filmcraft_project::TrackKind::Video)
+                .flat_map(|tr| tr.items.iter())
+                .find(|it| ph >= it.start && ph < it.end() && is_solvable_video_item(s, it.item))
+                .or_else(|| {
+                    seq.tracks
+                        .iter()
+                        .filter(|tr| tr.kind == filmcraft_project::TrackKind::Video)
+                        .flat_map(|tr| tr.items.iter())
+                        .find(|it| is_solvable_video_item(s, it.item))
+                })
+                .cloned();
+            match (fallback, other) {
+                (Some(vclip), _) => vclip,
+                (None, Some(cand)) => {
+                    let pi = s.project.item(cand.item).ok_or_else(|| MobileError::Command("That clip has no media.".into()))?;
+                    if !matches!(&pi.kind, ItemKind::Media(m) if m.info.has_video()) {
+                        return Err(MobileError::Command("Camera solving needs a video clip.".into()));
+                    }
+                    cand
+                }
+                (None, None) => return Err(MobileError::Command("That clip is gone.".into())),
+            }
+        }
+    };
     let pi = s.project.item(c.item).ok_or_else(|| MobileError::Command("That clip has no media.".into()))?;
     if !matches!(&pi.kind, ItemKind::Media(m) if m.info.has_video()) {
         return Err(MobileError::Command("Camera solving needs a video clip.".into()));
@@ -1273,11 +1395,25 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
     let source = provider.source(c.item).ok_or_else(|| MobileError::Command("The clip's media could not be opened.".into()))?;
 
     let rate = s.sequence_rate();
-    let frame_step = rate.frame_duration().max(Tick(1));
+    let seq_step = rate.frame_duration().max(Tick(1));
+    let src_step = source
+        .info()
+        .video
+        .as_ref()
+        .map(|v| {
+            let spd = c.speed.abs().clamp(0.01, 100.0);
+            Tick(((v.frame_rate.frame_duration().0 as f64) / spd).round() as i64).max(Tick(1))
+        })
+        .unwrap_or(seq_step);
+    let clip_len = c.end() - c.start;
+    let mut frame_step = seq_step.max(src_step);
+    let step_30fps = Tick::from_seconds_f64(1.0 / 30.0);
+    if clip_len >= Tick::from_seconds_f64(1.5) && frame_step < step_30fps {
+        frame_step = step_30fps;
+    }
     let max_sec = finite(opts.max_seconds, 15.0).clamp(0.5, 60.0);
     let max_ticks = Tick::from_seconds_f64(max_sec);
     let clamped_ph = s.playhead().max(c.start).min((c.end() - frame_step).max(c.start));
-    let clip_len = c.end() - c.start;
     let (win_start, win_end) = if clip_len <= max_ticks {
         (c.start, c.end())
     } else {
