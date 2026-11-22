@@ -315,8 +315,8 @@ impl Sequence {
     }
     /// Route the active 3D match-move camera solve directly onto [`Self::scene_camera`] and
     /// [`Self::scene_camera_tracks`], interpolating smoothly across all intermediate timeline
-    /// frames from the sparse (`<= 3 fps`) COLMAP / GLOMAP keyframes while keeping 3D objects
-    /// stationary in world space. When match-move is disabled or cleared, resets the routed camera.
+    /// frames from the sampled COLMAP / GLOMAP keyframes while keeping 3D objects stationary in
+    /// world space. When match-move is disabled or cleared, resets the routed camera.
     pub fn route_matchmove_to_scene_camera(&mut self, playhead: Tick) -> Option<crate::lighting::SceneCamera3D> {
         let Some(mm) = self.matchmove.filter(|m| m.enabled) else {
             self.scene_camera = None;

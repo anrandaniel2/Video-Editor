@@ -173,14 +173,17 @@ extern "C" int colmap_solve_sequence(const ColmapInputFrame* frames,
     };
     std::vector<VerifiedPair> verified_pairs;
 
+    const size_t anchor_stride = std::max<size_t>(8, (num_frames + 15) / 16);
     for (size_t i = 0; i < num_frames; ++i) {
       if (all_keypoints[i]->size() < 12) continue;
       for (size_t j = i + 1; j < num_frames; ++j) {
         if (all_keypoints[j]->size() < 12) continue;
         const size_t gap = j - i;
-        // Exhaustive for short sequences; wide sliding window + keyframe anchors for longer clips.
-        const bool keep_pair = (num_frames <= 24) || (gap <= 8) ||
-                               ((i % 4 == 0) && (j % 4 == 0)) ||
+        // Exhaustive for short clips; O(N) sequential window + multi-scale parallax strides +
+        // bounded global keyframe anchors for 10..60 fps video sequences.
+        const bool is_stride = (gap == 16) || (gap == 32) || (gap == 64) || (gap == 128);
+        const bool is_anchor = ((i % anchor_stride == 0) && (j % anchor_stride == 0));
+        const bool keep_pair = (num_frames <= 24) || (gap <= 10) || is_stride || is_anchor ||
                                (i == 0 && j == num_frames - 1);
         if (!keep_pair) continue;
 

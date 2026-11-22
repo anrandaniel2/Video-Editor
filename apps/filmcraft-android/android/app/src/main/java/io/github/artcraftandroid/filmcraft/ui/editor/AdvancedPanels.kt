@@ -541,6 +541,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
     var stereo by remember { mutableStateOf(StereoLayout.MONO) }
     var baseline by remember { mutableDoubleStateOf(64.0) }
     var refineFocal by remember { mutableStateOf(true) }
+    var sampleFps by remember { mutableDoubleStateOf(10.0) }
     var maxSeconds by remember { mutableDoubleStateOf(15.0) }
 
     val selectedSolve = solves.firstOrNull { it.id == mm?.solve } ?: solves.lastOrNull()
@@ -568,7 +569,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             Spacer(Modifier.height(6.dp))
         }
         Text(
-            "Solves sparse 3D camera motion with COLMAP (sampled at ≤ 3 fps and smoothly interpolated) and routes the trajectory directly to the 3D Scene Camera.",
+            "Solves sparse 3D camera motion with COLMAP (${sampleFps.roundToInt()} fps, smoothly interpolated across timeline frames) and routes the trajectory directly to the 3D Scene Camera.",
             style = FcType.Caption, color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
         )
@@ -626,6 +627,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                     modifier = Modifier.testTag("matchmove_refine_focal"),
                 )
             }
+            AdvancedSlider("Solver frame rate (fps)", sampleFps, 1.0, 60.0, 1.0, "matchmove_fps") { v, _ -> sampleFps = v }
             AdvancedSlider("Seconds to analyse", maxSeconds, 1.0, 60.0, 1.0, "matchmove_seconds") { v, _ -> maxSeconds = v }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
@@ -633,7 +635,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             ) {
                 SelectChip(
                     "Solve 3D camera", false,
-                    { ed.solveCamera(targetClip?.id, SolveCameraOptions(maxSeconds, refineFocal, stereo, baseline)) },
+                    { ed.solveCamera(targetClip?.id, SolveCameraOptions(maxSeconds, sampleFps, refineFocal, stereo, baseline)) },
                     tag = "matchmove_solve",
                 )
                 SelectChip("Open 3D Scene", false, { ed.panel = Panel.Scene }, tag = "matchmove_open_scene")

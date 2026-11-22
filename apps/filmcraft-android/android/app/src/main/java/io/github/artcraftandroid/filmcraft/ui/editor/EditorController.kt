@@ -1648,7 +1648,7 @@ class EditorController(
 
     fun solveCamera(
         clipId: ULong? = null,
-        options: SolveCameraOptions = SolveCameraOptions(15.0, true, StereoLayout.MONO, 64.0),
+        options: SolveCameraOptions = SolveCameraOptions(15.0, 10.0, true, StereoLayout.MONO, 64.0),
     ) {
         if (cameraSolveProgress != null) return
         val target = clipId ?: matchmoveTargetClip?.id

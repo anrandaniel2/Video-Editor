@@ -1,10 +1,11 @@
 //! Offline 3D match-move camera solver powered by stripped-down COLMAP / GLOMAP
 //! (headless OpenGL + sparse SfM, zero UI).
 //!
-//! Input frames are strictly capped to at most **3 fps** (`MAX_SOLVER_FPS = 3.0`) so COLMAP /
-//! GLOMAP completes quickly without processing every video frame; intermediate timeline frames are
-//! smoothly interpolated via 4-point Catmull-Rom + quaternion SQUAD splines and routed directly to
-//! the sequence's 3D Scene Camera (`Sequence::scene_camera` + `Sequence::scene_camera_tracks`).
+//! Input frames are sampled at a configurable rate (**10 fps** by default, `1..=60 fps`) so
+//! COLMAP / GLOMAP completes quickly without having to process every video frame; intermediate
+//! timeline frames are smoothly interpolated via 4-point Catmull-Rom + quaternion SQUAD splines and
+//! routed directly to the sequence's 3D Scene Camera (`Sequence::scene_camera` +
+//! `Sequence::scene_camera_tracks`).
 
 use filmcraft_colmap::{GrayFrame, SolveConfig, solve_sequence};
 use filmcraft_project::{
@@ -16,8 +17,12 @@ use filmcraft_time::Tick;
 use crate::scene::{SceneDetector, SceneOptions};
 use crate::track3d::view_rect;
 
-/// Hard upper bound on frame sampling fed into COLMAP / GLOMAP (frames per second).
-pub const MAX_SOLVER_FPS: f64 = 3.0;
+/// Default frame rate fed into COLMAP / GLOMAP (frames per second).
+pub const DEFAULT_SOLVER_FPS: f64 = 10.0;
+/// Minimum configurable solver sampling rate (frames per second).
+pub const MIN_SOLVER_FPS: f64 = 1.0;
+/// Maximum configurable solver sampling rate (frames per second).
+pub const MAX_SOLVER_FPS: f64 = 60.0;
 
 const MAX_WORKING_SIDE: usize = 640;
 
@@ -40,6 +45,8 @@ pub struct SolveOptions {
     pub playhead: Tick,
     /// Maximum clip duration to sample (`0.5..=60.0` seconds; default `15.0`).
     pub max_seconds: f64,
+    /// Target frame rate to sample into COLMAP / GLOMAP (`1.0..=60.0` fps; default `10.0`).
+    pub sample_fps: f64,
     /// Allow shared focal length refinement during COLMAP / GLOMAP bundle adjustment.
     pub refine_focal: bool,
     /// Stereoscopic frame packing layout.
@@ -56,6 +63,7 @@ impl Default for SolveOptions {
             name: "Camera Match".into(),
             playhead: Tick::ZERO,
             max_seconds: 15.0,
+            sample_fps: DEFAULT_SOLVER_FPS,
             refine_focal: true,
             layout: StereoLayout::Mono,
             stereo_baseline: 48.0,
@@ -70,6 +78,15 @@ impl SolveOptions {
             self.max_seconds.clamp(0.5, 60.0)
         } else {
             15.0
+        }
+    }
+
+    /// Clamp `sample_fps` into [`MIN_SOLVER_FPS`]..=[`MAX_SOLVER_FPS`] ([`DEFAULT_SOLVER_FPS`] if non-finite or `<= 0`).
+    pub fn clamped_sample_fps(&self) -> f64 {
+        if self.sample_fps.is_finite() && self.sample_fps > 0.0 {
+            self.sample_fps.clamp(MIN_SOLVER_FPS, MAX_SOLVER_FPS)
+        } else {
+            DEFAULT_SOLVER_FPS
         }
     }
 }
@@ -248,8 +265,8 @@ fn median_f64(vals: &mut [f64]) -> f64 {
     }
 }
 
-/// Stream decoded frames into the stripped-down COLMAP / GLOMAP sparse solver, capping input frame
-/// sampling to at most **3 fps** (`MAX_SOLVER_FPS = 3.0`).
+/// Stream decoded frames into the stripped-down COLMAP / GLOMAP sparse solver at the configured
+/// `sample_fps` rate (`10 fps` by default, clamped to `1..=60 fps`).
 pub fn solve_camera<F>(
     opts: &SolveOptions,
     cancel: &dyn Fn() -> bool,
@@ -258,7 +275,7 @@ pub fn solve_camera<F>(
 where
     F: FnMut() -> Result<Option<InputFrame>, SolveError>,
 {
-    let min_step = Tick::from_seconds_f64(1.0 / MAX_SOLVER_FPS);
+    let min_step = Tick::from_seconds_f64(1.0 / opts.clamped_sample_fps());
     let max_span = Tick::from_seconds_f64(opts.clamped_max_seconds());
 
     let mut sampled: Vec<SampledFrame> = Vec::new();
@@ -294,8 +311,8 @@ where
         let crop = view_rect(opts.layout, frame.width, frame.height);
         let dst = conformed_dims(crop.2, crop.3);
 
-        // Enforce <= 3 fps sampling into COLMAP / GLOMAP, keeping a trailing frame so the end of
-        // the clip is anchored for smooth interpolation.
+        // Sample at the configured solver FPS into COLMAP / GLOMAP, keeping a trailing frame so the
+        // end of the clip is anchored for smooth interpolation.
         let accept = match sampled.last() {
             None => true,
             Some(prev) => frame.time.0.saturating_sub(prev.time.0) >= min_step.0,
@@ -327,7 +344,7 @@ where
         if sampled.len() >= 2
             && sampled.last().is_some_and(|last| tail.time.0.saturating_sub(last.time.0) < min_step.0 / 3)
         {
-            // Replace the penultimate close sample so average cadence stays strictly <= 3 fps.
+            // Replace the penultimate close sample so cadence stays close to `opts.sample_fps`.
             if let Some(last) = sampled.last_mut() {
                 *last = tail;
             }
@@ -462,7 +479,7 @@ where
     };
     let reg_conf = (1.0 / (1.0 + (f64::from(mean_rms) / 2.0).powi(2))).clamp(0.35, 1.0) as f32;
 
-    // Build SolvedFrame entries at every <= 3 fps sample, then cubic-interpolate any unregistered gap.
+    // Build SolvedFrame entries at every sampled frame, then cubic-interpolate any unregistered gap.
     let mut frames_opt: Vec<Option<SolvedFrame>> = vec![None; shot_frames.len()];
     for &i in &reg_indices {
         let p = &recon.poses[i];

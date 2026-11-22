@@ -13,7 +13,9 @@ use filmcraft_engine::{EngineError, Session};
 use filmcraft_media::{FrameRequest, SharedSource};
 use filmcraft_project::{ClipId, EffectInstance, ItemKind, ParamValue, Sequence, TrackItem, find_effect, graphic};
 use filmcraft_render::SourceProvider;
-use filmcraft_render::matchmove::{InputFrame, MAX_SOLVER_FPS, SolveError, SolveOptions, SolveReport, solve_camera};
+use filmcraft_render::matchmove::{
+    DEFAULT_SOLVER_FPS, InputFrame, MAX_SOLVER_FPS, MIN_SOLVER_FPS, SolveError, SolveOptions, SolveReport, solve_camera,
+};
 use filmcraft_render::track3d::{Tracker, view_rect};
 use filmcraft_time::Tick;
 use serde_json::json;
@@ -303,6 +305,9 @@ pub struct MotionTrackInfo {
 pub struct SolveCameraOptions {
     /// Maximum clip span to analyse in seconds (`0.5..=60.0`, default `15.0`).
     pub max_seconds: f64,
+    /// Target frame sampling rate for COLMAP / GLOMAP in fps (`1.0..=60.0`, default `10.0`).
+    #[uniffi(default = 10.0)]
+    pub sample_fps: f64,
     /// Jointly refine camera focal length during bundle adjustment.
     pub refine_focal: bool,
     pub stereo: StereoLayout,
@@ -312,7 +317,13 @@ pub struct SolveCameraOptions {
 
 impl Default for SolveCameraOptions {
     fn default() -> Self {
-        Self { max_seconds: 15.0, refine_focal: false, stereo: StereoLayout::Mono, stereo_baseline: 64.0 }
+        Self {
+            max_seconds: 15.0,
+            sample_fps: DEFAULT_SOLVER_FPS,
+            refine_focal: false,
+            stereo: StereoLayout::Mono,
+            stereo_baseline: 64.0,
+        }
     }
 }
 
@@ -1229,7 +1240,8 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveReport
         filmcraft_project::StereoLayout::Mono => 640,
         filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1280,
     };
-    job.set(0.02, Some("Sampling frames (≤ 3 fps)…"));
+    let fps_label = format!("Sampling frames ({:.0} fps)…", args.opts.clamped_sample_fps());
+    job.set(0.02, Some(&fps_label));
     let last_valid_t = (args.win_end - args.native_step).max(args.win_start);
     let mut t = args.win_start;
     let mut emitted_tail = false;
@@ -1347,10 +1359,11 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
     let native_step = seq_step.max(src_step);
     let clip_len = c.end() - c.start;
 
-    // Limit COLMAP / GLOMAP input to at most 3 fps (`1/3 s` step); intermediate frames are
-    // smoothly interpolated and routed to the scene camera.
-    let step_3fps = Tick::from_seconds_f64(1.0 / MAX_SOLVER_FPS);
-    let frame_step = native_step.max(step_3fps);
+    // Sample COLMAP / GLOMAP input at the configured solver FPS (`10 fps` by default); intermediate
+    // timeline frames are smoothly interpolated and routed to the scene camera.
+    let sample_fps = finite(opts.sample_fps, DEFAULT_SOLVER_FPS).clamp(MIN_SOLVER_FPS, MAX_SOLVER_FPS);
+    let step_fps = Tick::from_seconds_f64(1.0 / sample_fps);
+    let frame_step = native_step.max(step_fps);
 
     let max_sec = finite(opts.max_seconds, 15.0).clamp(0.5, 60.0);
     let max_ticks = Tick::from_seconds_f64(max_sec);
@@ -1375,6 +1388,7 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
         name: String::new(),
         playhead: Tick(clamped_ph.0.saturating_sub(c.start.0)),
         max_seconds: max_sec,
+        sample_fps,
         refine_focal: opts.refine_focal,
         layout: opts.stereo.project(),
         stereo_baseline: finite(opts.stereo_baseline, 64.0).clamp(4.0, 256.0) as f32,

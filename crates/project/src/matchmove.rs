@@ -114,7 +114,7 @@ impl SolvedFrame {
     /// C1-continuous 4-point cubic interpolation between `p1` (`t = 0`) and `p2` (`t = 1`) using
     /// neighbors `p0` and `p3`: Catmull-Rom spline for eye position & FOV, and Shoemake's
     /// spherical cubic quaternion spline (SQUAD) on `SO(3)` for orientation. Designed for smooth
-    /// playback across sparse `<= 3 fps` COLMAP / GLOMAP keyframes.
+    /// playback across sampled COLMAP / GLOMAP keyframes.
     pub fn catmull_rom(p0: Self, p1: Self, p2: Self, p3: Self, t: f32) -> Self {
         if !t.is_finite() || t <= 0.0 {
             return p1;
@@ -190,15 +190,15 @@ pub struct CameraSolve {
 }
 
 impl CameraSolve {
-    /// Hard upper bound on solved frames stored in a single solve.
-    pub const MAX_FRAMES: usize = 2000;
+    /// Hard upper bound on solved frames stored in a single solve (`60 s` at `60 fps`).
+    pub const MAX_FRAMES: usize = 3600;
     /// Hard upper bound on sparse 3D points stored in a single solve.
     pub const MAX_POINTS: usize = 256;
     /// Confidence threshold below which a frame is treated as lost track.
     pub const LOST_CONFIDENCE: f32 = 0.25;
 
     /// Sample at clip-relative time `t`, clamping outside the solved range and interpolating
-    /// smoothly with Catmull-Rom + quaternion SQUAD across sparse (`<= 3 fps`) keyframes.
+    /// smoothly with Catmull-Rom + quaternion SQUAD across sampled COLMAP / GLOMAP keyframes.
     pub fn sample_at(&self, t: Tick) -> Option<SolvedFrame> {
         let f = &self.frames;
         if f.is_empty() {
