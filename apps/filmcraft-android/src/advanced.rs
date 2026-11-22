@@ -1361,15 +1361,13 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
             // underlying file-backed camera video clip at playhead (or first video clip on timeline).
             let ph = s.playhead();
             let fallback = seq
-                .tracks
+                .video_tracks
                 .iter()
-                .filter(|tr| tr.kind == filmcraft_project::TrackKind::Video)
                 .flat_map(|tr| tr.items.iter())
                 .find(|it| ph >= it.start && ph < it.end() && is_solvable_video_item(s, it.item))
                 .or_else(|| {
-                    seq.tracks
+                    seq.video_tracks
                         .iter()
-                        .filter(|tr| tr.kind == filmcraft_project::TrackKind::Video)
                         .flat_map(|tr| tr.items.iter())
                         .find(|it| is_solvable_video_item(s, it.item))
                 })
