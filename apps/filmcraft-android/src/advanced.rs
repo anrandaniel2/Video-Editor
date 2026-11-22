@@ -13,7 +13,7 @@ use filmcraft_engine::{EngineError, Session};
 use filmcraft_media::{FrameRequest, SharedSource};
 use filmcraft_project::{ClipId, EffectInstance, ItemKind, ParamValue, Sequence, TrackItem, find_effect, graphic};
 use filmcraft_render::SourceProvider;
-use filmcraft_render::camera2d::{Camera2DError, Camera2DOptions, solve_2d_camera_space};
+use filmcraft_render::camera2d::{Camera2DError, Camera2DOptions, Frame2D, solve_2d_camera_space};
 use filmcraft_render::matchmove::{InputFrame, SolveError, SolveOptions, SolveReport, solve_camera};
 use filmcraft_render::track3d::{Tracker, view_rect};
 use filmcraft_time::Tick;
@@ -1295,7 +1295,7 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
                 .map_err(|e| Camera2DError::Decode(e.to_string()))?;
             let (full_w, full_h, rgba) = f.to_rgba8_max_side(working_side);
             let rel_t = Tick(t.0.saturating_sub(args.clip.start.0));
-            sink(InputFrame {
+            sink(Frame2D {
                 time: rel_t,
                 width: full_w,
                 height: full_h,

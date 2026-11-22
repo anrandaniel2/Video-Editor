@@ -16,11 +16,19 @@
 use filmcraft_project::{StereoLayout, TrackSample};
 use filmcraft_time::Tick;
 
-use crate::matchmove::InputFrame;
 use crate::scene::SceneDetector;
 use crate::track3d::{
     GpuTrackBackend, GpuTrackQuery, Gray, Level, corners, crop_gray, gpu_backend, search, smooth_track_samples, track_point, view_rect,
 };
+
+/// Borrowed RGBA8 frame passed into [`solve_2d_camera_space`].
+#[derive(Clone, Copy, Debug)]
+pub struct Frame2D<'a> {
+    pub time: Tick,
+    pub width: usize,
+    pub height: usize,
+    pub rgba: &'a [u8],
+}
 
 const MAX_WORK_SIDE: usize = 512;
 const GRID_COLS: usize = 8;
@@ -277,9 +285,9 @@ fn seed_grid(
 }
 
 fn track_single_cpu(prev_pyr: &[Level], curr_pyr: &[Level], p: (f32, f32), guess: (f32, f32)) -> Option<(f32, f32)> {
-    let fwd = track_point(prev_pyr, curr_pyr, p, guess, LK_PATCH_RADIUS)?;
+    let fwd = track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, guess)?;
     let back_guess = (p.0 - fwd.0, p.1 - fwd.1);
-    let bwd = track_point(curr_pyr, prev_pyr, fwd, back_guess, LK_PATCH_RADIUS)?;
+    let bwd = track_point(curr_pyr, prev_pyr, fwd, LK_PATCH_RADIUS, back_guess)?;
     if (bwd.0 - p.0).hypot(bwd.1 - p.1) <= FB_MAX_PX {
         Some(fwd)
     } else {
@@ -801,7 +809,7 @@ fn isolate_shot_around_playhead(obs: &[FrameObservation], playhead: Tick, cut_se
 /// Solve global 2D background camera motion over streamed RGBA frames.
 pub fn solve_2d_camera_space<F>(options: &Camera2DOptions, mut for_each_frame: F) -> Result<Camera2DSolve, Camera2DError>
 where
-    F: FnMut(&mut dyn FnMut(InputFrame<'_>) -> Result<(), Camera2DError>) -> Result<(), Camera2DError>,
+    F: FnMut(&mut dyn FnMut(Frame2D<'_>) -> Result<(), Camera2DError>) -> Result<(), Camera2DError>,
 {
     let gpu = gpu_backend();
     let mut detector = SceneDetector::new();
@@ -814,7 +822,7 @@ where
     let mut levels = 3usize;
 
     let mut frame_idx = 0usize;
-    for_each_frame(&mut |input: InputFrame<'_>| {
+    for_each_frame(&mut |input: Frame2D<'_>| {
         if filmcraft_media::cancel::cancelled() {
             return Err(Camera2DError::Cancelled);
         }
@@ -1285,7 +1293,7 @@ mod tests {
 
         let solved = solve_2d_camera_space(&Camera2DOptions::default(), |sink| {
             for (t, rgba) in &frames {
-                sink(InputFrame {
+                sink(Frame2D {
                     time: *t,
                     width: w,
                     height: h,
@@ -1330,7 +1338,7 @@ mod tests {
 
         let solved = solve_2d_camera_space(&Camera2DOptions::default(), |sink| {
             for (t, rgba) in &frames {
-                sink(InputFrame {
+                sink(Frame2D {
                     time: *t,
                     width: w,
                     height: h,
