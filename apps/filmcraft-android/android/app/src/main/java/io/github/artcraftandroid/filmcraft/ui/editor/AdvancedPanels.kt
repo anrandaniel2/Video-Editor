@@ -657,7 +657,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 }
             }
             Spacer(Modifier.height(6.dp))
-            val modeText = if (selectedSolve.rotationOnly) "Tripod pan/tilt (rotation-only)" else "${selectedSolve.points} 3D points"
+            val modeText = "${selectedSolve.points} 3D points"
             val rmsText = String.format(Locale.US, "%.2f px RMS · %d%% lock", selectedSolve.medianRmsPx, selectedSolve.quality.roundToInt())
             val extra = buildList {
                 if (selectedSolve.shotsSkipped > 0u) add("${selectedSolve.shotsSkipped} cut skipped")
@@ -717,7 +717,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (!selectedSolve.rotationOnly) {
+                if (selectedSolve.points > 0u) {
                     SelectChip("Auto-level ground", false, { ed.levelMatchMoveGround() }, tag = "matchmove_auto_level")
                     if (cur.enabled) {
                         SelectChip(

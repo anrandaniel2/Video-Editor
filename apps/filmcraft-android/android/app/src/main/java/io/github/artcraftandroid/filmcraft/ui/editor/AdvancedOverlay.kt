@@ -160,9 +160,6 @@ fun MatchMoveOverlay(ed: EditorController, frameWidth: Float, frameHeight: Float
         val (dotColor, badgeText) = when {
             tapPicking -> Fc.Accent to "Tap a 3D landmark to place"
             pose.lost -> Color(0xFFFF6575) to "Camera track lost · holding pose"
-            pose.rotationOnly -> Color(0xFF4CC9F0) to String.format(
-                Locale.US, "Tripod pan · %.2f px · %d%%", pose.rmsPx, pose.confidence.roundToInt(),
-            )
             else -> Color(0xFF6FE295) to String.format(
                 Locale.US, "3D lock · %.2f px · %d%%", pose.rmsPx, pose.confidence.roundToInt(),
             )

@@ -1691,10 +1691,7 @@ class EditorController(
                                 val rms = "%.2f".format(java.util.Locale.US, s.medianRmsPx)
                                 val cuts = if (s.shotsSkipped > 0u) " · ${s.shotsSkipped} cut skipped" else ""
                                 val lost = if (s.lost > 0u) " · ${s.lost} lost" else ""
-                                host.tell(
-                                    if (s.rotationOnly) "Solved ${s.frames} frames (tripod pan/tilt · $rms px RMS)$cuts$lost"
-                                    else "Solved ${s.frames} frames · ${s.points} 3D points · $rms px RMS$cuts$lost",
-                                )
+                                host.tell("Solved ${s.frames} frames · ${s.points} 3D points · $rms px RMS$cuts$lost")
                             }
                         }
                         break

@@ -463,15 +463,14 @@ where
         raw_eyes[i] = rel;
     }
 
-    let min_3d_landmarks = if shot_frames.len() >= 6 { 8usize } else { 4usize };
-    let rotation_only = pos_depths.len() < min_3d_landmarks || max_baseline <= 1e-5;
-    let depth_scale = if !rotation_only && !pos_depths.is_empty() {
-        median_f64(&mut pos_depths).max(1e-4)
-    } else if !rotation_only && max_baseline > 1e-5 {
-        (max_baseline * 4.0).max(1e-4)
-    } else {
-        1.0
-    };
+    // Every valid 3D camera solve must have real 3D camera translation and triangulated landmarks.
+    // Never downgrade a clip to a frozen "tripod" (`rotation_only`) camera — if 3D parallax is
+    // absent, return `Planar2DVideo` so the editor switches cleanly to 2D motion tracking!
+    let min_3d_landmarks = if shot_frames.len() >= 6 { 6usize } else { 4usize };
+    if pos_depths.len() < min_3d_landmarks || max_baseline <= 1e-5 {
+        return Err(SolveError::Planar2DVideo);
+    }
+    let depth_scale = median_f64(&mut pos_depths).max(1e-4);
 
     let solved_focal = if recon.focal_px.is_finite() && recon.focal_px > 10.0 {
         recon.focal_px
@@ -497,15 +496,11 @@ where
             [v_norm[2][0] as f32, v_norm[2][1] as f32, v_norm[2][2] as f32],
         ];
         let (pitch, yaw, roll) = euler_from_view_rotation(vr_f32);
-        let pos = if rotation_only {
-            [0.0; 3]
-        } else {
-            [
-                (raw_eyes[i][0] / depth_scale) as f32,
-                (raw_eyes[i][1] / depth_scale) as f32,
-                (raw_eyes[i][2] / depth_scale) as f32,
-            ]
-        };
+        let pos = [
+            (raw_eyes[i][0] / depth_scale) as f32,
+            (raw_eyes[i][1] / depth_scale) as f32,
+            (raw_eyes[i][2] / depth_scale) as f32,
+        ];
         let sf = SolvedFrame {
             time: shot_frames[i].time,
             position: pos,
@@ -584,9 +579,6 @@ where
             sm.fov = raw_sf[i].fov;
             sm.rms_px = raw_sf[i].rms_px;
             sm.confidence = raw_sf[i].confidence;
-            if rotation_only {
-                sm.position = [0.0; 3];
-            }
             if sm.is_finite() {
                 solved_frames[i] = sm;
             }
@@ -595,28 +587,26 @@ where
 
     // Rank and normalize up to MAX_POINTS sparse 3D landmarks for ground-plane leveling & snapping.
     let mut scored_pts: Vec<(f64, SolvedPoint)> = Vec::new();
-    if !rotation_only {
-        for (xr, obs, err) in ref_points {
-            let nx = (xr[0] / depth_scale) as f32;
-            let ny = (xr[1] / depth_scale) as f32;
-            let nz = (xr[2] / depth_scale) as f32;
-            if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() || nz <= 0.02 || nz > 50.0 {
-                continue;
-            }
-            let rms_p = if err.is_finite() && err >= 0.0 { err as f32 } else { mean_rms };
-            let score = f64::from(obs.max(1)) / (1.0 + f64::from(rms_p).powi(2));
-            let sp = SolvedPoint {
-                position: [nx, ny, nz],
-                observations: obs.max(2),
-                rms_px: rms_p,
-            };
-            if sp.is_finite() && score.is_finite() {
-                scored_pts.push((score, sp));
-            }
+    for (xr, obs, err) in ref_points {
+        let nx = (xr[0] / depth_scale) as f32;
+        let ny = (xr[1] / depth_scale) as f32;
+        let nz = (xr[2] / depth_scale) as f32;
+        if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() || nz <= 0.02 || nz > 50.0 {
+            continue;
         }
-        scored_pts.sort_by(|a, b| b.0.total_cmp(&a.0));
-        scored_pts.truncate(CameraSolve::MAX_POINTS);
+        let rms_p = if err.is_finite() && err >= 0.0 { err as f32 } else { mean_rms };
+        let score = f64::from(obs.max(1)) / (1.0 + f64::from(rms_p).powi(2));
+        let sp = SolvedPoint {
+            position: [nx, ny, nz],
+            observations: obs.max(2),
+            rms_px: rms_p,
+        };
+        if sp.is_finite() && score.is_finite() {
+            scored_pts.push((score, sp));
+        }
     }
+    scored_pts.sort_by(|a, b| b.0.total_cmp(&a.0));
+    scored_pts.truncate(CameraSolve::MAX_POINTS);
     let points: Vec<SolvedPoint> = scored_pts.into_iter().map(|(_, p)| p).collect();
 
     let solve = CameraSolve {
@@ -628,7 +618,7 @@ where
             opts.name.clone()
         },
         layout: opts.layout,
-        rotation_only,
+        rotation_only: false,
         shots_skipped,
         frames: solved_frames,
         points,
