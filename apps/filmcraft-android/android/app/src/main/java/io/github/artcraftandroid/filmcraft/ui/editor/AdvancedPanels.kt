@@ -540,8 +540,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
 
     var stereo by remember { mutableStateOf(StereoLayout.MONO) }
     var baseline by remember { mutableDoubleStateOf(64.0) }
-    var refineFocal by remember { mutableStateOf(false) }
-    var sampleFps by remember { mutableDoubleStateOf(10.0) }
+    var refineFocal by remember { mutableStateOf(true) }
     var maxSeconds by remember { mutableDoubleStateOf(15.0) }
 
     val selectedSolve = solves.firstOrNull { it.id == mm?.solve } ?: solves.lastOrNull()
@@ -569,7 +568,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             Spacer(Modifier.height(6.dp))
         }
         Text(
-            "Solves sparse 3D camera motion with COLMAP (${sampleFps.roundToInt()} fps, smoothly interpolated across timeline frames) and routes the trajectory directly to the 3D Scene Camera.",
+            "Solves real 3D camera motion and scene landmarks so 3D objects and lights lock naturally into handheld or moving-camera footage.",
             style = FcType.Caption, color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
         )
@@ -627,7 +626,6 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                     modifier = Modifier.testTag("matchmove_refine_focal"),
                 )
             }
-            AdvancedSlider("Solver frame rate (fps)", sampleFps, 1.0, 60.0, 1.0, "matchmove_fps") { v, _ -> sampleFps = v }
             AdvancedSlider("Seconds to analyse", maxSeconds, 1.0, 60.0, 1.0, "matchmove_seconds") { v, _ -> maxSeconds = v }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
@@ -635,7 +633,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             ) {
                 SelectChip(
                     "Solve 3D camera", false,
-                    { ed.solveCamera(targetClip?.id, SolveCameraOptions(maxSeconds, sampleFps, refineFocal, stereo, baseline)) },
+                    { ed.solveCamera(targetClip?.id, SolveCameraOptions(maxSeconds, refineFocal, stereo, baseline)) },
                     tag = "matchmove_solve",
                 )
                 SelectChip("Open 3D Scene", false, { ed.panel = Panel.Scene }, tag = "matchmove_open_scene")
@@ -657,7 +655,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 }
             }
             Spacer(Modifier.height(6.dp))
-            val modeText = "${selectedSolve.points} 3D points"
+            val modeText = if (selectedSolve.rotationOnly) "Tripod pan/tilt (rotation-only)" else "${selectedSolve.points} 3D points"
             val rmsText = String.format(Locale.US, "%.2f px RMS · %d%% lock", selectedSolve.medianRmsPx, selectedSolve.quality.roundToInt())
             val extra = buildList {
                 if (selectedSolve.shotsSkipped > 0u) add("${selectedSolve.shotsSkipped} cut skipped")
@@ -717,7 +715,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = FcSize.PanelPadding, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (selectedSolve.points > 0u) {
+                if (!selectedSolve.rotationOnly) {
                     SelectChip("Auto-level ground", false, { ed.levelMatchMoveGround() }, tag = "matchmove_auto_level")
                     if (cur.enabled) {
                         SelectChip(

@@ -17,12 +17,9 @@ internal fun viewFor(ed: EditorController, fw: Double, fh: Double, w: Double, h:
     return cameraProjection(ed.activeRenderCamera, fw, fh, w, h)
 }
 
-/** Effective render camera at the playhead: active match-move pose and routed scene camera. */
+/** Effective render camera at the playhead: active match-move pose takes precedence over manual scene camera. */
 internal fun effectiveRenderCamera(matchmoveCamera: SceneCamera?, manualCamera: SceneCamera?): SceneCamera? =
-    when {
-        matchmoveCamera != null -> matchmoveCamera.copy(animated = true)
-        else -> manualCamera
-    }
+    matchmoveCamera ?: manualCamera
 
 /** Build a [ViewProjection] from a resolved [SceneCamera], or `null` when using the classic fixed camera. */
 internal fun cameraProjection(c: SceneCamera?, fw: Double, fh: Double, w: Double, h: Double): ViewProjection? {

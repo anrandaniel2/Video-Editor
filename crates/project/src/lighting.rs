@@ -456,7 +456,7 @@ impl SceneCamera3D {
             "y" => self.position[1] = xf,
             "z" => self.position[2] = xf,
             "yaw" => self.yaw = xf,
-            "pitch" => self.pitch = xf.clamp(-3600.0, 3600.0),
+            "pitch" => self.pitch = xf.clamp(-89.0, 89.0),
             "roll" => self.roll = xf,
             "fov" => self.fov = xf.clamp(1.0, 179.0),
             _ => return false,
@@ -482,7 +482,7 @@ impl SceneCamera3D {
                 eval("z", self.position[2]),
             ],
             yaw: eval("yaw", self.yaw),
-            pitch: eval("pitch", self.pitch).clamp(-3600.0, 3600.0),
+            pitch: eval("pitch", self.pitch).clamp(-89.0, 89.0),
             roll: eval("roll", self.roll),
             fov: eval("fov", self.fov).clamp(1.0, 179.0),
         }

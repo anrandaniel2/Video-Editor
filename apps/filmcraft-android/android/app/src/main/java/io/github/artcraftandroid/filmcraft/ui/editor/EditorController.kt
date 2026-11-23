@@ -1232,8 +1232,22 @@ class EditorController(
         applyScenePreviewCamera()
     }
 
-    /** 3D objects stay stationary in world space; camera motion is routed to the Scene Camera. */
-    private suspend fun autoAttach2dTrackIfActive(@Suppress("UNUSED_PARAMETER") objectId: ULong) = Unit
+    /** If the sequence was auto-switched to 2D camera tracking (and 3D Match-Move is off),
+     * bind newly added 3D objects to that 2D camera track and enable foreground occlusion.
+     */
+    private suspend fun autoAttach2dTrackIfActive(objectId: ULong) {
+        if (matchmoveActive) return
+        val tracks = runCatching { engine.command { motionTracks() } }.getOrDefault(emptyList())
+        val auto2d = tracks.lastOrNull { it.name.startsWith("2D Track ") } ?: return
+        val st = runCatching { engine.command { object3dState(objectId) } }.getOrNull() ?: return
+        if (!st.hasObject) return
+        val updated = st.settings.copy(
+            followTrack = true,
+            trackId = auto2d.id,
+            behindForeground = true,
+        )
+        runCatching { engine.command { setObject3d(objectId, updated, null) } }
+    }
 
     /** Add the 3D object without leaving the scene workspace. */
     fun addObjectInScene(mesh: Object3DMesh) {
@@ -1640,15 +1654,11 @@ class EditorController(
         cameraSolves = solves
         matchmoveState = state
         matchmoveSceneData = scene
-        loadSceneCamera()
-        if (sceneCamera != null) {
-            sceneCameraRemoved = false
-        }
     }
 
     fun solveCamera(
         clipId: ULong? = null,
-        options: SolveCameraOptions = SolveCameraOptions(15.0, 10.0, true, StereoLayout.MONO, 64.0),
+        options: SolveCameraOptions = SolveCameraOptions(15.0, true, StereoLayout.MONO, 64.0),
     ) {
         if (cameraSolveProgress != null) return
         val target = clipId ?: matchmoveTargetClip?.id
@@ -1691,7 +1701,10 @@ class EditorController(
                                 val rms = "%.2f".format(java.util.Locale.US, s.medianRmsPx)
                                 val cuts = if (s.shotsSkipped > 0u) " · ${s.shotsSkipped} cut skipped" else ""
                                 val lost = if (s.lost > 0u) " · ${s.lost} lost" else ""
-                                host.tell("Solved ${s.frames} frames · ${s.points} 3D points · $rms px RMS$cuts$lost")
+                                host.tell(
+                                    if (s.rotationOnly) "Solved ${s.frames} frames (tripod pan/tilt · $rms px RMS)$cuts$lost"
+                                    else "Solved ${s.frames} frames · ${s.points} 3D points · $rms px RMS$cuts$lost",
+                                )
                             }
                         }
                         break

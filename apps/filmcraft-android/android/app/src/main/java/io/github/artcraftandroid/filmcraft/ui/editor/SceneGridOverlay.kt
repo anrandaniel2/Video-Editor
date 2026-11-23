@@ -95,7 +95,7 @@ internal fun SceneGridOverlay(
                         drawLine(tint, Offset(c.x - crossArm, c.y), Offset(c.x + crossArm, c.y), strokeWidth = 1.6f)
                         drawLine(tint, Offset(c.x, c.y - crossArm), Offset(c.x, c.y + crossArm), strokeWidth = 1.6f)
                     }
-                    if (solved.path.size >= 2) {
+                    if (!solved.rotationOnly && solved.path.size >= 2) {
                         var prev: Offset? = null
                         solved.path.forEachIndexed { idx, sample ->
                             val eyeSample = GizmoVec(

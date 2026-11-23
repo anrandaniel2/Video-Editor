@@ -53,15 +53,13 @@ abstract class CargoNdkBuild : DefaultTask() {
             "--remap-path-prefix=${File(workspaceDir.get()).absolutePath}=/filmcraft",
             "--remap-path-prefix=$cargoHome=/cargo",
         )
-        // Identical code folding (safe mode preserves distinct addresses for C++/libc++ functions
-        // whose pointers are compared) plus --exclude-libs so statically linked C++ runtime,
-        // unwinder, and COLMAP archives never leak into .dynsym and collide with Android's own
-        // system libc++.so / unwinder loaded in the Zygote process.
-        val fold = listOf(
-            "-Clink-arg=-Wl,--icf=safe",
-            "-Clink-arg=-Wl,-z,max-page-size=16384",
-            "-Clink-arg=-Wl,--exclude-libs,libfilmcraft_cxx_static.a:libfilmcraft_cxxabi_static.a:libunwind.a:libcolmap_sparse.a:libcolmap_poselib.a:libcolmap_ceres.a:libcolmap_vlfeat.a",
-        )
+        // Identical code folding: the linker keeps one copy of each distinct function body instead
+        // of one per monomorphisation, generic instantiation and inlined-from-the-same-source
+        // duplicate, which is where a lot of a Rust library's text is. It folds code only, never
+        // data, so the exported symbols and UniFFI's metadata are untouched, and identical
+        // instructions at one address run exactly as fast as at two. Android's own platform builds
+        // link this way. No build-time cost worth naming: it is a link step, not a codegen one.
+        val fold = listOf("-Clink-arg=-Wl,--icf=all")
         execOperations.exec {
             workingDir(workspaceDir.get())
             environment("ANDROID_NDK_HOME", ndkDir.get())
