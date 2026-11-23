@@ -132,30 +132,12 @@ where
     if cancel() {
         return Err(SolveError::Cancelled);
     }
-    let is_mono = opts.layout == StereoLayout::Mono;
-    let mut model = match initialize_scene(&shot, opts.refine_focal, is_mono, cancel) {
-        Ok(m) => m,
-        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 6 => {
-            return Err(SolveError::Planar2DVideo);
-        }
-        Err(e) => return Err(e),
-    };
-    if let Err(e) = run_bundle_adjustment(&mut model, &shot.tracks, opts.refine_focal, cancel) {
-        if is_mono && shot.tracks.len() >= 6 && matches!(e, SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) {
-            return Err(SolveError::Planar2DVideo);
-        }
-        return Err(e);
-    }
+    let mut model = initialize_scene(&shot, opts.refine_focal, cancel)?;
+    run_bundle_adjustment(&mut model, &shot.tracks, opts.refine_focal, cancel)?;
     if opts.layout != StereoLayout::Mono {
         apply_stereo_scale_prior(&mut model, &shot.stereo_obs, shot.width, opts.stereo_baseline);
     }
-    match assemble_report(opts, &shot, &model) {
-        Ok(rep) => Ok(rep),
-        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if is_mono && shot.tracks.len() >= 6 => {
-            Err(SolveError::Planar2DVideo)
-        }
-        Err(e) => Err(e),
-    }
+    assemble_report(opts, &shot, &model)
 }
 
 /// Convenience wrapper over [`solve_camera`] for an in-memory slice of frames.

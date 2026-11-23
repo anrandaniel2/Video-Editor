@@ -541,6 +541,7 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
     var stereo by remember { mutableStateOf(StereoLayout.MONO) }
     var baseline by remember { mutableDoubleStateOf(64.0) }
     var refineFocal by remember { mutableStateOf(true) }
+    var track2d by remember { mutableStateOf(false) }
     var maxSeconds by remember { mutableDoubleStateOf(15.0) }
 
     val selectedSolve = solves.firstOrNull { it.id == mm?.solve } ?: solves.lastOrNull()
@@ -568,7 +569,8 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
             Spacer(Modifier.height(6.dp))
         }
         Text(
-            "Solves real 3D camera motion and scene landmarks so 3D objects and lights lock naturally into handheld or moving-camera footage.",
+            if (track2d) "Solves flat 2D camera pan, zoom, and rotation so objects lock into 2D or flat footage."
+            else "Solves real 3D camera motion and scene landmarks so 3D objects and lights lock naturally into handheld or moving-camera footage.",
             style = FcType.Caption, color = Fc.Detail,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
         )
@@ -618,13 +620,27 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Estimate focal length", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                Text("2D camera tracking", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
                 Switch(
-                    checked = refineFocal,
-                    onCheckedChange = { refineFocal = it },
+                    checked = track2d,
+                    onCheckedChange = { track2d = it },
                     colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
-                    modifier = Modifier.testTag("matchmove_refine_focal"),
+                    modifier = Modifier.testTag("matchmove_2d_toggle"),
                 )
+            }
+            if (!track2d) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = FcSize.PanelPadding),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Estimate focal length", style = FcType.Label, color = Fc.Secondary, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = refineFocal,
+                        onCheckedChange = { refineFocal = it },
+                        colors = SwitchDefaults.colors(checkedTrackColor = Fc.Accent, uncheckedTrackColor = Fc.SliderOff),
+                        modifier = Modifier.testTag("matchmove_refine_focal"),
+                    )
+                }
             }
             AdvancedSlider("Seconds to analyse", maxSeconds, 1.0, 60.0, 1.0, "matchmove_seconds") { v, _ -> maxSeconds = v }
             Row(
@@ -632,8 +648,8 @@ fun MatchMovePanel(ed: EditorController, close: () -> Unit, modifier: Modifier =
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 SelectChip(
-                    "Solve 3D camera", false,
-                    { ed.solveCamera(targetClip?.id, SolveCameraOptions(maxSeconds, refineFocal, stereo, baseline)) },
+                    if (track2d) "Solve 2D camera" else "Solve 3D camera", false,
+                    { ed.solveCamera(targetClip?.id, SolveCameraOptions(maxSeconds, refineFocal, stereo, baseline, track2d)) },
                     tag = "matchmove_solve",
                 )
                 SelectChip("Open 3D Scene", false, { ed.panel = Panel.Scene }, tag = "matchmove_open_scene")

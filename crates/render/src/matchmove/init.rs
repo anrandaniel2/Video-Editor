@@ -70,22 +70,15 @@ struct EssentialInit {
 struct RotationInit {
     inliers: usize,
     median_err_px: f64,
-    all_median_err_px: f64,
 }
 
 /// Build an initial [`SceneModel`] (either 6-DOF or `rotation_only`) across all shot frames.
-pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: bool, cancel: &dyn Fn() -> bool) -> Result<SceneModel, SolveError> {
+pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, cancel: &dyn Fn() -> bool) -> Result<SceneModel, SolveError> {
     let cx = shot.width as f64 * 0.5;
     let cy = shot.height as f64 * 0.5;
     let nominal_focal = (shot.height as f64 * 0.5) / (f64::from(CLASSIC_FOV).to_radians() * 0.5).tan();
 
-    let (f0, f1, matches) = match choose_initial_pair(shot) {
-        Ok(triple) => triple,
-        Err(SolveError::InsufficientMotion) if is_mono && shot.tracks.len() >= 6 => {
-            return Err(SolveError::Planar2DVideo);
-        }
-        Err(e) => return Err(e),
-    };
+    let (f0, f1, matches) = choose_initial_pair(shot)?;
     if cancel() {
         return Err(SolveError::Cancelled);
     }
@@ -101,10 +94,6 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: 
         &[1.0]
     };
     let (focal, rot_cand, ess_cand) = best_focal_hypothesis(&matches, h_mat, (cx, cy, nominal_focal), seeds, cancel)?;
-    let nat_rot = rot_cand.clone().or_else(|| estimate_pair_rotation(&matches, h_mat, cx, cy, focal));
-    if is_mono && is_planar_2d_shot(shot, &matches, (cx, cy, focal), h_inliers, nat_rot.as_ref(), ess_cand.as_ref()) {
-        return Err(SolveError::Planar2DVideo);
-    }
     let n = matches.len();
     let h_dom = h_inliers * 100 >= n * 40 && h_inliers >= 40.min((n * 2) / 3);
 
@@ -112,13 +101,7 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, is_mono: 
         (Some(rot), Some(ess)) => ess.median_parallax_deg < 1.0 || (h_dom && rot.inliers * 100 >= ess.inliers * 88 && rot.median_err_px <= 2.2),
         (Some(_), None) => true,
         (None, Some(_)) => false,
-        (None, None) => {
-            return Err(if is_mono && shot.tracks.len() >= 6 {
-                SolveError::Planar2DVideo
-            } else {
-                SolveError::InsufficientMotion
-            });
-        }
+        (None, None) => return Err(SolveError::InsufficientMotion),
     };
 
     let mut model = SceneModel {
@@ -329,16 +312,13 @@ fn estimate_pair_rotation(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, c
     }
 
     let mut errs = Vec::new();
-    let mut all_errs = Vec::with_capacity(matches.len());
     let mut inliers = 0usize;
     for m in matches {
         let q = mat3_mul_vec(r, [(m.p1.0 - cx) / f, (m.p1.1 - cy) / f, 1.0]);
         if q[2] <= 1e-5 {
-            all_errs.push(1e6);
             continue;
         }
         let err = (cx + f * q[0] / q[2] - m.p2.0).hypot(cy + f * q[1] / q[2] - m.p2.1);
-        all_errs.push(err);
         if err <= 3.0 {
             inliers += 1;
             errs.push(err);
@@ -348,217 +328,7 @@ fn estimate_pair_rotation(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, c
         return None;
     }
     let median_err_px = median_f64(&mut errs);
-    let all_median_err_px = median_f64(&mut all_errs);
-    (median_err_px <= 2.6).then_some(RotationInit { inliers, median_err_px, all_median_err_px })
-}
-
-/// Detect flat 2D footage (screen recordings, 2D Ken Burns pan/zoom/spin, or locked-off static
-/// plates) by testing whether a single 4-DOF 2D similarity transform
-/// Multi-cue detector for flat 2D video motion (2D pan/scroll, 2D zoom/Ken-Burns, 2D rotation,
-/// 2D footage with static UI/overlays, or static-camera 2D animation) vs genuine 3D camera motion.
-fn is_planar_2d_shot(
-    shot: &TrackedShot,
-    primary_matches: &[PairMatch],
-    (cx, cy, nominal_f): (f64, f64, f64),
-    h_inliers: usize,
-    nat_rot: Option<&RotationInit>,
-    ess_cand: Option<&EssentialInit>,
-) -> bool {
-    // If multi-depth 3D parallax clearly exceeds any single plane (`ess.inliers` beats planar
-    // homography `h_inliers` with >= 0.9° triangulation parallax), the scene has real 3D depth!
-    if let Some(ess) = ess_cand
-        && ess.median_parallax_deg >= 0.9
-        && h_inliers * 100 < ess.inliers * 90
-    {
-        return false;
-    }
-
-    if is_planar_2d_pair(primary_matches, (cx, cy), nat_rot) {
-        return true;
-    }
-
-    // Also test supplementary temporal spans across the shot (`0..N/2`, `N/4..3N/4`, `0..N-1`)
-    // so multi-phase 2D pans/zooms or 2D clips with transient foreground occlusions are caught.
-    let nf = shot.times.len();
-    if nf >= 8 {
-        let extra_pairs = [(0, nf - 1), (0, nf / 2), (nf / 4, (3 * nf) / 4)];
-        let mut votes_2d = 0usize;
-        let mut tested = 0usize;
-        for (a, b) in extra_pairs {
-            if b <= a {
-                continue;
-            }
-            let m: Vec<PairMatch> = shot
-                .tracks
-                .iter()
-                .filter_map(|tr| Some(PairMatch { p1: tr.at_frame(a)?, p2: tr.at_frame(b)? }))
-                .collect();
-            if m.len() < 12 {
-                continue;
-            }
-            tested += 1;
-            let (hm, hi) = ransac_homography(&m);
-            let nr = estimate_pair_rotation(&m, hm, cx, cy, nominal_f);
-            let ec = ransac_essential(&m, cx, cy, nominal_f);
-            let has_3d_depth = ec.as_ref().is_some_and(|e| e.median_parallax_deg >= 0.9 && hi * 100 < e.inliers * 90);
-            if !has_3d_depth && is_planar_2d_pair(&m, (cx, cy), nr.as_ref()) {
-                votes_2d += 1;
-            }
-        }
-        if tested >= 2 && votes_2d * 2 >= tested {
-            return true;
-        }
-    }
-    false
-}
-
-fn is_planar_2d_pair(matches: &[PairMatch], (cx, cy): (f64, f64), nat_rot: Option<&RotationInit>) -> bool {
-    let n = matches.len();
-    if n < 12 {
-        return false;
-    }
-    let mut disps: Vec<f64> = matches.iter().map(|m| (m.p2.0 - m.p1.0).hypot(m.p2.1 - m.p1.1)).collect();
-    let median_disp = median_f64(&mut disps);
-    // Nearly static textured shot: no 3D parallax to triangulate, better served by 2D tracking.
-    if median_disp < 1.8 {
-        return true;
-    }
-
-    let pts: Vec<(f64, f64, f64, f64)> = matches.iter().map(|m| (m.p1.0 - cx, m.p1.1 - cy, m.p2.0 - cx, m.p2.1 - cy)).collect();
-    let tol = 1.85f64;
-    let mut rng = Rng::new(0x3244_5349_4d32_3032);
-    let mut best_model = (1.0f64, 0.0f64, 0.0f64, 0.0f64);
-    let mut best_mask = vec![false; n];
-    let mut best_inliers = 0usize;
-
-    for _ in 0..RANSAC_ITERS {
-        let Some([i, j]) = rng.sample_indices::<2>(n) else { break };
-        let (x1i, y1i, x2i, y2i) = pts[i];
-        let (x1j, y1j, x2j, y2j) = pts[j];
-        let dx1 = x1j - x1i;
-        let dy1 = y1j - y1i;
-        let denom = dx1 * dx1 + dy1 * dy1;
-        if denom < 100.0 {
-            continue;
-        }
-        let dx2 = x2j - x2i;
-        let dy2 = y2j - y2i;
-        let a = (dx1 * dx2 + dy1 * dy2) / denom;
-        let b = (dx1 * dy2 - dy1 * dx2) / denom;
-        let scale = a.hypot(b);
-        if !(0.25..=4.0).contains(&scale) {
-            continue;
-        }
-        let tx = x2i - (a * x1i - b * y1i);
-        let ty = y2i - (b * x1i + a * y1i);
-        let mut count = 0usize;
-        let mut mask = vec![false; n];
-        for (k, &(x1, y1, x2, y2)) in pts.iter().enumerate() {
-            let err = (a * x1 - b * y1 + tx - x2).hypot(b * x1 + a * y1 + ty - y2);
-            if err <= tol {
-                count += 1;
-                mask[k] = true;
-            }
-        }
-        if count > best_inliers {
-            best_inliers = count;
-            best_mask = mask;
-            best_model = (a, b, tx, ty);
-        }
-    }
-
-    if best_inliers >= 4
-        && let Some(refined) = refine_similarity_2d(&pts, &best_mask)
-    {
-        best_model = refined;
-    }
-
-    let (a, b, tx, ty) = best_model;
-    let mut all_errs = Vec::with_capacity(n);
-    let mut inlier_errs = Vec::with_capacity(n);
-    let mut sim_inliers = 0usize;
-    let mut static_hud_inliers = 0usize;
-    for &(x1, y1, x2, y2) in &pts {
-        let err = (a * x1 - b * y1 + tx - x2).hypot(b * x1 + a * y1 + ty - y2);
-        let static_disp = (x2 - x1).hypot(y2 - y1);
-        if err <= tol {
-            sim_inliers += 1;
-            inlier_errs.push(err);
-        } else if static_disp <= 1.5 {
-            // Stationary 2D HUD / watermark / subtitle / border over a panning 2D video.
-            static_hud_inliers += 1;
-        }
-        all_errs.push(err);
-    }
-    let two_layer_ratio = (sim_inliers + static_hud_inliers) as f64 / n as f64;
-    let sim_ratio = sim_inliers as f64 / n as f64;
-    let sim_all_med = median_f64(&mut all_errs);
-    let sim_inlier_med = if inlier_errs.is_empty() { sim_all_med } else { median_f64(&mut inlier_errs) };
-
-    if sim_ratio < 0.62 || two_layer_ratio < 0.78 || sim_inlier_med > 1.35 {
-        return false;
-    }
-
-    let sim_scale = a.hypot(b);
-    // Clear 2D zoom without 3D multi-depth parallax is flat 2D footage (Ken-Burns / 2D camera zoom).
-    if (sim_scale - 1.0).abs() >= 0.012 {
-        return true;
-    }
-    // If there is a distinct static HUD/background layer alongside a 2D similarity layer, rigid 3D
-    // camera rotation cannot produce zero motion on one layer and 2D translation on the rest!
-    if static_hud_inliers >= 3 && sim_ratio >= 0.62 {
-        return true;
-    }
-
-    // Distinguish pure 2D pan/spin from genuine 3D tripod rotation (`H = K R K⁻¹`):
-    // Only keep 3D rotation if natural-FOV 3D perspective keystone distinctly beats 2D similarity!
-    let beats_2d_via_3d_keystone = nat_rot.is_some_and(|rot| {
-        median_disp >= 3.0 && rot.all_median_err_px + 0.25 < sim_all_med && rot.median_err_px <= 1.2
-    });
-    !beats_2d_via_3d_keystone
-}
-
-fn refine_similarity_2d(pts: &[(f64, f64, f64, f64)], mask: &[bool]) -> Option<(f64, f64, f64, f64)> {
-    let mut cnt = 0usize;
-    let (mut mx1, mut my1, mut mx2, mut my2) = (0.0, 0.0, 0.0, 0.0);
-    for (&(x1, y1, x2, y2), &keep) in pts.iter().zip(mask) {
-        if keep {
-            mx1 += x1;
-            my1 += y1;
-            mx2 += x2;
-            my2 += y2;
-            cnt += 1;
-        }
-    }
-    if cnt < 2 {
-        return None;
-    }
-    let inv = 1.0 / cnt as f64;
-    mx1 *= inv;
-    my1 *= inv;
-    mx2 *= inv;
-    my2 *= inv;
-
-    let (mut sum_r2, mut num_a, mut num_b) = (0.0, 0.0, 0.0);
-    for (&(x1, y1, x2, y2), &keep) in pts.iter().zip(mask) {
-        if keep {
-            let ux1 = x1 - mx1;
-            let uy1 = y1 - my1;
-            let ux2 = x2 - mx2;
-            let uy2 = y2 - my2;
-            sum_r2 += ux1 * ux1 + uy1 * uy1;
-            num_a += ux1 * ux2 + uy1 * uy2;
-            num_b += ux1 * uy2 - uy1 * ux2;
-        }
-    }
-    if sum_r2 <= 1e-6 {
-        return None;
-    }
-    let a = num_a / sum_r2;
-    let b = num_b / sum_r2;
-    let tx = mx2 - (a * mx1 - b * my1);
-    let ty = my2 - (b * mx1 + a * my1);
-    Some((a, b, tx, ty))
+    (median_err_px <= 2.6).then_some(RotationInit { inliers, median_err_px })
 }
 
 fn wahba_rotation(rays: &[(Vec3, Vec3)], mask: Option<&[bool]>) -> Option<Mat3> {

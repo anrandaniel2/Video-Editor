@@ -2021,20 +2021,33 @@ fn synthetic_planar_2d_mp4(dir: &Path, name: &str, frames: i64) -> String {
 
 #[test]
 fn phase9_planar_2d_autoswitch_and_animated_lights_rendering() {
-    // 1. Flat 2D pan/zoom video automatically switches from 3D Match-Move to 2D Motion Tracking.
+    // 1. Explicit `track_2d: true` toggle solves 2D camera space; default `track_2d: false` never auto-switches to 2D.
     let d = tmp();
     let clip_2d = synthetic_planar_2d_mp4(&d, "planar_pan_zoom.mp4", 28);
     let m = MobileSession::new();
     m.new_project("Phase9".into(), 320, 180, 24).unwrap();
     let cid = m.add_media(vec![clip_2d]).unwrap()[0];
 
-    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    // With default `track_2d: false`, 3D camera solve must NOT auto-switch to 2D motion tracking.
+    let job_3d = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st_3d = poll_camera_solve(&m, job_3d);
+    assert!(st_3d.switched_to_motion_track.is_none(), "default 3D mode must never auto-switch to 2D: {st_3d:?}");
+    assert!(m.motion_tracks().unwrap().is_empty(), "no 2D MotionTrack may be created when 2D toggle is off");
+
+    // Clear any 3D solve produced on the synthetic clip before testing the explicit 2D toggle.
+    for s in m.camera_solves().unwrap() {
+        m.delete_camera_solve(s.id).unwrap();
+    }
+
+    // With `track_2d: true`, 2D camera-space tracking runs explicitly.
+    let opts_2d = advanced::SolveCameraOptions { track_2d: true, ..Default::default() };
+    let job = m.start_camera_solve(cid, opts_2d).unwrap();
     let st = poll_camera_solve(&m, job);
-    assert!(st.error.is_none(), "2D auto-switch must succeed cleanly without error, got {st:?}");
+    assert!(st.error.is_none(), "explicit 2D solve must succeed cleanly without error, got {st:?}");
     assert!(st.switched_to_motion_track.is_some(), "status must report switched_to_motion_track=Some(...), got {st:?}");
-    assert!(m.camera_solves().unwrap().is_empty(), "no bogus 3D solve should be saved for a 2D video");
+    assert!(m.camera_solves().unwrap().is_empty(), "no 3D solve should be created when 2D toggle is on");
     let tracks_2d = m.motion_tracks().unwrap();
-    assert_eq!(tracks_2d.len(), 1, "automatic 2D MotionTrack must be created on the clip");
+    assert_eq!(tracks_2d.len(), 1, "2D MotionTrack must be created on the clip when 2D toggle is on");
     assert_eq!(tracks_2d[0].clip, cid);
     assert!(tracks_2d[0].samples >= 20, "2D MotionTrack must cover the clip frames: {:?}", tracks_2d[0]);
 
@@ -2090,10 +2103,11 @@ fn phase10_2d_camera_space_lock_playhead_rebase_and_foreground_occlusion() {
     m.set_playhead(mid_t);
     let cube = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
 
-    let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let opts_2d = advanced::SolveCameraOptions { track_2d: true, ..Default::default() };
+    let job = m.start_camera_solve(cid, opts_2d).unwrap();
     let st = poll_camera_solve(&m, job);
     assert!(st.error.is_none(), "2D solve must succeed: {st:?}");
-    assert!(st.switched_to_motion_track.is_some(), "must auto-switch to 2D track: {st:?}");
+    assert!(st.switched_to_motion_track.is_some(), "must solve 2D track when 2D toggle is enabled: {st:?}");
 
     let obj_mid = m.object3d_state(cube).unwrap();
     assert!(obj_mid.settings.follow_track, "existing 3D object must auto-follow 2D track");

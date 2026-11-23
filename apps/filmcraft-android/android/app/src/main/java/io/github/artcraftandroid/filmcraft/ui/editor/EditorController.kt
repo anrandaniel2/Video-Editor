@@ -1658,12 +1658,12 @@ class EditorController(
 
     fun solveCamera(
         clipId: ULong? = null,
-        options: SolveCameraOptions = SolveCameraOptions(15.0, true, StereoLayout.MONO, 64.0),
+        options: SolveCameraOptions = SolveCameraOptions(15.0, true, StereoLayout.MONO, 64.0, false),
     ) {
         if (cameraSolveProgress != null) return
         val target = clipId ?: matchmoveTargetClip?.id
         if (target == null) {
-            host.tell("Add or select a video clip to solve 3D camera motion.")
+            host.tell("Add or select a video clip to solve camera motion.")
             return
         }
         val prior3dId = selectedClip?.takeIf { it.has3d }?.id
@@ -1694,7 +1694,7 @@ class EditorController(
                                 trackingLayout = StereoLayout.MONO
                                 loadTracks()
                                 host.tell(
-                                    "2D clip detected — locked to 2D background space & behind foreground (${track2d.samples} frames · ${track2d.quality.toInt()}% lock).",
+                                    "Solved 2D camera space (${track2d.samples} frames · ${track2d.quality.toInt()}% lock).",
                                 )
                             }
                             s != null -> {

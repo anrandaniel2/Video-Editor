@@ -309,11 +309,14 @@ pub struct SolveCameraOptions {
     pub stereo: StereoLayout,
     /// Maximum stereoscopic disparity in working pixels (depth sensitivity).
     pub stereo_baseline: f64,
+    /// Explicit user toggle: when `true`, solve 2D camera space directly instead of 3D camera motion.
+    /// When `false` (default), run pure 3D camera match-move without auto-switching to 2D.
+    pub track_2d: bool,
 }
 
 impl Default for SolveCameraOptions {
     fn default() -> Self {
-        Self { max_seconds: 15.0, refine_focal: false, stereo: StereoLayout::Mono, stereo_baseline: 64.0 }
+        Self { max_seconds: 15.0, refine_focal: false, stereo: StereoLayout::Mono, stereo_baseline: 64.0, track_2d: false }
     }
 }
 
@@ -1230,48 +1233,11 @@ struct SolveWorkerArgs {
     frame_step: Tick,
     scale: f32,
     opts: SolveOptions,
+    track_2d: bool,
 }
 
-fn frame_has_visual_detail(rgba: &[u8], w: usize, h: usize) -> bool {
-    if w < 4 || h < 4 || rgba.len() < w.saturating_mul(h).saturating_mul(4) {
-        return false;
-    }
-    let mut min_y = 255.0f32;
-    let mut max_y = 0.0f32;
-    for px in rgba[..w * h * 4].chunks_exact(4) {
-        let y = 0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32;
-        if y < min_y {
-            min_y = y;
-        }
-        if y > max_y {
-            max_y = y;
-        }
-        if max_y - min_y >= 6.0 {
-            return true;
-        }
-    }
-    false
-}
-
-fn clip_has_trackable_texture(args: &SolveWorkerArgs) -> bool {
-    let span = (args.win_end - args.win_start).0.max(1);
-    for frac in [0i64, 1, 2, 3] {
-        let sample_t = Tick(args.win_start.0.saturating_add(span.saturating_mul(frac) / 4))
-            .min((args.win_end - args.frame_step).max(args.win_start));
-        let st = args.clip.source_time_at(sample_t);
-        let Ok(f) = args.source.video_frame(FrameRequest { time: st, scale: args.scale }) else {
-            continue;
-        };
-        let (w, h, rgba) = f.to_rgba8_max_side(320);
-        if frame_has_visual_detail(&rgba, w, h) {
-            return true;
-        }
-    }
-    false
-}
-
-fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: usize) -> Result<SolveWorkerOutcome, String> {
-    job.set(0.55, Some("2D footage detected — solving 2D camera space…"));
+fn run_2d_camera_space_solver(job: &SolveJob, args: &SolveWorkerArgs, est_frames: usize) -> Result<SolveWorkerOutcome, String> {
+    job.set(0.05, Some("Solving 2D camera space…"));
     let working_side = match args.opts.layout {
         filmcraft_project::StereoLayout::Mono => 512,
         filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1024,
@@ -1302,7 +1268,7 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
                 rgba: &rgba,
             })?;
             idx += 1;
-            job.set(0.55 + 0.43 * (idx as f64 / est_frames.max(1) as f64).clamp(0.0, 1.0), None);
+            job.set(0.05 + 0.93 * (idx as f64 / est_frames.max(1) as f64).clamp(0.0, 1.0), None);
             t += args.frame_step;
         }
         Ok(())
@@ -1321,6 +1287,9 @@ fn run_fallback_2d_tracker(job: &SolveJob, args: &SolveWorkerArgs, est_frames: u
 
 fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorkerOutcome, String> {
     let est_frames = (((args.win_end - args.win_start).0 / args.frame_step.0).max(1) as usize).min(filmcraft_project::CameraSolve::MAX_FRAMES);
+    if args.track_2d {
+        return filmcraft_media::cancel::with_background(true, || run_2d_camera_space_solver(job, &args, est_frames));
+    }
     let working_side = match args.opts.layout {
         filmcraft_project::StereoLayout::Mono => 480,
         filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 960,
@@ -1350,10 +1319,6 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorker
     });
     match res {
         Ok(rep) => Ok(SolveWorkerOutcome::Camera3D(rep)),
-        Err(SolveError::Planar2DVideo) => filmcraft_media::cancel::with_background(true, || run_fallback_2d_tracker(job, &args, est_frames)),
-        Err(SolveError::InsufficientMotion | SolveError::PoorQuality { .. }) if clip_has_trackable_texture(&args) => {
-            filmcraft_media::cancel::with_background(true, || run_fallback_2d_tracker(job, &args, est_frames))
-        }
         Err(SolveError::Cancelled) => Err("cancelled".to_string()),
         Err(other_err) => Err(other_err.to_string()),
     }
@@ -1464,7 +1429,7 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
         applied: Mutex::new(None),
     });
     let worker_job = job.clone();
-    let args = SolveWorkerArgs { clip: c, source, win_start, win_end, frame_step, scale, opts: solve_opts };
+    let args = SolveWorkerArgs { clip: c, source, win_start, win_end, frame_step, scale, opts: solve_opts, track_2d: opts.track_2d };
     std::thread::Builder::new()
         .name("filmcraft-matchmove".into())
         .spawn(move || {
@@ -1598,7 +1563,7 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
         }
         Some(Ok(AppliedSolveOutcome::Track2D(track))) => CameraSolveStatus {
             progress: 1.0,
-            stage: "Switched to 2D tracking".into(),
+            stage: "2D tracking complete".into(),
             finished: true,
             error: None,
             solve: None,
