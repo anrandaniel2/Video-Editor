@@ -402,10 +402,9 @@ jobs:
           if not called:
               fail("the generated bindings call no ffi_ entry point: they were not generated")
 
-          # a component's own entry points are its namespace's; the buffer helpers are shared, and
-          # which library carries one is the linker's business, so those only have to be somewhere
+          # One library carries both FilmCraft and ProCraft components (via uniffi libraryOverride).
           carriers = {"ffi_filmcraft_android": "/libfilmcraft_android.so",
-                      "ffi_procraft_core": "/libprocraft_core.so"}
+                      "ffi_procraft_core": "/libfilmcraft_android.so"}
           for component, suffix in carriers.items():
               wanted = {n for n in called if n.startswith(component)}
               if not wanted:

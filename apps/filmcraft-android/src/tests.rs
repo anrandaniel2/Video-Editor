@@ -2087,7 +2087,7 @@ fn phase10_2d_camera_space_lock_playhead_rebase_and_foreground_occlusion() {
     // Seek to mid-clip BEFORE adding the 3D object and solving: the 3D object must stay right at
     // (160, 90) at mid-clip (no anchor jump!) and move smoothly with the 2D background across frames.
     let mid_t = SEC / 2;
-    m.set_playhead(mid_t).unwrap();
+    m.set_playhead(mid_t);
     let cube = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
 
     let job = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
