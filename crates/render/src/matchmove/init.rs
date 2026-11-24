@@ -201,7 +201,7 @@ fn best_focal_hypothesis(
     scales: &[f64],
     cancel: &dyn Fn() -> bool,
 ) -> Result<(f64, Option<RotationInit>, Option<EssentialInit>), SolveError> {
-    let mut best: Option<(usize, f64, Option<RotationInit>, Option<EssentialInit>)> = None;
+    let mut best: Option<(usize, f64, f64, Option<RotationInit>, Option<EssentialInit>)> = None;
     for &s in scales {
         if cancel() {
             return Err(SolveError::Cancelled);
@@ -210,12 +210,20 @@ fn best_focal_hypothesis(
         let rot = estimate_pair_rotation(matches, h_mat, cx, cy, f);
         let ess = ransac_essential(matches, h_mat, cx, cy, f);
         let score = ess.as_ref().map_or(0, |e| e.inliers).max(rot.as_ref().map_or(0, |r| r.inliers));
-        if score > 0 && best.as_ref().is_none_or(|b| score > b.0) {
-            best = Some((score, f, rot, ess));
+        let tie_err = rot.as_ref().map_or(10.0, |r| r.median_err_px);
+        // Break near-ties in inlier count using pixel reprojection error so wide-angle portrait
+        // footage (`s ~ 0.65`) beats default `CLASSIC_FOV` (`s = 1.0`) when perspective foreshortening
+        // differs by 1-2 px!
+        if score > 0
+            && best.as_ref().is_none_or(|b| {
+                score > b.0 + 2 || (score + 2 >= b.0 && tie_err + 0.08 < b.1) || (score > b.0 && tie_err <= b.1 + 0.08)
+            })
+        {
+            best = Some((score, tie_err, f, rot, ess));
         }
     }
     Ok(match best {
-        Some((_, f, rot, ess)) => (f, rot, ess),
+        Some((_, _, f, rot, ess)) => (f, rot, ess),
         None => (nominal_f, None, None),
     })
 }
@@ -846,13 +854,54 @@ fn solve_frame_rotation(pairs: &[(Vec3, Vec3, (f64, f64))], seed_r: Mat3, cx: f6
         return None;
     }
     let rays: Vec<(Vec3, Vec3)> = pairs.iter().map(|&(dw, dc, _)| (dw, dc)).collect();
-    let mut r = wahba_rotation(&rays, None).unwrap_or(seed_r);
-    for _ in 0..3 {
+    let score_rot = |cand: Mat3, tol: f64| -> (usize, f64) {
+        let mut inl = 0usize;
+        let mut err_sum = 0.0f64;
+        for &(dw, _, (u, v)) in pairs {
+            let q = mat3_mul_vec(cand, dw);
+            if q[2] > 1e-5 {
+                let err = (cx + f * q[0] / q[2] - u).hypot(cy + f * q[1] / q[2] - v);
+                if err <= tol {
+                    inl += 1;
+                    err_sum += err;
+                }
+            }
+        }
+        (inl, err_sum)
+    };
+
+    let mut best_seed = (seed_r, 0usize, f64::INFINITY);
+    {
+        let (inl, es) = score_rot(seed_r, 4.5);
+        best_seed = (seed_r, inl, es);
+    }
+    if let Some(rw) = wahba_rotation(&rays, None) {
+        let (inl, es) = score_rot(rw, 4.5);
+        if inl > best_seed.1 || (inl == best_seed.1 && es < best_seed.2) {
+            best_seed = (rw, inl, es);
+        }
+    }
+    let mut rng = Rng::new(0x4652_4d52_4f54_3250 ^ (pairs.len() as u64));
+    for _ in 0..90 {
+        let Some([i, j]) = rng.sample_indices::<2>(rays.len()) else { break };
+        if dot3(rays[i].0, rays[j].0) > 0.9985 {
+            continue;
+        }
+        if let Some(rc) = wahba_rotation(&[rays[i], rays[j]], None) {
+            let (inl, es) = score_rot(rc, 4.5);
+            if inl > best_seed.1 || (inl == best_seed.1 && es < best_seed.2) {
+                best_seed = (rc, inl, es);
+            }
+        }
+    }
+
+    let mut r = best_seed.0;
+    for &tol in &[4.5, 3.2, 2.5] {
         let keep: Vec<bool> = pairs
             .iter()
             .map(|&(dw, _, (u, v))| {
                 let q = mat3_mul_vec(r, dw);
-                q[2] > 1e-5 && (cx + f * q[0] / q[2] - u).hypot(cy + f * q[1] / q[2] - v) <= 2.5
+                q[2] > 1e-5 && (cx + f * q[0] / q[2] - u).hypot(cy + f * q[1] / q[2] - v) <= tol
             })
             .collect();
         if let Some(next_r) = wahba_rotation(&rays, Some(&keep)) {

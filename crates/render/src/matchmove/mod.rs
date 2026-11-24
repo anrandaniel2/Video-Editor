@@ -133,7 +133,11 @@ where
         return Err(SolveError::Cancelled);
     }
     let mut model = initialize_scene(&shot, opts.refine_focal, cancel)?;
-    run_bundle_adjustment(&mut model, &shot.tracks, opts.refine_focal, cancel)?;
+    // Refine shared focal length whenever non-default lens seed was chosen (e.g. portrait 9:16
+    // smartphone wide-angle) or when explicitly requested via `opts.refine_focal`.
+    let nominal_focal = (shot.height as f64 * 0.5) / (f64::from(filmcraft_project::CLASSIC_FOV).to_radians() * 0.5).tan();
+    let refine_f = opts.refine_focal || (model.focal - nominal_focal).abs() > nominal_focal * 0.05;
+    run_bundle_adjustment(&mut model, &shot.tracks, refine_f, cancel)?;
     if opts.layout != StereoLayout::Mono {
         apply_stereo_scale_prior(&mut model, &shot.stereo_obs, shot.width, opts.stereo_baseline);
     }
