@@ -1013,9 +1013,156 @@ pub(crate) fn extrude_text(s: &mut Session, id: u64, depth: f64, bevel: f64) -> 
     })
 }
 
+/// Conform a decoded source [`filmcraft_frame::VideoFrame`] into sequence canvas space (or stereo
+/// dual-canvas container space for `SideBySide` / `TopBottom`) at working resolution `<= max_side`,
+/// applying `motion_matrix` (`scale_to_frame`, Position/Scale/Rotation/Anchor, PAR).
+///
+/// For half-frame `SideBySide` / `TopBottom` media, each half-frame eye is unpacked to the sequence
+/// display aspect so `view_rect` produces two full-aspect eyes (`(out_w, out_h)` each) matching
+/// `SceneCamera3D`'s principal point and vertical FOV!
+fn frame_rgba_in_sequence_space(
+    seq: &Sequence,
+    clip: &TrackItem,
+    full_src: (u32, u32),
+    src_par: Option<(u32, u32)>,
+    timeline_t: Tick,
+    frame: &filmcraft_frame::VideoFrame,
+    layout: filmcraft_project::StereoLayout,
+    max_side: usize,
+) -> (usize, usize, Vec<u8>) {
+    let seq_w = seq.settings.width.max(1) as f64;
+    let seq_h = seq.settings.height.max(1) as f64;
+    let seq_long = seq_w.max(seq_h);
+    let out_scale = (max_side.max(16) as f64 / seq_long).min(1.0);
+    let eye_w = ((seq_w * out_scale).round() as usize).max(16);
+    let eye_h = ((seq_h * out_scale).round() as usize).max(16);
+
+    let dec_cap = match layout {
+        filmcraft_project::StereoLayout::Mono => max_side.saturating_mul(2).max(512),
+        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => {
+            max_side.saturating_mul(3).max(960)
+        }
+    };
+    let (dw, dh, src_rgba) = frame.to_rgba8_max_side(dec_cap);
+    if dw == 0 || dh == 0 {
+        return (eye_w, eye_h, vec![0u8; eye_w * eye_h * 4]);
+    }
+
+    let sample_rgba = |sx: f64, sy: f64| -> [u8; 4] {
+        if sx < -0.5 || sy < -0.5 || sx >= dw as f64 - 0.5 || sy >= dh as f64 - 0.5 {
+            return [0, 0, 0, 255];
+        }
+        let cx = sx.clamp(0.0, (dw - 1) as f64);
+        let cy = sy.clamp(0.0, (dh - 1) as f64);
+        let x0 = cx.floor() as usize;
+        let y0 = cy.floor() as usize;
+        let x1 = (x0 + 1).min(dw - 1);
+        let y1 = (y0 + 1).min(dh - 1);
+        let fx = (cx - x0 as f64) as f32;
+        let fy = (cy - y0 as f64) as f32;
+        let p = |x: usize, y: usize| -> [f32; 4] {
+            let i = (y * dw + x) * 4;
+            [
+                src_rgba[i] as f32,
+                src_rgba[i + 1] as f32,
+                src_rgba[i + 2] as f32,
+                src_rgba[i + 3] as f32,
+            ]
+        };
+        let p00 = p(x0, y0);
+        let p10 = p(x1, y0);
+        let p01 = p(x0, y1);
+        let p11 = p(x1, y1);
+        let mut out = [0u8; 4];
+        for c in 0..4 {
+            let top = p00[c] + (p10[c] - p00[c]) * fx;
+            let bot = p01[c] + (p11[c] - p01[c]) * fx;
+            out[c] = (top + (bot - top) * fy).round().clamp(0.0, 255.0) as u8;
+        }
+        out
+    };
+
+    match layout {
+        filmcraft_project::StereoLayout::Mono => {
+            let mt = clip.effect_time_at(timeline_t);
+            let motion = filmcraft_render::motion_matrix(seq, clip, full_src, src_par, mt);
+            let sx_dec = full_src.0.max(1) as f64 / dw as f64;
+            let sy_dec = full_src.1.max(1) as f64 / dh as f64;
+            let m = filmcraft_geom::Affine::scale(eye_w as f64 / seq_w, eye_h as f64 / seq_h)
+                .then_apply(&motion)
+                .then_apply(&filmcraft_geom::Affine::scale(sx_dec, sy_dec));
+            if dw == eye_w
+                && dh == eye_h
+                && (m.a - 1.0).abs() < 1e-4
+                && (m.d - 1.0).abs() < 1e-4
+                && m.b.abs() < 1e-5
+                && m.c.abs() < 1e-5
+                && m.e.abs() < 0.5
+                && m.f.abs() < 0.5
+            {
+                return (dw, dh, src_rgba);
+            }
+            let Some(inv) = m.inverse() else {
+                return (dw, dh, src_rgba);
+            };
+            let mut out = vec![0u8; eye_w * eye_h * 4];
+            for y in 0..eye_h {
+                for x in 0..eye_w {
+                    let sp = inv.apply(filmcraft_geom::Vec2::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let rgba = sample_rgba(sp.x - 0.5, sp.y - 0.5);
+                    let i = (y * eye_w + x) * 4;
+                    out[i..i + 4].copy_from_slice(&rgba);
+                }
+            }
+            (eye_w, eye_h, out)
+        }
+        filmcraft_project::StereoLayout::SideBySide => {
+            let half_src_w = (dw as f64 * 0.5).max(1.0);
+            let cont_w = eye_w * 2;
+            let mut out = vec![0u8; cont_w * eye_h * 4];
+            for y in 0..eye_h {
+                let sy = ((y as f64 + 0.5) * dh as f64 / eye_h as f64) - 0.5;
+                for x in 0..eye_w {
+                    let sx_l = ((x as f64 + 0.5) * half_src_w / eye_w as f64) - 0.5;
+                    let sx_r = half_src_w + sx_l;
+                    let pl = sample_rgba(sx_l, sy);
+                    let pr = sample_rgba(sx_r, sy);
+                    let il = (y * cont_w + x) * 4;
+                    let ir = (y * cont_w + eye_w + x) * 4;
+                    out[il..il + 4].copy_from_slice(&pl);
+                    out[ir..ir + 4].copy_from_slice(&pr);
+                }
+            }
+            (cont_w, eye_h, out)
+        }
+        filmcraft_project::StereoLayout::TopBottom => {
+            let half_src_h = (dh as f64 * 0.5).max(1.0);
+            let cont_h = eye_h * 2;
+            let mut out = vec![0u8; eye_w * cont_h * 4];
+            for y in 0..eye_h {
+                let sy_t = ((y as f64 + 0.5) * half_src_h / eye_h as f64) - 0.5;
+                let sy_b = half_src_h + sy_t;
+                for x in 0..eye_w {
+                    let sx = ((x as f64 + 0.5) * dw as f64 / eye_w as f64) - 0.5;
+                    let pt = sample_rgba(sx, sy_t);
+                    let pb = sample_rgba(sx, sy_b);
+                    let it = (y * eye_w + x) * 4;
+                    let ib = ((eye_h + y) * eye_w + x) * 4;
+                    out[it..it + 4].copy_from_slice(&pt);
+                    out[ib..ib + 4].copy_from_slice(&pb);
+                }
+            }
+            (eye_w, cont_h, out)
+        }
+    }
+}
+
 pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Result<MotionTrackInfo, MobileError> {
-    let (sid, seq) = model::sequence(s)?;
-    let c = seq.find_item(ClipId(id)).map(|(_, c)| c.clone()).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
+    let (sid, seq_snap) = {
+        let (sid, seq) = model::sequence(s)?;
+        (sid, seq.clone())
+    };
+    let c = seq_snap.find_item(ClipId(id)).map(|(_, c)| c.clone()).ok_or_else(|| MobileError::Command("That clip is gone.".into()))?;
     let pi = s.project.item(c.item).ok_or_else(|| MobileError::Command("That clip has no media.".into()))?;
     if !matches!(&pi.kind, ItemKind::Media(m) if m.info.has_video()) {
         return Err(MobileError::Command("Tracking needs a video clip.".into()));
@@ -1027,10 +1174,13 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
     let end = c.end().min(start + max_ticks);
     let provider = s.media.provider(s.project.clone(), s.services.clone());
     let source = provider.source(c.item).ok_or_else(|| MobileError::Command("The clip's media could not be opened.".into()))?;
-    let (src_w, src_h) = source.info().video.as_ref().map(|v| (v.width, v.height)).unwrap_or((seq.settings.width, seq.settings.height));
-    let scale = (640.0f32 / src_w.max(src_h).max(1) as f32).min(1.0);
+    let full_src = filmcraft_render::source_size(&s.project, c.item)
+        .or_else(|| source.info().video.as_ref().map(|v| (v.width, v.height)))
+        .unwrap_or((seq_snap.settings.width, seq_snap.settings.height));
+    let src_par = filmcraft_render::source_par(&s.project, c.item);
     let patch = opts.patch_size.clamp(9, 41) as usize;
     let max_disp = finite(opts.baseline, 64.0).clamp(4.0, 256.0) as f32;
+    let layout_proj = opts.stereo.project();
     // Streamed directly to the GPU tracker (`Tracker::new_rgba` / `push_rgba`), keeping at most
     // two pyramids in VRAM (or RAM fallback) at a time.
     let mut tracker: Option<Tracker> = None;
@@ -1041,12 +1191,9 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
             break;
         }
         let st = c.source_time_at(t);
-        let Ok(f) = source.video_frame(FrameRequest { time: st, scale }) else { break };
-        let (full_w, full_h, rgba) = f.to_rgba8_max_side(match opts.stereo {
-            StereoLayout::Mono => 640,
-            StereoLayout::SideBySide | StereoLayout::TopBottom => 1280,
-        });
-        let (vx, vy, vw, vh) = view_rect(opts.stereo.project(), full_w, full_h);
+        let Ok(f) = source.video_frame(FrameRequest { time: st, scale: 1.0 }) else { break };
+        let (full_w, full_h, rgba) = frame_rgba_in_sequence_space(&seq_snap, &c, full_src, src_par, t, &f, layout_proj, 640);
+        let (vx, vy, vw, vh) = view_rect(layout_proj, full_w, full_h);
         let right_crop = match opts.stereo {
             StereoLayout::Mono => None,
             StereoLayout::SideBySide => Some((vx + vw, vy, vw, vh)),
@@ -1067,8 +1214,8 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
         };
         samples.push(filmcraft_project::TrackSample {
             time: t - c.start,
-            x: ((vx as f32 + p.x) / full_w as f32).clamp(-64.0, 64.0),
-            y: ((vy as f32 + p.y) / full_h as f32).clamp(-64.0, 64.0),
+            x: (p.x / vw.max(1) as f32).clamp(-64.0, 64.0),
+            y: (p.y / vh.max(1) as f32).clamp(-64.0, 64.0),
             z: p.z,
             scale: p.scale,
             rotation: p.rotation,
@@ -1086,7 +1233,7 @@ pub(crate) fn track_motion(s: &mut Session, id: u64, opts: &TrackOptions) -> Res
     let first = samples.first().map(|s| s.time).unwrap_or(Tick::ZERO);
     let last = samples.last().map(|s| s.time).unwrap_or(Tick::ZERO);
     let layout = opts.stereo;
-    let name = format!("Track {}", seq.motion_tracks.len() + 1);
+    let name = format!("Track {}", seq_snap.motion_tracks.len() + 1);
     let track_name = name.clone();
     let track_id = s.edit("Track Motion", |p, _| {
         let id = p.alloc_id();
@@ -1186,7 +1333,12 @@ pub(crate) fn set_background(s: &mut Session, id: u64, st: &BackgroundSettings, 
 
 enum SolveWorkerOutcome {
     Camera3D(SolveReport),
-    Track2D { clip: ClipId, clip_start: Tick, samples: Vec<filmcraft_project::TrackSample> },
+    Track2D {
+        clip: ClipId,
+        clip_start: Tick,
+        layout: filmcraft_project::StereoLayout,
+        samples: Vec<filmcraft_project::TrackSample>,
+    },
 }
 
 enum AppliedSolveOutcome {
@@ -1226,22 +1378,20 @@ impl SolveJob {
 }
 
 struct SolveWorkerArgs {
+    seq: Sequence,
     clip: TrackItem,
+    full_src: (u32, u32),
+    src_par: Option<(u32, u32)>,
     source: SharedSource,
     win_start: Tick,
     win_end: Tick,
     frame_step: Tick,
-    scale: f32,
     opts: SolveOptions,
     track_2d: bool,
 }
 
 fn run_2d_camera_space_solver(job: &SolveJob, args: &SolveWorkerArgs, est_frames: usize) -> Result<SolveWorkerOutcome, String> {
     job.set(0.05, Some("Solving 2D camera space…"));
-    let working_side = match args.opts.layout {
-        filmcraft_project::StereoLayout::Mono => 512,
-        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 1024,
-    };
     let cam2d_opts = Camera2DOptions {
         stereo: args.opts.layout,
         playhead: args.opts.playhead,
@@ -1257,9 +1407,10 @@ fn run_2d_camera_space_solver(job: &SolveJob, args: &SolveWorkerArgs, est_frames
             let st = args.clip.source_time_at(t);
             let f = args
                 .source
-                .video_frame(FrameRequest { time: st, scale: args.scale })
+                .video_frame(FrameRequest { time: st, scale: 1.0 })
                 .map_err(|e| Camera2DError::Decode(e.to_string()))?;
-            let (full_w, full_h, rgba) = f.to_rgba8_max_side(working_side);
+            let (full_w, full_h, rgba) =
+                frame_rgba_in_sequence_space(&args.seq, &args.clip, args.full_src, args.src_par, t, &f, args.opts.layout, 512);
             let rel_t = Tick(t.0.saturating_sub(args.clip.start.0));
             sink(Frame2D {
                 time: rel_t,
@@ -1281,6 +1432,7 @@ fn run_2d_camera_space_solver(job: &SolveJob, args: &SolveWorkerArgs, est_frames
     Ok(SolveWorkerOutcome::Track2D {
         clip: args.clip.id,
         clip_start: args.clip.start,
+        layout: args.opts.layout,
         samples: solved.samples,
     })
 }
@@ -1290,10 +1442,6 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorker
     if args.track_2d {
         return filmcraft_media::cancel::with_background(true, || run_2d_camera_space_solver(job, &args, est_frames));
     }
-    let working_side = match args.opts.layout {
-        filmcraft_project::StereoLayout::Mono => 480,
-        filmcraft_project::StereoLayout::SideBySide | filmcraft_project::StereoLayout::TopBottom => 960,
-    };
     job.set(0.02, Some("Reading video frames…"));
     let mut t = args.win_start;
     let mut decoded = 0usize;
@@ -1310,8 +1458,9 @@ fn run_solve_worker(job: &SolveJob, args: SolveWorkerArgs) -> Result<SolveWorker
             let cur = t;
             t += args.frame_step;
             let st = args.clip.source_time_at(cur);
-            let f = args.source.video_frame(FrameRequest { time: st, scale: args.scale }).map_err(|e| SolveError::Decode(e.to_string()))?;
-            let (w, h, rgba) = f.to_rgba8_max_side(working_side);
+            let f = args.source.video_frame(FrameRequest { time: st, scale: 1.0 }).map_err(|e| SolveError::Decode(e.to_string()))?;
+            let (w, h, rgba) =
+                frame_rgba_in_sequence_space(&args.seq, &args.clip, args.full_src, args.src_par, cur, &f, args.opts.layout, 640);
             decoded += 1;
             job.set(0.46 * (decoded as f64 / est_frames as f64).clamp(0.0, 1.0), None);
             Ok(Some(InputFrame { time: Tick(cur.0.saturating_sub(args.clip.start.0)), width: w, height: h, rgba }))
@@ -1403,12 +1552,11 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
         (ws, (ws + max_ticks).min(c.end()))
     };
 
-    let (src_w, src_h) = source.info().video.as_ref().map(|v| (v.width, v.height)).unwrap_or((seq.settings.width, seq.settings.height));
-    let target_long = match opts.stereo {
-        StereoLayout::Mono => 480.0f32,
-        StereoLayout::SideBySide | StereoLayout::TopBottom => 960.0f32,
-    };
-    let scale = (target_long / src_w.max(src_h).max(1) as f32).min(1.0);
+    let full_src = filmcraft_render::source_size(&s.project, c.item)
+        .or_else(|| source.info().video.as_ref().map(|v| (v.width, v.height)))
+        .unwrap_or((seq.settings.width, seq.settings.height));
+    let src_par = filmcraft_render::source_par(&s.project, c.item);
+    let seq_snap = seq.clone();
     let solve_opts = SolveOptions {
         id: 0,
         clip: c.id,
@@ -1429,7 +1577,18 @@ pub(crate) fn start_camera_solve(s: &Session, id: u64, opts: &SolveCameraOptions
         applied: Mutex::new(None),
     });
     let worker_job = job.clone();
-    let args = SolveWorkerArgs { clip: c, source, win_start, win_end, frame_step, scale, opts: solve_opts, track_2d: opts.track_2d };
+    let args = SolveWorkerArgs {
+        seq: seq_snap,
+        clip: c,
+        full_src,
+        src_par,
+        source,
+        win_start,
+        win_end,
+        frame_step,
+        opts: solve_opts,
+        track_2d: opts.track_2d,
+    };
     std::thread::Builder::new()
         .name("filmcraft-matchmove".into())
         .spawn(move || {
@@ -1467,8 +1626,9 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
             Err("cancelled".to_string())
         } else {
             match res {
-                Ok(SolveWorkerOutcome::Camera3D(rep)) => s
-                    .edit("Solve Camera", |p, _| {
+                Ok(SolveWorkerOutcome::Camera3D(rep)) => {
+                    let ph = s.playhead();
+                    s.edit("Solve Camera", |p, _| {
                         let id = p.alloc_id();
                         let q = p.sequence_mut(job.seq).ok_or(EngineError::NoSequence)?;
                         let name = format!("Solve {}", q.camera_solves.len() + 1);
@@ -1478,10 +1638,47 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
                         let info = solve_info(q, &solve);
                         q.camera_solves.push(solve);
                         q.matchmove = Some(filmcraft_project::SequenceMatchMove::new(id));
+                        // If any 3D objects were previously following a 2D motion track, rebase
+                        // their stored pose to their current on-screen pose at `ph` and disable
+                        // `follow_track` so 2D motion isn't double-applied on top of 3D match-move!
+                        let center = (f64::from(q.settings.width) / 2.0, f64::from(q.settings.height) / 2.0);
+                        let mut unlinks: Vec<(ClipId, Tick, (f64, f64, f64, f64, f64))> = Vec::new();
+                        for track in &q.video_tracks {
+                            for item in &track.items {
+                                if let Some(e) = item.effects.iter().find(|e| e.effect == OBJECT3D) {
+                                    let mt = item.effect_time_at(ph);
+                                    let st = object_settings(e, mt, center);
+                                    if st.follow_track && st.track_id != 0 {
+                                        let screen_pose = forward_track_2d(
+                                            q,
+                                            st.track_id,
+                                            ph,
+                                            (st.x, st.y, st.z, st.scale, st.rotation_z),
+                                            st.track_depth,
+                                        );
+                                        unlinks.push((item.id, mt, screen_pose));
+                                    }
+                                }
+                            }
+                        }
+                        for (cid, mt, (nx, ny, nz, nsc, nrz)) in unlinks {
+                            if let Some((_, item)) = q.find_item_mut(cid)
+                                && let Some(e) = item.effects.iter_mut().find(|e| e.effect == OBJECT3D)
+                            {
+                                if let Some(pos_p) = e.params.get_mut("position") {
+                                    pos_p.set_at(mt, ParamValue::Vec2(filmcraft_geom::Vec2::new(nx, ny)));
+                                }
+                                set_f(e, "z", nz, mt);
+                                set_f(e, "scale", nsc, mt);
+                                set_f(e, "rotation_z", nrz, mt);
+                                set_bool(e, "follow_track", false);
+                            }
+                        }
                         Ok(AppliedSolveOutcome::Camera3D(info))
                     })
-                    .map_err(|e| e.to_string()),
-                Ok(SolveWorkerOutcome::Track2D { clip, clip_start, samples }) => {
+                    .map_err(|e| e.to_string())
+                }
+                Ok(SolveWorkerOutcome::Track2D { clip, clip_start, layout, samples }) => {
                     let ph = s.playhead();
                     s.edit("Switch to 2D Tracking", |p, _| {
                         let id = p.alloc_id();
@@ -1496,7 +1693,7 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
                             id,
                             clip,
                             name: name.clone(),
-                            layout: filmcraft_project::StereoLayout::Mono,
+                            layout,
                             samples,
                         });
                         if let Some(mm) = q.matchmove.as_mut() {
@@ -1540,7 +1737,7 @@ pub(crate) fn camera_solve_status(s: &mut Session, job: &SolveJob) -> CameraSolv
                             id,
                             clip: clip.0,
                             name,
-                            layout: StereoLayout::Mono,
+                            layout: StereoLayout::from_project(layout),
                             samples: count,
                             start: clip_start.0 + first.0,
                             end: clip_start.0 + last.0,

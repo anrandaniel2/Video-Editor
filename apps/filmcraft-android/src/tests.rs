@@ -2131,4 +2131,39 @@ fn phase10_2d_camera_space_lock_playhead_rebase_and_foreground_occlusion() {
     );
 }
 
+#[test]
+fn phase10_3d_solve_conforms_sequence_canvas_and_unlinks_prior_2d_track() {
+    let d = tmp();
+    // 320x180 landscape 3D camera clip placed inside a 180x320 portrait sequence (`setToFrameSize`
+    // letterboxes it, testing `frame_rgba_in_sequence_space` + portrait Mono solve) AND verify
+    // switching from 2D tracking -> 3D match-move clears `follow_track` so 2D motion isn't double-applied!
+    let clip_3d = synthetic_camera_mp4(&d, "conform_3d_cam.mp4", 24, false);
+    let m = MobileSession::new();
+    m.new_project("Phase10Conform".into(), 180, 320, 24).unwrap();
+    let cid = m.add_media(vec![clip_3d]).unwrap()[0];
+    m.set_playhead(SEC / 2);
+    let cube = m.add_object3d(advanced::Object3DMesh::Cube).unwrap();
+
+    // First run 2D tracking so `follow_track` becomes true on `cube`.
+    let job_2d = m
+        .start_camera_solve(cid, advanced::SolveCameraOptions { track_2d: true, ..Default::default() })
+        .unwrap();
+    let st_2d = poll_camera_solve(&m, job_2d);
+    assert!(st_2d.switched_to_motion_track.is_some(), "2D track should succeed: {st_2d:?}");
+    assert!(m.object3d_state(cube).unwrap().settings.follow_track, "2D solve enables follow_track");
+
+    // Now run default Mono 3D camera solve (`track_2d: false`, `refine_focal: false`) on the same
+    // letterboxed sequence: it must succeed in sequence canvas space AND clear `follow_track`!
+    let job_3d = m.start_camera_solve(cid, advanced::SolveCameraOptions::default()).unwrap();
+    let st_3d = poll_camera_solve(&m, job_3d);
+    assert!(st_3d.error.is_none(), "default Mono 3D solve in letterboxed portrait canvas must succeed: {st_3d:?}");
+    assert!(st_3d.solve.is_some(), "3D solve info must be populated");
+    assert!(m.matchmove_state().unwrap().unwrap().enabled, "3D match-move must be enabled");
+    assert!(
+        !m.object3d_state(cube).unwrap().settings.follow_track,
+        "activating 3D match-move must unlink stale 2D follow_track so motion is not double-applied"
+    );
+}
+
+
 

@@ -3,7 +3,7 @@
 //! optional shared focal refinement (`±25%`), and weak-frame pose freezing.
 
 use super::SolveError;
-use super::init::{CameraPose, SceneModel, normalize_gauge, refine_pnp_pose};
+use super::init::{CameraPose, SceneModel, normalize_gauge, normalize_rotation_gauge, refine_pnp_pose};
 use super::linalg::{Vec3, add3, mat3_mul, mat3_mul_vec, mat3_t_mul_vec, norm3, normalize3, project_to_so3, rodrigues_exp, solve_linear};
 use super::tracks::FeatureTrack;
 
@@ -111,10 +111,17 @@ pub(crate) fn run_bundle_adjustment(model: &mut SceneModel, tracks: &[FeatureTra
         polish_non_keyframe_poses(model, tracks, &layout, cancel)?;
     }
 
-    if !model.rotation_only {
+    if model.rotation_only {
+        normalize_rotation_gauge(model);
+    } else {
         normalize_gauge(model, tracks);
     }
     freeze_weak_frames(model, tracks);
+    if model.rotation_only {
+        normalize_rotation_gauge(model);
+    } else {
+        normalize_gauge(model, tracks);
+    }
     Ok(())
 }
 

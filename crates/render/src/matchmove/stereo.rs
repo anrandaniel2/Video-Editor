@@ -7,6 +7,7 @@ use crate::track3d::{Gray, disparity};
 
 const DISPARITY_PATCH_RADIUS: i32 = 5;
 const MIN_DISPARITY_PX: f64 = 0.6;
+const MIN_STEREO_ZNCC: f32 = 0.72;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StereoObs {
@@ -15,7 +16,55 @@ pub(crate) struct StereoObs {
     pub(crate) disparity_px: f64,
 }
 
-/// Measure sub-pixel horizontal disparity (in working pixels) on active features of a stereo pair.
+fn zncc_patch(left: &Gray, right: &Gray, lx: f32, ly: f32, rx: f32, ry: f32, r: i32) -> Option<f32> {
+    let rf = r as f32;
+    if lx < rf
+        || ly < rf
+        || rx < rf
+        || ry < rf
+        || lx + rf >= left.w as f32
+        || ly + rf >= left.h as f32
+        || rx + rf >= right.w as f32
+        || ry + rf >= right.h as f32
+    {
+        return None;
+    }
+    let mut sum_l = 0.0f32;
+    let mut sum_r = 0.0f32;
+    let mut n = 0usize;
+    for oy in -r..=r {
+        for ox in -r..=r {
+            let lv = left.at(lx + ox as f32, ly + oy as f32)?;
+            let rv = right.at(rx + ox as f32, ry + oy as f32)?;
+            sum_l += lv;
+            sum_r += rv;
+            n += 1;
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    let mean_l = sum_l / n as f32;
+    let mean_r = sum_r / n as f32;
+    let (mut dot, mut nl, mut nr) = (0.0f32, 0.0f32, 0.0f32);
+    for oy in -r..=r {
+        for ox in -r..=r {
+            let dl = left.at(lx + ox as f32, ly + oy as f32)? - mean_l;
+            let dr = right.at(rx + ox as f32, ry + oy as f32)? - mean_r;
+            dot += dl * dr;
+            nl += dl * dl;
+            nr += dr * dr;
+        }
+    }
+    if nl < 1e-4 || nr < 1e-4 {
+        return None;
+    }
+    Some(dot / (nl.sqrt() * nr.sqrt()))
+}
+
+/// Measure sub-pixel horizontal disparity (in working pixels) on active features of a stereo pair,
+/// gated by zero-mean normalized cross-correlation and vertical epipolar consistency so non-stereo
+/// footage scanned with Side-by-Side / Top-Bottom selected cannot inject bogus depth scale.
 pub(crate) fn sample_stereo_disparities(
     left: &Gray,
     right: &Gray,
@@ -28,9 +77,23 @@ pub(crate) fn sample_stereo_disparities(
     for &(tid, pt) in features {
         let norm_d = disparity(left, right, pt, DISPARITY_PATCH_RADIUS, md);
         let d_px = norm_d * md;
-        if d_px.is_finite() && f64::from(d_px) >= MIN_DISPARITY_PX && d_px < md * 0.98 {
-            out.push((tid, frame_idx, d_px));
+        if !d_px.is_finite() || f64::from(d_px) < MIN_DISPARITY_PX || d_px >= md * 0.98 {
+            continue;
         }
+        let Some(zncc) = zncc_patch(left, right, pt.0, pt.1, pt.0 - d_px, pt.1, DISPARITY_PATCH_RADIUS) else {
+            continue;
+        };
+        if zncc < MIN_STEREO_ZNCC {
+            continue;
+        }
+        // Epipolar sanity check: on a rectified horizontal stereo pair, shifting vertically by 3 px
+        // should degrade correlation compared to the epipolar scanline.
+        let zncc_up = zncc_patch(left, right, pt.0, pt.1, pt.0 - d_px, pt.1 - 3.0, DISPARITY_PATCH_RADIUS).unwrap_or(-1.0);
+        let zncc_dn = zncc_patch(left, right, pt.0, pt.1, pt.0 - d_px, pt.1 + 3.0, DISPARITY_PATCH_RADIUS).unwrap_or(-1.0);
+        if zncc + 0.02 < zncc_up.max(zncc_dn) {
+            continue;
+        }
+        out.push((tid, frame_idx, d_px));
     }
 }
 
@@ -62,10 +125,18 @@ pub(crate) fn apply_stereo_scale_prior(model: &mut SceneModel, stereo_obs: &[Ste
     if ratios.len() < 6 {
         return;
     }
-    let scale = median_f64(&mut ratios).clamp(0.1, 10.0);
-    if !scale.is_finite() || scale <= 0.0 {
+    // Require genuine stereoscopic correspondence: if median stereo/solve depth ratio spread
+    // (interquartile MAD) is huge, the right/bottom half is not a calibrated stereo eye (e.g. a
+    // user picked SideBySide/TopBottom on ordinary mono footage), so skip rescaling.
+    ratios.sort_by(f64::total_cmp);
+    let mid = ratios.len() / 2;
+    let scale = if ratios.len() % 2 == 1 { ratios[mid] } else { 0.5 * (ratios[mid - 1] + ratios[mid]) };
+    let mut rel_devs: Vec<f64> = ratios.iter().map(|&r| (r - scale).abs() / scale.max(1e-6)).collect();
+    let rel_mad = median_f64(&mut rel_devs);
+    if !scale.is_finite() || scale <= 0.0 || rel_mad > 0.55 {
         return;
     }
+    let scale = scale.clamp(0.1, 10.0);
     for cam in &mut model.cameras {
         cam.t_wc = scale3(cam.t_wc, scale);
     }

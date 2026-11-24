@@ -389,7 +389,14 @@ fn refine_translation(pts: &[(f64, f64, f64, f64, usize)], init_tx: f64, init_ty
 }
 
 /// Huber-IRLS refinement of 3-DOF isotropic scale + pan `(s, tx, ty)` (`dtheta = 0`).
-fn refine_scale_pan(pts: &[(f64, f64, f64, f64, usize)], init_s: f64, init_tx: f64, init_ty: f64, huber: f64) -> (f64, f64, f64) {
+fn refine_scale_pan(
+    pts: &[(f64, f64, f64, f64, usize)],
+    init_s: f64,
+    init_tx: f64,
+    init_ty: f64,
+    huber: f64,
+    scale_bounds: (f64, f64),
+) -> (f64, f64, f64) {
     let (mut s, mut tx, mut ty) = (init_s, init_tx, init_ty);
     for _ in 0..6 {
         let (mut ws, mut fx, mut fy, mut gx, mut gy) = (0.0, 0.0, 0.0, 0.0, 0.0);
@@ -428,7 +435,7 @@ fn refine_scale_pan(pts: &[(f64, f64, f64, f64, usize)], init_s: f64, init_tx: f
             den += w * (ux * ux + uy * uy);
         }
         if den > 400.0 {
-            s = (num / den).clamp(0.75, 1.33);
+            s = (num / den).clamp(scale_bounds.0, scale_bounds.1);
         }
         tx = gx - s * fx;
         ty = gy - s * fy;
@@ -444,6 +451,7 @@ fn refine_similarity_4dof(
     init_tx: f64,
     init_ty: f64,
     huber: f64,
+    scale_bounds: (f64, f64),
 ) -> (f64, f64, f64, f64) {
     let (mut a, mut b, mut tx, mut ty) = (init_a, init_b, init_tx, init_ty);
     for _ in 0..6 {
@@ -487,7 +495,7 @@ fn refine_similarity_4dof(
             let na = num_a / den;
             let nb = num_b / den;
             let sc = na.hypot(nb);
-            if (0.75..=1.33).contains(&sc) {
+            if (scale_bounds.0..=scale_bounds.1).contains(&sc) {
                 a = na;
                 b = nb;
             }
@@ -666,7 +674,7 @@ fn estimate_2d_camera_step(
                 zp_init = (s, tx, ty);
             }
         }
-        let (zp_s, zp_tx, zp_ty) = refine_scale_pan(&pts, zp_init.0, zp_init.1, zp_init.2, tol * 0.85);
+        let (zp_s, zp_tx, zp_ty) = refine_scale_pan(&pts, zp_init.0, zp_init.1, zp_init.2, tol * 0.85, (0.75, 1.33));
         let (zp_inl, zp_cells, zp_med, zp_mask) = score_model(&pts, zp_s, 0.0, zp_tx, zp_ty, tol);
         let zoom_meaningful = (zp_s - 1.0).abs() >= 0.0022 && zp_cells >= 3;
         let zoom_wins = zp_inl >= chosen_inl + 3
@@ -725,7 +733,7 @@ fn estimate_2d_camera_step(
                 sim_init = (a, b, tx, ty);
             }
         }
-        let (sa, sb, stx, sty) = refine_similarity_4dof(&pts, sim_init.0, sim_init.1, sim_init.2, sim_init.3, tol * 0.85);
+        let (sa, sb, stx, sty) = refine_similarity_4dof(&pts, sim_init.0, sim_init.1, sim_init.2, sim_init.3, tol * 0.85, (0.75, 1.33));
         let (s_inl, s_cells, s_med, s_mask) = score_model(&pts, sa, sb, stx, sty, tol);
         let dtheta_deg = sb.atan2(sa).to_degrees().abs();
         let rot_meaningful = dtheta_deg >= 0.08 && s_cells >= 4;
@@ -1061,11 +1069,17 @@ where
     let mut rng = 0x2D_CA_4E_5A_91_07_u64;
     let mut conf_sum = 1.0f32;
 
+    // Normalize 2D camera-space samples within the active eye viewport `(vw, vh)` rather than
+    // the raw stereo container `(cw, ch)`. `object3d.rs` interprets `(0.5, 0.5)` as the canvas
+    // center and multiplies `(x - x_base)` by the sequence canvas width/height, so normalizing
+    // within `(vw, vh)` keeps anchor `(0.5, 0.5)` and fractional pan deltas identical across
+    // `Mono`, `SideBySide`, and `TopBottom` layouts.
+    let _ = (vx, vy, cw, ch);
     let norm_sample = |a: f64, b: f64, tx: f64, ty: f64, time: Tick, confidence: f32| -> TrackSample {
         let scale = a.hypot(b).clamp(0.05, 20.0) as f32;
         let rotation = b.atan2(a).to_degrees() as f32;
-        let x = ((vx as f64 + cx + tx) / cw.max(1) as f64) as f32;
-        let y = ((vy as f64 + cy + ty) / ch.max(1) as f64) as f32;
+        let x = ((cx + tx) / vw.max(1) as f64) as f32;
+        let y = ((cy + ty) / vh.max(1) as f64) as f32;
         TrackSample {
             time,
             x,
@@ -1142,13 +1156,13 @@ where
                 ntx = rtx;
                 nty = rty;
             } else if shot_has_zoom && !shot_has_rot {
-                let (rs, rtx, rty) = refine_scale_pan(&world_corrs, na, ntx, nty, tol);
+                let (rs, rtx, rty) = refine_scale_pan(&world_corrs, na, ntx, nty, tol, (0.05, 20.0));
                 na = rs;
                 nb = 0.0;
                 ntx = rtx;
                 nty = rty;
             } else {
-                let (ra, rb, rtx, rty) = refine_similarity_4dof(&world_corrs, na, nb, ntx, nty, tol);
+                let (ra, rb, rtx, rty) = refine_similarity_4dof(&world_corrs, na, nb, ntx, nty, tol, (0.05, 20.0));
                 if !shot_has_zoom {
                     let sc = ra.hypot(rb).max(1e-9);
                     na = ra / sc;
@@ -1355,5 +1369,56 @@ mod tests {
             assert!((s.scale - 1.0).abs() < 0.002);
             assert!(s.rotation.abs() < 0.05);
         }
+    }
+
+    #[test]
+    fn stereo_side_by_side_and_top_bottom_normalize_to_eye_viewport() {
+        let (eye_w, eye_h) = (192usize, 128usize);
+        // Side-by-side stereo container (384 x 128) panning -6 px/frame in each eye:
+        let sbs_frames: Vec<(Tick, Vec<u8>)> = (0..12)
+            .map(|k| {
+                let tx = -6.0 * k as f32;
+                let left = render_2d_frame_with_character(eye_w, eye_h, tx, 0.0, 1.0, 0.0, None);
+                let right = render_2d_frame_with_character(eye_w, eye_h, tx - 8.0, 0.0, 1.0, 0.0, None);
+                let mut packed = vec![0u8; eye_w * 2 * eye_h * 4];
+                for y in 0..eye_h {
+                    let row_l = &left[y * eye_w * 4..(y + 1) * eye_w * 4];
+                    let row_r = &right[y * eye_w * 4..(y + 1) * eye_w * 4];
+                    let dst = &mut packed[y * eye_w * 2 * 4..(y + 1) * eye_w * 2 * 4];
+                    dst[..eye_w * 4].copy_from_slice(row_l);
+                    dst[eye_w * 4..].copy_from_slice(row_r);
+                }
+                (Tick(k as i64 * 1000), packed)
+            })
+            .collect();
+
+        let solved = solve_2d_camera_space(
+            &Camera2DOptions {
+                stereo: StereoLayout::SideBySide,
+                ..Camera2DOptions::default()
+            },
+            |sink| {
+                for (t, rgba) in &sbs_frames {
+                    sink(Frame2D {
+                        time: *t,
+                        width: eye_w * 2,
+                        height: eye_h,
+                        rgba,
+                    })?;
+                }
+                Ok(())
+            },
+        )
+        .expect("SBS 2D solve should succeed");
+
+        let first = &solved.samples[0];
+        let last = solved.samples.last().unwrap();
+        assert!((first.x - 0.5).abs() < 0.01 && (first.y - 0.5).abs() < 0.01, "SBS anchor must be (0.5, 0.5), got ({}, {})", first.x, first.y);
+        let expected_last_x = 0.5 - 66.0 / eye_w as f32;
+        assert!(
+            (last.x - expected_last_x).abs() < 0.03,
+            "SBS fractional pan must normalize by eye_w ({expected_last_x:.3}), got {:.3}",
+            last.x
+        );
     }
 }

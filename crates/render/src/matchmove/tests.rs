@@ -762,5 +762,101 @@ fn ac_fast_handheld_pan_and_nonrigid_textured_fallback_never_fail_clean_motion()
     );
 }
 
+#[test]
+fn ac_planar_scene_and_default_mono_portrait_solve_cleanly() {
+    // 1. Strictly planar scene (tabletop / floor z = 620 with 0 depth relief!) under 6-DOF camera
+    // translation + tilt. Classic 8-point linear Essential matrix & 6-point DLT PnP are both
+    // rank-deficient on coplanar points, so this exercises `decompose_planar_homography` and
+    // `coplanar_pnp_4pt`.
+    let (w, h) = (320usize, 180usize);
+    let mut rng = Rng::new(0x504c_414e_4152_3344);
+    let mut planar_lms = Vec::with_capacity(140);
+    for i in 0..140 {
+        let ux = (rng.next_u64() % 10_000) as f64 / 10_000.0;
+        let uy = (rng.next_u64() % 10_000) as f64 / 10_000.0;
+        let x = (ux * 2.0 - 1.0) * 520.0;
+        let y = 120.0 + (uy * 2.0 - 1.0) * 90.0;
+        let z = 420.0 + uy * 520.0; // Strictly coplanar tilted ground/table plane: y - 0.346*z = const!
+        planar_lms.push(Landmark {
+            pos: [x, y - 0.15 * (z - 600.0), z],
+            radius: 2.2 + (i % 3) as f64 * 0.5,
+            luma: 150.0 + (i % 4) as f64 * 24.0,
+            cross: i % 2 == 0,
+        });
+    }
+    // Force exact coplanarity on plane `0.0 * X + 1.0 * Y + 0.25 * Z = 260.0`:
+    for lm in &mut planar_lms {
+        lm.pos[1] = 260.0 - 0.25 * lm.pos[2];
+    }
+    let planar_frames: Vec<InputFrame> = (0..24)
+        .map(|i| {
+            let t = i as f32 / 23.0;
+            let cam = SceneCamera3D {
+                position: [-110.0 + 220.0 * t, -35.0, -40.0 * t],
+                yaw: -5.0 + 10.0 * t,
+                pitch: 8.0,
+                roll: 0.0,
+                fov: CLASSIC_FOV,
+            };
+            InputFrame {
+                time: tick_for_frame(i, 30),
+                width: w,
+                height: h,
+                rgba: render_synthetic_eye(w, h, &cam, &planar_lms, [24, 24, 24]),
+            }
+        })
+        .collect();
+    let planar_rep = solve_frames(&SolveOptions::default(), &planar_frames, &|| false)
+        .expect("strictly coplanar floor/tabletop 6-DOF Mono clip must solve without failing");
+    assert_eq!(planar_rep.solve.frames.len(), 24);
+    assert!(!planar_rep.solve.rotation_only, "coplanar 6-DOF walk should recover translation");
+    let end_cam = &planar_rep.solve.frames[23];
+    assert!(end_cam.position[0] > 0.05, "expected +X camera motion on planar scene, got {:?}", end_cam.position);
+
+    // 2. Default Mono (`refine_focal: false` — the default Android UI option!) on 9:16 portrait
+    // smartphone pan with wide FOV (74°) + moving foreground distractor outlier cluster!
+    // Exercises `estimate_pair_rotation` 2-pt SO(3) RANSAC + Wahba (fixing `K^-1 H K` corruption)
+    // and portrait default focal seeds without requiring `refine_focal: true`.
+    let (pw, ph) = (270usize, 480usize);
+    let bg_lms = make_3d_constellation(150, 500.0, 1200.0, 620.0, 0x9012_7400);
+    let portrait_frames: Vec<InputFrame> = (0..22)
+        .map(|i| {
+            let mut lms = bg_lms.clone();
+            // Add 25 moving foreground person/distractor points drifting opposite the pan!
+            for k in 0..25 {
+                lms.push(Landmark {
+                    pos: [-60.0 + (k % 5) as f64 * 18.0 + i as f64 * 9.5, -40.0 + (k / 5) as f64 * 22.0, 380.0],
+                    radius: 2.5,
+                    luma: 220.0,
+                    cross: true,
+                });
+            }
+            let cam = SceneCamera3D {
+                yaw: -14.0 + i as f32 * 1.35,
+                pitch: -3.0 + i as f32 * 0.28,
+                roll: 1.2 * (i as f32 * 0.2).sin(),
+                fov: 74.0,
+                ..SceneCamera3D::default()
+            };
+            InputFrame {
+                time: tick_for_frame(i, 30),
+                width: pw,
+                height: ph,
+                rgba: render_synthetic_eye(pw, ph, &cam, &lms, [26, 26, 26]),
+            }
+        })
+        .collect();
+    let mono_default_opts = SolveOptions::default(); // refine_focal == false!
+    let port_rep = solve_frames(&mono_default_opts, &portrait_frames, &|| false)
+        .expect("default Mono portrait pan with moving foreground must solve without failing");
+    assert_eq!(port_rep.solve.frames.len(), 22);
+    let dyaw = port_rep.solve.frames[21].yaw - port_rep.solve.frames[0].yaw;
+    assert!(
+        (dyaw - 28.35).abs() < 4.5,
+        "expected ~+28.35 deg yaw sweep on default Mono portrait pan, got {dyaw:.2}"
+    );
+}
+
+
 
 

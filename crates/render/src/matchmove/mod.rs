@@ -229,10 +229,10 @@ fn frame_quality(model: &SceneModel, tracks: &[FeatureTrack], frame: usize) -> (
         let (Some(xw), Some(obs)) = (model.points[tr.id], tr.at_frame(frame)) else { continue };
         let Some((u, v)) = model.project_world(cam, xw) else { continue };
         let e = (u - obs.0).hypot(v - obs.1);
-        if e <= 2.5 {
+        if e <= 3.5 {
             inliers += 1;
         }
-        if e <= 4.0 {
+        if e <= 4.8 {
             sq_sum += e * e;
             rms_cnt += 1;
         }
@@ -241,8 +241,8 @@ fn frame_quality(model: &SceneModel, tracks: &[FeatureTrack], frame: usize) -> (
         return (10.0, 0.1);
     }
     let rms = (sq_sum / rms_cnt as f64).sqrt();
-    let cov = (inliers as f64 / 36.0).clamp(0.0, 1.0).sqrt();
-    let acc = 1.0 / (1.0 + (rms / 1.5).powi(2));
+    let cov = (inliers as f64 / 30.0).clamp(0.0, 1.0).sqrt();
+    let acc = 1.0 / (1.0 + (rms / 2.0).powi(2));
     let conf = (cov * acc).clamp(0.05, 1.0) as f32;
     (rms, conf)
 }
@@ -263,7 +263,7 @@ fn select_solved_points(model: &SceneModel, tracks: &[FeatureTrack]) -> Vec<Solv
             }
             if let Some((u, v)) = model.project_world(&model.cameras[f], xw) {
                 let e = (u - obs.0).hypot(v - obs.1);
-                if e <= 2.5 {
+                if e <= 3.5 {
                     sq += e * e;
                     inliers += 1;
                 }

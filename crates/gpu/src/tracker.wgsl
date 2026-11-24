@@ -366,6 +366,45 @@ fn stereo_mse(meta: vec4<u32>, pt: vec2<f32>, r: i32, disp: f32) -> vec2<f32> {
     return vec2<f32>(sum / f32(n), 1.0);
 }
 
+fn stereo_zncc(meta: vec4<u32>, pt: vec2<f32>, r: i32, disp: f32, y_off: f32) -> f32 {
+    let rf = f32(r);
+    let rx = pt.x - disp;
+    let ry = pt.y + y_off;
+    if pt.x < rf || pt.y < rf || rx < rf || ry < rf
+        || pt.x + rf >= f32(meta.y) || pt.y + rf >= f32(meta.z)
+        || rx + rf >= f32(meta.y) || ry + rf >= f32(meta.z)
+    {
+        return -2.0;
+    }
+    var sum_l: f32 = 0.0;
+    var sum_r: f32 = 0.0;
+    let inv_n = 1.0 / f32((2 * r + 1) * (2 * r + 1));
+    for (var dy: i32 = -r; dy <= r; dy = dy + 1) {
+        for (var dx: i32 = -r; dx <= r; dx = dx + 1) {
+            sum_l = sum_l + sample_prev(meta, pt.x + f32(dx), pt.y + f32(dy)).x;
+            sum_r = sum_r + sample_curr(meta, rx + f32(dx), ry + f32(dy)).x;
+        }
+    }
+    let ml = sum_l * inv_n;
+    let mr = sum_r * inv_n;
+    var dot_lr: f32 = 0.0;
+    var nl: f32 = 0.0;
+    var nr: f32 = 0.0;
+    for (var dy: i32 = -r; dy <= r; dy = dy + 1) {
+        for (var dx: i32 = -r; dx <= r; dx = dx + 1) {
+            let dl = sample_prev(meta, pt.x + f32(dx), pt.y + f32(dy)).x - ml;
+            let dr = sample_curr(meta, rx + f32(dx), ry + f32(dy)).x - mr;
+            dot_lr = dot_lr + dl * dr;
+            nl = nl + dl * dl;
+            nr = nr + dr * dr;
+        }
+    }
+    if nl < 1e-4 || nr < 1e-4 {
+        return -2.0;
+    }
+    return dot_lr / sqrt(nl * nr);
+}
+
 @compute @workgroup_size(64, 1, 1)
 fn cs_stereo_disp(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -402,5 +441,12 @@ fn cs_stereo_disp(@builtin(global_invocation_id) gid: vec3<u32>) {
     if sl.y > 0.0 && sc.y > 0.0 && sr.y > 0.0 && curvature > 1e-9 {
         refined = best_d + clamp(0.5 * (sl.x - sr.x) / curvature, -0.5, 0.5);
     }
-    results[i] = vec4<f32>(clamp(refined / max_d, 0.0, 1.0), 1.0, best_s, 0.0);
+    let zncc = stereo_zncc(meta, pt, r, refined, 0.0);
+    let zncc_up = stereo_zncc(meta, pt, r, refined, -3.0);
+    let zncc_dn = stereo_zncc(meta, pt, r, refined, 3.0);
+    if zncc < 0.72 || zncc + 0.02 < max(zncc_up, zncc_dn) {
+        results[i] = vec4<f32>(0.0, -1.0, best_s, zncc);
+        return;
+    }
+    results[i] = vec4<f32>(clamp(refined / max_d, 0.0, 1.0), 1.0, best_s, zncc);
 }

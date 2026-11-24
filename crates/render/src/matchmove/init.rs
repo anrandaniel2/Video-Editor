@@ -7,8 +7,8 @@ use filmcraft_project::CLASSIC_FOV;
 
 use super::SolveError;
 use super::linalg::{
-    IDENT3, Mat3, Rng, Vec3, add3, dot3, hartley_normalize, mat3_det, mat3_inv, mat3_mul, mat3_mul_vec, mat3_t_mul_vec, mat3_transpose, median_f64, norm3,
-    normalize3, project_to_so3, rodrigues_exp, scale3, smallest_eigvec, solve_linear, sub3, svd3,
+    IDENT3, Mat3, Rng, Vec3, add3, cross3, dot3, hartley_normalize, mat3_det, mat3_inv, mat3_mul, mat3_mul_vec, mat3_t_mul_vec, mat3_transpose, median_f64,
+    norm3, normalize3, project_to_so3, rodrigues_exp, scale3, skew3, smallest_eigvec, solve_linear, sub3, svd3,
 };
 use super::tracks::{FeatureTrack, TrackedShot};
 
@@ -68,6 +68,7 @@ struct EssentialInit {
 
 #[derive(Clone, Debug)]
 struct RotationInit {
+    r: Mat3,
     inliers: usize,
     median_err_px: f64,
 }
@@ -85,13 +86,14 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, cancel: &
 
     let (h_mat, h_inliers) = ransac_homography(&matches);
     let seeds: &[f64] = if refine_focal {
-        &[1.0, 0.86, 0.72, 0.60, 1.15, 1.28]
+        &[1.0, 0.86, 0.72, 0.60, 0.48, 1.15, 1.28, 1.45]
     } else if shot.height > shot.width {
         // Portrait 9:16 smartphone footage has physical focal length proportional to the short
-        // sensor axis (`~0.56..0.75 * nominal_focal`), not a 50mm telephoto along the tall axis.
-        &[1.0, 0.68, 0.58, 0.82]
+        // sensor axis (`~0.50..0.82 * nominal_focal`), not a 50mm telephoto along the tall axis.
+        &[1.0, 0.68, 0.58, 0.50, 0.82, 1.15]
     } else {
-        &[1.0]
+        // Landscape smartphone ultra-wide (~0.55x), main 24-26mm (~0.80..1.0x), and tele (~1.25x).
+        &[1.0, 0.82, 0.68, 1.18]
     };
     let (focal, rot_cand, ess_cand) = best_focal_hypothesis(&matches, h_mat, (cx, cy, nominal_focal), seeds, cancel)?;
     let n = matches.len();
@@ -116,9 +118,33 @@ pub(crate) fn initialize_scene(shot: &TrackedShot, refine_focal: bool, cancel: &
     };
 
     if use_rotation_only {
-        chain_rotations(&mut model, &shot.tracks)?;
+        chain_rotations(&mut model, &shot.tracks, f0)?;
+        normalize_rotation_gauge(&mut model);
     } else if let Some(ess) = ess_cand {
         chain_six_dof(&mut model, &shot.tracks, f0, f1, ess, cancel)?;
+        let solved_count = model.cameras.iter().filter(|c| c.solved && !c.frozen).count();
+        // If 6-DOF PnP starved on a low-parallax / planar / zoomed smartphone clip (solving fewer
+        // than 8 frames or < 35% of the shot) while pure SO(3) rotation fits the pair cleanly,
+        // recover with bidirectional SO(3) rotation chaining rather than failing the scan!
+        if (solved_count < 8 || solved_count * 100 < shot.times.len() * 35) && rot_cand.is_some() {
+            let mut rot_model = SceneModel {
+                cx,
+                cy,
+                focal,
+                initial_focal: focal,
+                rotation_only: true,
+                ref_cam: f0,
+                cameras: vec![CameraPose::default(); shot.times.len()],
+                points: vec![None; shot.tracks.len()],
+            };
+            if chain_rotations(&mut rot_model, &shot.tracks, f0).is_ok() {
+                normalize_rotation_gauge(&mut rot_model);
+                let rot_solved = rot_model.cameras.iter().filter(|c| c.solved && !c.frozen).count();
+                if rot_solved > solved_count {
+                    return Ok(rot_model);
+                }
+            }
+        }
         normalize_gauge(&mut model, &shot.tracks);
     } else {
         return Err(SolveError::InsufficientMotion);
@@ -182,7 +208,7 @@ fn best_focal_hypothesis(
         }
         let f = nominal_f * s;
         let rot = estimate_pair_rotation(matches, h_mat, cx, cy, f);
-        let ess = ransac_essential(matches, cx, cy, f);
+        let ess = ransac_essential(matches, h_mat, cx, cy, f);
         let score = ess.as_ref().map_or(0, |e| e.inliers).max(rot.as_ref().map_or(0, |r| r.inliers));
         if score > 0 && best.as_ref().is_none_or(|b| score > b.0) {
             best = Some((score, f, rot, ess));
@@ -276,34 +302,85 @@ fn score_homography(matches: &[PairMatch], h: Mat3) -> (usize, Vec<bool>) {
 }
 
 fn estimate_pair_rotation(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, cy: f64, f: f64) -> Option<RotationInit> {
-    let rays: Vec<(Vec3, Vec3)> = matches
-        .iter()
-        .filter_map(|m| {
-            let d1 = normalize3([(m.p1.0 - cx) / f, (m.p1.1 - cy) / f, 1.0])?;
-            let d2 = normalize3([(m.p2.0 - cx) / f, (m.p2.1 - cy) / f, 1.0])?;
-            Some((d1, d2))
-        })
-        .collect();
-    if rays.len() < 8 {
+    let mut rays: Vec<(Vec3, Vec3)> = Vec::with_capacity(matches.len());
+    let mut valid_matches: Vec<&PairMatch> = Vec::with_capacity(matches.len());
+    for m in matches {
+        if let (Some(d1), Some(d2)) = (
+            normalize3([(m.p1.0 - cx) / f, (m.p1.1 - cy) / f, 1.0]),
+            normalize3([(m.p2.0 - cx) / f, (m.p2.1 - cy) / f, 1.0]),
+        ) {
+            rays.push((d1, d2));
+            valid_matches.push(m);
+        }
+    }
+    if rays.len() < 6 {
         return None;
     }
 
-    let mut r = if let Some(h) = h_opt {
-        let k = [[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]];
-        let k_inv = [[1.0 / f, 0.0, -cx / f], [0.0, 1.0 / f, -cy / f], [0.0, 0.0, 1.0]];
-        project_to_so3(mat3_mul(k_inv, mat3_mul(h, k)))
-    } else {
-        wahba_rotation(&rays, None)?
+    let score_rot = |cand: Mat3, tol: f64| -> (usize, f64) {
+        let mut inl = 0usize;
+        let mut err_sum = 0.0f64;
+        for m in &valid_matches {
+            let q = mat3_mul_vec(cand, [(m.p1.0 - cx) / f, (m.p1.1 - cy) / f, 1.0]);
+            if q[2] > 1e-5 {
+                let err = (cx + f * q[0] / q[2] - m.p2.0).hypot(cy + f * q[1] / q[2] - m.p2.1);
+                if err <= tol {
+                    inl += 1;
+                    err_sum += err;
+                }
+            }
+        }
+        (inl, err_sum)
     };
 
-    // Two rounds of trimmed Wahba SVD on pixel reprojection inliers.
-    for _ in 0..2 {
-        let keep: Vec<bool> = matches
+    // Never trust unconstrained 8-DOF homography `project_to_so3(K^-1 H K)` alone: slight tracking
+    // noise or subtle parallax in `H[2][0..1]` gets amplified by `f ~ 500`, corrupting `R` by 20-90°!
+    // Evaluate direct Wahba SVD, 2-point SO(3) RANSAC (robust against moving foreground people/cars),
+    // and `K^-1 H K`, then pick the strongest rotation seed.
+    let mut best_seed: Option<(Mat3, usize, f64)> = None;
+    let mut consider = |cand: Mat3| {
+        let (inl, err_sum) = score_rot(cand, 4.5);
+        if best_seed.is_none_or(|(_, bi, be)| inl > bi || (inl == bi && err_sum < be)) {
+            best_seed = Some((cand, inl, err_sum));
+        }
+    };
+
+    if let Some(r_wahba) = wahba_rotation(&rays, None) {
+        consider(r_wahba);
+    }
+    if let Some(h) = h_opt {
+        let s = h[2][2].signum();
+        let h_signed = if s < 0.0 {
+            [[-h[0][0], -h[0][1], -h[0][2]], [-h[1][0], -h[1][1], -h[1][2]], [-h[2][0], -h[2][1], -h[2][2]]]
+        } else {
+            h
+        };
+        let k = [[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]];
+        let k_inv = [[1.0 / f, 0.0, -cx / f], [0.0, 1.0 / f, -cy / f], [0.0, 0.0, 1.0]];
+        consider(project_to_so3(mat3_mul(k_inv, mat3_mul(h_signed, k))));
+    }
+    let mut rng = Rng::new(0x524f_5433_5f32_5054 ^ (rays.len() as u64));
+    for _ in 0..180 {
+        let Some([i, j]) = rng.sample_indices::<2>(rays.len()) else { break };
+        if dot3(rays[i].0, rays[j].0) > 0.9985 {
+            continue;
+        }
+        let sub = [rays[i], rays[j]];
+        if let Some(r_cand) = wahba_rotation(&sub, None) {
+            consider(r_cand);
+        }
+    }
+
+    let mut r = best_seed.map(|(r0, _, _)| r0)?;
+
+    // Three rounds of coarse-to-fine trimmed Wahba SVD on pixel reprojection inliers.
+    for &tol in &[5.0, 3.6, 2.8] {
+        let keep: Vec<bool> = valid_matches
             .iter()
             .map(|m| {
                 let d1 = [(m.p1.0 - cx) / f, (m.p1.1 - cy) / f, 1.0];
                 let q = mat3_mul_vec(r, d1);
-                q[2] > 1e-5 && (cx + f * q[0] / q[2] - m.p2.0).hypot(cy + f * q[1] / q[2] - m.p2.1) <= 2.2
+                q[2] > 1e-5 && (cx + f * q[0] / q[2] - m.p2.0).hypot(cy + f * q[1] / q[2] - m.p2.1) <= tol
             })
             .collect();
         if let Some(refined) = wahba_rotation(&rays, Some(&keep)) {
@@ -313,22 +390,22 @@ fn estimate_pair_rotation(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, c
 
     let mut errs = Vec::new();
     let mut inliers = 0usize;
-    for m in matches {
+    for m in &valid_matches {
         let q = mat3_mul_vec(r, [(m.p1.0 - cx) / f, (m.p1.1 - cy) / f, 1.0]);
         if q[2] <= 1e-5 {
             continue;
         }
         let err = (cx + f * q[0] / q[2] - m.p2.0).hypot(cy + f * q[1] / q[2] - m.p2.1);
-        if err <= 3.0 {
+        if err <= 3.6 {
             inliers += 1;
             errs.push(err);
         }
     }
-    if inliers < 8 {
+    if inliers < 6 {
         return None;
     }
     let median_err_px = median_f64(&mut errs);
-    (median_err_px <= 2.6).then_some(RotationInit { inliers, median_err_px })
+    (median_err_px <= 3.2).then_some(RotationInit { r, inliers, median_err_px })
 }
 
 fn wahba_rotation(rays: &[(Vec3, Vec3)], mask: Option<&[bool]>) -> Option<Mat3> {
@@ -350,12 +427,13 @@ fn wahba_rotation(rays: &[(Vec3, Vec3)], mask: Option<&[bool]>) -> Option<Mat3> 
 
 // ------------------------- Essential Matrix & Cheirality -------------------------
 
-fn ransac_essential(matches: &[PairMatch], cx: f64, cy: f64, f: f64) -> Option<EssentialInit> {
+fn ransac_essential(matches: &[PairMatch], h_opt: Option<Mat3>, cx: f64, cy: f64, f: f64) -> Option<EssentialInit> {
     if matches.len() < 8 {
         return None;
     }
     let cal1: Vec<(f64, f64)> = matches.iter().map(|m| ((m.p1.0 - cx) / f, (m.p1.1 - cy) / f)).collect();
     let cal2: Vec<(f64, f64)> = matches.iter().map(|m| ((m.p2.0 - cx) / f, (m.p2.1 - cy) / f)).collect();
+    let all_refs: Vec<&PairMatch> = matches.iter().collect();
 
     let mut rng = Rng::new(0x4553_5345_4e54_3344);
     let mut best_e: Option<Mat3> = None;
@@ -375,21 +453,177 @@ fn ransac_essential(matches: &[PairMatch], cx: f64, cy: f64, f: f64) -> Option<E
         }
     }
 
-    if best_count < 8 {
-        return None;
-    }
-    let mut in1 = Vec::with_capacity(best_count);
-    let mut in2 = Vec::with_capacity(best_count);
-    let mut in_matches = Vec::with_capacity(best_count);
-    for i in 0..matches.len() {
-        if best_mask[i] {
-            in1.push(cal1[i]);
-            in2.push(cal2[i]);
-            in_matches.push(&matches[i]);
+    let mut best_pose: Option<EssentialInit> = None;
+    if best_count >= 8 {
+        let mut in1 = Vec::with_capacity(best_count);
+        let mut in2 = Vec::with_capacity(best_count);
+        let mut in_matches = Vec::with_capacity(best_count);
+        for i in 0..matches.len() {
+            if best_mask[i] {
+                in1.push(cal1[i]);
+                in2.push(cal2[i]);
+                in_matches.push(&matches[i]);
+            }
+        }
+        if let Some(e_final) = fit_essential_8pt(&in1, &in2).or(best_e)
+            && let Some(cand) = select_cheiral_pose(e_final, &in1, &in2, &in_matches, (cx, cy, f))
+        {
+            best_pose = Some(cand);
         }
     }
-    let e_final = fit_essential_8pt(&in1, &in2).or(best_e)?;
-    select_cheiral_pose(e_final, &in1, &in2, &in_matches, (cx, cy, f))
+
+    // Planar / dominant-ground-plane fallback: 8-point linear essential matrix is algebraically
+    // rank-2 degenerate on planar scenes (tables, floors, walls, sidewalks), returning random
+    // nullspace mixes that fail cheirality! Decompose `H_cal = K^-1 H K` via Malis & Vargas (2007)
+    // analytical homography decomposition and compete directly on triangulated cheirality inliers.
+    if let Some(h) = h_opt
+        && let Some(planar) = decompose_planar_homography(h, &cal1, &cal2, &all_refs, (cx, cy, f))
+        && best_pose.as_ref().is_none_or(|bp| {
+            planar.inliers > bp.inliers + 2 || (planar.inliers + 2 >= bp.inliers && planar.median_parallax_deg > bp.median_parallax_deg)
+        })
+    {
+        best_pose = Some(planar);
+    }
+
+    // Approximate-rotation + 2-point translation RANSAC fallback: when gentle handheld motion has
+    // small translation (`1..5°` parallax), `R` is well-constrained by rays while `t` is cleanly
+    // recovered by cross-product epipolar intersection of 2 ray pairs (`E = [t]_x R`).
+    if best_pose.as_ref().is_none_or(|bp| bp.inliers * 100 < matches.len() * 45)
+        && let Some(rot_approx) = estimate_pair_rotation(matches, h_opt, cx, cy, f)
+    {
+        let mut best_t_e: Option<(Mat3, usize, Vec<bool>)> = None;
+        let mut rng_t = Rng::new(0x5452_414e_5332_5054 ^ (matches.len() as u64));
+        for _ in 0..240 {
+            let Some([i, j]) = rng_t.sample_indices::<2>(matches.len()) else { break };
+            let rx1_i = mat3_mul_vec(rot_approx.r, [cal1[i].0, cal1[i].1, 1.0]);
+            let x2_i = [cal2[i].0, cal2[i].1, 1.0];
+            let n_i = cross3(rx1_i, x2_i);
+            let rx1_j = mat3_mul_vec(rot_approx.r, [cal1[j].0, cal1[j].1, 1.0]);
+            let x2_j = [cal2[j].0, cal2[j].1, 1.0];
+            let n_j = cross3(rx1_j, x2_j);
+            let Some(t_dir) = normalize3(cross3(n_i, n_j)) else { continue };
+            let e_cand = mat3_mul(skew3(t_dir), rot_approx.r);
+            let (cnt, msk) = score_sampson(&cal1, &cal2, e_cand, f);
+            if cnt >= 8 && best_t_e.as_ref().is_none_or(|(_, bc, _)| cnt > *bc) {
+                best_t_e = Some((e_cand, cnt, msk));
+            }
+        }
+        if let Some((e_cand, cnt, msk)) = best_t_e {
+            let mut in1 = Vec::with_capacity(cnt);
+            let mut in2 = Vec::with_capacity(cnt);
+            let mut in_m = Vec::with_capacity(cnt);
+            for i in 0..matches.len() {
+                if msk[i] {
+                    in1.push(cal1[i]);
+                    in2.push(cal2[i]);
+                    in_m.push(&matches[i]);
+                }
+            }
+            if let Some(cand) = select_cheiral_pose(e_cand, &in1, &in2, &in_m, (cx, cy, f))
+                && best_pose.as_ref().is_none_or(|bp| cand.inliers > bp.inliers)
+            {
+                best_pose = Some(cand);
+            }
+        }
+    }
+
+    best_pose
+}
+
+/// Analytical planar homography decomposition (`H_cal = R + t * n^T`) into up to 4 `(R, t)` poses,
+/// evaluated by positive-depth two-view triangulation across all correspondences.
+fn decompose_planar_homography(
+    h_px: Mat3,
+    cal1: &[(f64, f64)],
+    cal2: &[(f64, f64)],
+    matches: &[&PairMatch],
+    (cx, cy, f): (f64, f64, f64),
+) -> Option<EssentialInit> {
+    let k = [[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]];
+    let k_inv = [[1.0 / f, 0.0, -cx / f], [0.0, 1.0 / f, -cy / f], [0.0, 0.0, 1.0]];
+    let h_raw = mat3_mul(k_inv, mat3_mul(h_px, k));
+    let (_, sv, _) = svd3(h_raw);
+    let gamma = sv[1];
+    if !gamma.is_finite() || gamma <= 1e-9 {
+        return None;
+    }
+    let det_h = mat3_det(h_raw);
+    let sign = if det_h < 0.0 { -1.0 } else { 1.0 };
+    let scale = sign / gamma;
+    let h = [
+        [h_raw[0][0] * scale, h_raw[0][1] * scale, h_raw[0][2] * scale],
+        [h_raw[1][0] * scale, h_raw[1][1] * scale, h_raw[1][2] * scale],
+        [h_raw[2][0] * scale, h_raw[2][1] * scale, h_raw[2][2] * scale],
+    ];
+
+    // Symmetric matrix `S = H^T H - I`. Its middle eigenvalue is ~0; `s1 >= 0 >= s3`.
+    let ht = mat3_transpose(h);
+    let hth = mat3_mul(ht, h);
+    let (u_ht, d_sq, v_h) = svd3(hth);
+    let _ = u_ht;
+    let d1 = d_sq[0].max(1.0).sqrt();
+    let d3 = d_sq[2].clamp(0.0, 1.0).sqrt();
+    if (d1 - d3).abs() < 1e-5 {
+        return None;
+    }
+    let v1 = [v_h[0][0], v_h[1][0], v_h[2][0]];
+    let mut v2 = [v_h[0][1], v_h[1][1], v_h[2][1]];
+    let v3 = [v_h[0][2], v_h[1][2], v_h[2][2]];
+    if dot3(cross3(v1, v2), v3) < 0.0 {
+        v2 = scale3(v2, -1.0);
+    }
+
+    let denom = (d1 * d1 - d3 * d3).max(1e-12).sqrt();
+    let a1 = (d1 * d1 - 1.0).max(0.0).sqrt() / denom;
+    let b1 = (1.0 - d3 * d3).max(0.0).sqrt() / denom;
+
+    let mut best: Option<EssentialInit> = None;
+    for eps1 in [1.0f64, -1.0] {
+        for eps3 in [1.0f64, -1.0] {
+            let n_cand = add3(scale3(v1, eps1 * a1), scale3(v3, eps3 * b1));
+            let Some(n_unit) = normalize3(n_cand) else { continue };
+            // Wait: `H = R + t * n^T` where `||t|| = d1 - d3` up to sign!
+            // More directly: for unit normal `n` in frame 1, any vector orthogonal to `n` satisfies
+            // `H * u = R * u`! Pick orthonormal basis `(u_a, u_b, n)` with `u_a = v2`:
+            let u_a = v2;
+            let Some(u_b) = normalize3(cross3(n_unit, u_a)) else { continue };
+            let Some(ru_a) = normalize3(mat3_mul_vec(h, u_a)) else { continue };
+            let Some(ru_b) = normalize3(mat3_mul_vec(h, u_b)) else { continue };
+            let rn = cross3(ru_a, ru_b);
+            // Since `R * [u_a | u_b | n] = [ru_a | ru_b | rn]`, `R = [ru_a | ru_b | rn] * [u_a | u_b | n]^T`.
+            let b_src = [[u_a[0], u_b[0], n_unit[0]], [u_a[1], u_b[1], n_unit[1]], [u_a[2], u_b[2], n_unit[2]]];
+            let b_dst = [[ru_a[0], ru_b[0], rn[0]], [ru_a[1], ru_b[1], rn[1]], [ru_a[2], ru_b[2], rn[2]]];
+            let r_cand = project_to_so3(mat3_mul(b_dst, mat3_transpose(b_src)));
+
+            for h_sign in [1.0f64, -1.0] {
+                let hn = scale3(mat3_mul_vec(h, n_unit), h_sign);
+                let rn_vec = mat3_mul_vec(r_cand, n_unit);
+                let Some(t_unit) = normalize3(sub3(hn, rn_vec)) else { continue };
+                let mut good = 0usize;
+                let mut angles = Vec::new();
+                for i in 0..cal1.len() {
+                    let Some(xw) = triangulate_two_view(IDENT3, [0.0; 3], cal1[i], r_cand, t_unit, cal2[i]) else { continue };
+                    let x2 = add3(mat3_mul_vec(r_cand, xw), t_unit);
+                    if xw[2] <= 1e-3 || x2[2] <= 1e-3 {
+                        continue;
+                    }
+                    let e1 = (cx + f * xw[0] / xw[2] - matches[i].p1.0).hypot(cy + f * xw[1] / xw[2] - matches[i].p1.1);
+                    let e2 = (cx + f * x2[0] / x2[2] - matches[i].p2.0).hypot(cy + f * x2[1] / x2[2] - matches[i].p2.1);
+                    if e1 <= PNP_INLIER_PX && e2 <= PNP_INLIER_PX {
+                        good += 1;
+                        if let (Some(ray1), Some(ray2_w)) = (normalize3(xw), normalize3(mat3_t_mul_vec(r_cand, x2))) {
+                            angles.push(dot3(ray1, ray2_w).clamp(-1.0, 1.0).acos().to_degrees());
+                        }
+                    }
+                }
+                if good >= 8 && good * 100 >= cal1.len() * 35 && best.as_ref().is_none_or(|b| good > b.inliers) {
+                    let median_parallax_deg = median_f64(&mut angles);
+                    best = Some(EssentialInit { r: r_cand, t: t_unit, inliers: good, median_parallax_deg });
+                }
+            }
+        }
+    }
+    best
 }
 
 fn fit_essential_8pt(p1: &[(f64, f64)], p2: &[(f64, f64)]) -> Option<Mat3> {
@@ -523,18 +757,18 @@ pub(crate) fn triangulate_multiview(obs: &[(Mat3, Vec3, (f64, f64))]) -> Option<
 
 // ------------------------- Pure-Rotation Pose Chaining -------------------------
 
-fn chain_rotations(model: &mut SceneModel, tracks: &[FeatureTrack]) -> Result<(), SolveError> {
+fn chain_rotations(model: &mut SceneModel, tracks: &[FeatureTrack], start_f: usize) -> Result<(), SolveError> {
     let nf = model.cameras.len();
-    model.cameras[0] = CameraPose { r_wc: IDENT3, t_wc: [0.0; 3], frozen: false, solved: true };
+    let seed = start_f.min(nf.saturating_sub(1));
+    model.cameras[seed] = CameraPose { r_wc: IDENT3, t_wc: [0.0; 3], frozen: false, solved: true };
     for tr in tracks {
-        if let Some((u, v)) = tr.at_frame(0) {
+        if let Some((u, v)) = tr.at_frame(seed) {
             model.points[tr.id] = normalize3([(u - model.cx) / model.focal, (v - model.cy) / model.focal, 1.0]);
         }
     }
 
     let min_inliers = 6.min(nf);
-    let mut last_r = IDENT3;
-    for f in 1..nf {
+    let solve_and_seed = |model: &mut SceneModel, f: usize, last_r: &mut Mat3| {
         let mut pairs: Vec<(Vec3, Vec3, (f64, f64))> = Vec::new();
         for tr in tracks {
             if let (Some(dw), Some((u, v))) = (model.points[tr.id], tr.at_frame(f))
@@ -543,11 +777,11 @@ fn chain_rotations(model: &mut SceneModel, tracks: &[FeatureTrack]) -> Result<()
                 pairs.push((dw, dc, (u, v)));
             }
         }
-        if let Some((r_f, inliers)) = solve_frame_rotation(&pairs, last_r, model.cx, model.cy, model.focal)
+        if let Some((r_f, inliers)) = solve_frame_rotation(&pairs, *last_r, model.cx, model.cy, model.focal)
             && inliers >= min_inliers
         {
             model.cameras[f] = CameraPose { r_wc: r_f, t_wc: [0.0; 3], frozen: false, solved: true };
-            last_r = r_f;
+            *last_r = r_f;
             for tr in tracks {
                 if model.points[tr.id].is_none()
                     && let Some((u, v)) = tr.at_frame(f)
@@ -557,8 +791,17 @@ fn chain_rotations(model: &mut SceneModel, tracks: &[FeatureTrack]) -> Result<()
                 }
             }
         } else {
-            model.cameras[f] = CameraPose { r_wc: last_r, t_wc: [0.0; 3], frozen: true, solved: false };
+            model.cameras[f] = CameraPose { r_wc: *last_r, t_wc: [0.0; 3], frozen: true, solved: false };
         }
+    };
+
+    let mut fwd_r = IDENT3;
+    for f in (seed + 1)..nf {
+        solve_and_seed(model, f, &mut fwd_r);
+    }
+    let mut bwd_r = IDENT3;
+    for f in (0..seed).rev() {
+        solve_and_seed(model, f, &mut bwd_r);
     }
 
     // Average world ray directions over all solved frames observing each track.
@@ -579,6 +822,23 @@ fn chain_rotations(model: &mut SceneModel, tracks: &[FeatureTrack]) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Rebase a rotation-only model so the first solved frame (typically Frame 0) has identity rotation `I`.
+pub(crate) fn normalize_rotation_gauge(model: &mut SceneModel) {
+    if !model.rotation_only || model.cameras.is_empty() {
+        return;
+    }
+    let anchor = model.cameras.iter().position(|c| c.solved && !c.frozen).unwrap_or(0);
+    let r0 = model.cameras[anchor].r_wc;
+    let r0_t = mat3_transpose(r0);
+    for cam in &mut model.cameras {
+        cam.r_wc = project_to_so3(mat3_mul(cam.r_wc, r0_t));
+    }
+    for pt in model.points.iter_mut().flatten() {
+        *pt = normalize3(mat3_mul_vec(r0, *pt)).unwrap_or(*pt);
+    }
+    model.cameras[anchor].r_wc = IDENT3;
 }
 
 fn solve_frame_rotation(pairs: &[(Vec3, Vec3, (f64, f64))], seed_r: Mat3, cx: f64, cy: f64, f: f64) -> Option<(Mat3, usize)> {
@@ -723,11 +983,26 @@ pub(crate) fn solve_pnp_frame(model: &SceneModel, corrs: &[(Vec3, (f64, f64))], 
         }
     }
 
-    // If seed extrapolation did not capture >= 70% inliers, run DLT-PnP RANSAC hypotheses.
+    // Coplanar-safe 4-point RANSAC PnP + 6-point DLT RANSAC when seed extrapolation did not capture >= 70% inliers.
+    // Note: 12x12 6-pt DLT is singular on coplanar scenes (floors, tables, walls), whereas `coplanar_pnp_4pt`
+    // solves planar 3D-2D homography cleanly and works on both planar and general point subsets!
     if best.is_none_or(|(_, bi, _)| bi * 100 < corrs.len() * 70) {
         let mut rng = Rng::new(0x506e_505f_3670_7400 ^ (corrs.len() as u64));
-        for _ in 0..100 {
-            let Some(idx) = rng.sample_indices::<6>(corrs.len()) else { break };
+        for _ in 0..90 {
+            if let Some(idx4) = rng.sample_indices::<4>(corrs.len()) {
+                let sub4 = idx4.map(|i| corrs[i]);
+                if let Some((r_pl, t_pl)) = coplanar_pnp_4pt(model, &sub4) {
+                    let (inl0, _) = score_pnp(model, corrs, r_pl, t_pl);
+                    if best.is_none_or(|(_, bi, _)| inl0 + 4 >= bi) {
+                        let (r_ref, t_ref) = refine_pnp_pose(model, corrs, r_pl, t_pl, 10);
+                        let (inl, cost) = score_pnp(model, corrs, r_ref, t_ref);
+                        if best.is_none_or(|(_, bi, bc)| inl > bi || (inl == bi && cost < bc)) {
+                            best = Some(((r_ref, t_ref), inl, cost));
+                        }
+                    }
+                }
+            }
+            let Some(idx) = rng.sample_indices::<6>(corrs.len()) else { continue };
             let sub = idx.map(|i| corrs[i]);
             let Some((r_dlt, t_dlt)) = dlt_pnp_6pt(model, &sub) else { continue };
             let (inl0, _) = score_pnp(model, corrs, r_dlt, t_dlt);
@@ -742,6 +1017,64 @@ pub(crate) fn solve_pnp_frame(model: &SceneModel, corrs: &[(Vec3, (f64, f64))], 
         }
     }
     best.map(|(pose, inl, _)| (pose, inl))
+}
+
+/// Coplanar-safe 4-point PnP: fits local plane frame `(c, e1, e2, e3)` to 4 world points and solves
+/// the calibrated 2D-to-2D homography `H = [r1 | r2 | R*c + t]` for `(R, t)`.
+fn coplanar_pnp_4pt(model: &SceneModel, sub: &[(Vec3, (f64, f64)); 4]) -> Option<(Mat3, Vec3)> {
+    let mut c = [0.0; 3];
+    for &(xw, _) in sub {
+        c = add3(c, xw);
+    }
+    c = scale3(c, 0.25);
+    let mut cov = [[0.0f64; 3]; 3];
+    for &(xw, _) in sub {
+        let d = sub3(xw, c);
+        for r in 0..3 {
+            for col in 0..3 {
+                cov[r][col] += d[r] * d[col];
+            }
+        }
+    }
+    let (_, sv, v_pca) = svd3(cov);
+    // Reject only if the 4 points are nearly collinear (`sv[1]` tiny) OR strongly non-planar (`sv[2]` large vs `sv[1]`).
+    if sv[1] < 1e-8 || sv[2] > sv[1] * 0.12 {
+        return None;
+    }
+    let e1 = [v_pca[0][0], v_pca[1][0], v_pca[2][0]];
+    let e2 = [v_pca[0][1], v_pca[1][1], v_pca[2][1]];
+    let e3 = cross3(e1, e2);
+
+    let mut pts_plane = [(0.0, 0.0); 4];
+    let mut pts_cal = [(0.0, 0.0); 4];
+    for i in 0..4 {
+        let d = sub3(sub[i].0, c);
+        pts_plane[i] = (dot3(d, e1), dot3(d, e2));
+        pts_cal[i] = ((sub[i].1.0 - model.cx) / model.focal, (sub[i].1.1 - model.cy) / model.focal);
+    }
+    let h = fit_homography_dlt(&pts_plane, &pts_cal)?;
+    let c0 = [h[0][0], h[1][0], h[2][0]];
+    let c1 = [h[0][1], h[1][1], h[2][1]];
+    let c2 = [h[0][2], h[1][2], h[2][2]];
+    let sc = 0.5 * (norm3(c0) + norm3(c1));
+    if !sc.is_finite() || sc < 1e-9 {
+        return None;
+    }
+    // Sign of `H` is fixed by requiring positive camera depth at the centroid (`t_plane.z > 0`).
+    let sign = if c2[2] < 0.0 { -1.0 } else { 1.0 };
+    let r1_p = scale3(c0, sign / sc);
+    let r2_p = scale3(c1, sign / sc);
+    let r3_p = cross3(r1_p, r2_p);
+    let r_plane = project_to_so3([[r1_p[0], r2_p[0], r3_p[0]], [r1_p[1], r2_p[1], r3_p[1]], [r1_p[2], r2_p[2], r3_p[2]]]);
+    let t_plane = scale3(c2, sign / sc);
+    if t_plane[2] <= 1e-4 {
+        return None;
+    }
+    // Convert from plane basis `Q = [e1 | e2 | e3]` back to world: `R_wc = R_plane * Q^T`, `t_wc = t_plane - R_wc * c`.
+    let qt = [e1, e2, e3];
+    let r_wc = project_to_so3(mat3_mul(r_plane, qt));
+    let t_wc = sub3(t_plane, mat3_mul_vec(r_wc, c));
+    Some((r_wc, t_wc))
 }
 
 fn dlt_pnp_6pt(model: &SceneModel, sub: &[(Vec3, (f64, f64)); 6]) -> Option<(Mat3, Vec3)> {

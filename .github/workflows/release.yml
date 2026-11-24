@@ -174,7 +174,7 @@ jobs:
             cargo test -p filmcraft-render --lib follow_track -- --nocapture
             cargo test -p filmcraft-render --lib behind_foreground -- --nocapture
             cargo test -p filmcraft-android --lib phase9_planar_2d_autoswitch_and_animated_lights_rendering -- --nocapture
-            cargo test -p filmcraft-android --lib phase10_2d_camera_space_lock_playhead_rebase_and_foreground_occlusion -- --nocapture
+            cargo test -p filmcraft-android --lib phase10_ -- --nocapture
           ) > /tmp/rust-tests.log 2>&1
           rc=$?
           cat /tmp/rust-tests.log

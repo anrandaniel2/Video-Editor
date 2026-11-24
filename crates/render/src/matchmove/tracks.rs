@@ -9,9 +9,9 @@ use super::linalg::median_f64;
 use super::stereo::{StereoObs, sample_stereo_disparities};
 use super::{InputFrame, SolveError, SolveOptions};
 use crate::scene::{SceneDetector, SceneOptions};
-use crate::track3d::{GpuTrackBackend, GpuTrackQuery, Gray, Level, corners, crop_gray, gpu_backend, track_point, view_rect};
+use crate::track3d::{GpuTrackBackend, GpuTrackQuery, Gray, Level, corners, crop_gray, gpu_backend, search, track_point, view_rect};
 
-pub(crate) const MAX_WORKING_SIDE: usize = 480;
+pub(crate) const MAX_WORKING_SIDE: usize = 640;
 const GRID_COLS: usize = 4;
 const GRID_ROWS: usize = 3;
 const TARGET_FEATURES: usize = 180;
@@ -21,11 +21,17 @@ const BORDER_PX: usize = 12;
 const LK_PATCH_RADIUS: i32 = 6;
 const FWD_BWD_MAX_PX: f32 = 1.85;
 const RESEED_CADENCE: usize = 6;
-const MAX_MEDIAN_STEP_PX: f64 = 55.0;
+const MAX_MEDIAN_STEP_PX: f64 = 75.0;
 
 fn pyramid_levels_for(w: usize, h: usize) -> usize {
     let min_dim = w.min(h);
-    if min_dim >= 240 { 3 } else { 2 }
+    if min_dim >= 320 {
+        4
+    } else if min_dim >= 180 {
+        3
+    } else {
+        2
+    }
 }
 
 /// A contiguous 2D feature track restricted to the solved shot's frames `0..num_frames`.
@@ -369,7 +375,50 @@ fn step_stream_gpu(
                 {
                     st.tracks[tid].pts.push(q);
                     surviving.push(tid);
-                } else {
+                }
+            }
+            // Whip-pan recovery on GPU: if < 35% of features survived and it is not a hard scene cut,
+            // run coarse ZNCC global shift estimation on up to 9 spread points and re-track.
+            if surviving.len() * 100 < st.active_ids.len() * 35
+                && !candidate_cut
+                && let Some(whip_vel) = estimate_whip_pan_gpu(gpu, prev_slot, curr_slot, st)
+            {
+                let whip_queries: Vec<GpuTrackQuery> = st
+                    .active_ids
+                    .iter()
+                    .map(|&tid| GpuTrackQuery {
+                        pt: *st.tracks[tid].pts.last().unwrap_or(&(0.0, 0.0)),
+                        guess: whip_vel,
+                    })
+                    .collect();
+                if let Some(whip_res) = gpu.track_batch_fb(prev_slot, curr_slot, &whip_queries, LK_PATCH_RADIUS, FWD_BWD_MAX_PX) {
+                    let mut whip_surviving = Vec::with_capacity(st.active_ids.len());
+                    let mut whip_pts = Vec::with_capacity(st.active_ids.len());
+                    for (&tid, r) in st.active_ids.iter().zip(whip_res) {
+                        if let Some(q) = r
+                            && q.0 >= 2.0
+                            && q.1 >= 2.0
+                            && q.0 <= st.view_w as f32 - 3.0
+                            && q.1 <= st.view_h as f32 - 3.0
+                        {
+                            whip_surviving.push(tid);
+                            whip_pts.push((tid, q));
+                        }
+                    }
+                    if whip_surviving.len() > surviving.len() {
+                        for &tid in &surviving {
+                            st.tracks[tid].pts.pop();
+                        }
+                        for (tid, q) in whip_pts {
+                            st.tracks[tid].pts.push(q);
+                        }
+                        surviving = whip_surviving;
+                    }
+                }
+            }
+            let survived_set: std::collections::HashSet<usize> = surviving.iter().copied().collect();
+            for &tid in &st.active_ids {
+                if !survived_set.contains(&tid) {
                     st.tracks[tid].active = false;
                 }
             }
@@ -503,7 +552,33 @@ fn step_stream(st: &mut StreamState, frame_idx: usize, left: Gray, right: Option
             if let Some(next_pt) = advance_track(prev_pyr, &curr_pyr, &st.tracks[tid], fallback_vel, st.view_w, st.view_h) {
                 st.tracks[tid].pts.push(next_pt);
                 surviving.push(tid);
-            } else {
+            }
+        }
+        if surviving.len() * 100 < st.active_ids.len() * 35
+            && !candidate_cut
+            && let Some(whip_vel) = estimate_whip_pan_cpu(prev_pyr, &curr_pyr, st)
+        {
+            let mut whip_surviving = Vec::with_capacity(st.active_ids.len());
+            let mut whip_pts = Vec::with_capacity(st.active_ids.len());
+            for &tid in &st.active_ids {
+                if let Some(next_pt) = advance_track_with_guess(prev_pyr, &curr_pyr, &st.tracks[tid], whip_vel, st.view_w, st.view_h) {
+                    whip_surviving.push(tid);
+                    whip_pts.push((tid, next_pt));
+                }
+            }
+            if whip_surviving.len() > surviving.len() {
+                for &tid in &surviving {
+                    st.tracks[tid].pts.pop();
+                }
+                for (tid, q) in whip_pts {
+                    st.tracks[tid].pts.push(q);
+                }
+                surviving = whip_surviving;
+            }
+        }
+        let survived_set: std::collections::HashSet<usize> = surviving.iter().copied().collect();
+        for &tid in &st.active_ids {
+            if !survived_set.contains(&tid) {
                 st.tracks[tid].active = false;
             }
         }
@@ -540,6 +615,79 @@ fn step_stream(st: &mut StreamState, frame_idx: usize, left: Gray, right: Option
     st.prev_pyr = Some(curr_pyr);
 }
 
+fn advance_track_with_guess(
+    prev_pyr: &[Level],
+    curr_pyr: &[Level],
+    tr: &RawTrack,
+    guess: (f32, f32),
+    w: usize,
+    h: usize,
+) -> Option<(f32, f32)> {
+    let &p = tr.pts.last()?;
+    let q = track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, guess)?;
+    if q.0 < 2.0 || q.1 < 2.0 || q.0 > w as f32 - 3.0 || q.1 > h as f32 - 3.0 {
+        return None;
+    }
+    let back_guess = (p.0 - q.0, p.1 - q.1);
+    let back = track_point(curr_pyr, prev_pyr, q, LK_PATCH_RADIUS, back_guess)?;
+    ((back.0 - p.0).hypot(back.1 - p.1) <= FWD_BWD_MAX_PX).then_some(q)
+}
+
+fn consensus_shift(shifts: &[(f32, f32)]) -> Option<(f32, f32)> {
+    if shifts.len() < 3 {
+        return None;
+    }
+    let mut best_inliers = 0usize;
+    let mut best = (0.0f32, 0.0f32);
+    for &(dx, dy) in shifts {
+        let cnt = shifts.iter().filter(|&&(ox, oy)| (ox - dx).hypot(oy - dy) <= 9.0).count();
+        if cnt > best_inliers {
+            best_inliers = cnt;
+            best = (dx, dy);
+        }
+    }
+    (best_inliers >= 3).then_some(best)
+}
+
+fn estimate_whip_pan_gpu(
+    gpu: &'static dyn GpuTrackBackend,
+    prev_slot: usize,
+    curr_slot: usize,
+    st: &StreamState,
+) -> Option<(f32, f32)> {
+    if st.active_ids.len() < 4 {
+        return None;
+    }
+    let reach = (st.view_w.max(st.view_h) as f32 * 0.24).clamp(28.0, 144.0);
+    let step = (st.active_ids.len() / 9).max(1);
+    let mut shifts = Vec::with_capacity(9);
+    for &tid in st.active_ids.iter().step_by(step).take(9) {
+        if let Some(&pt) = st.tracks[tid].pts.last()
+            && let Some(d) = gpu.coarse_search(prev_slot, curr_slot, pt, 3, reach)
+        {
+            shifts.push(d);
+        }
+    }
+    consensus_shift(&shifts)
+}
+
+fn estimate_whip_pan_cpu(prev_pyr: &[Level], curr_pyr: &[Level], st: &StreamState) -> Option<(f32, f32)> {
+    if st.active_ids.len() < 4 {
+        return None;
+    }
+    let reach = (st.view_w.max(st.view_h) as f32 * 0.24).clamp(28.0, 144.0);
+    let step = (st.active_ids.len() / 9).max(1);
+    let mut shifts = Vec::with_capacity(9);
+    for &tid in st.active_ids.iter().step_by(step).take(9) {
+        if let Some(&pt) = st.tracks[tid].pts.last()
+            && let Some(d) = search(prev_pyr, curr_pyr, pt, 3, reach)
+        {
+            shifts.push(d);
+        }
+    }
+    consensus_shift(&shifts)
+}
+
 fn advance_track(
     prev_pyr: &[Level],
     curr_pyr: &[Level],
@@ -548,21 +696,15 @@ fn advance_track(
     w: usize,
     h: usize,
 ) -> Option<(f32, f32)> {
-    let &p = tr.pts.last()?;
     let vel = if tr.pts.len() >= 2 {
+        let p = *tr.pts.last()?;
         let prev = tr.pts[tr.pts.len() - 2];
         (p.0 - prev.0, p.1 - prev.1)
     } else {
         fallback_vel
     };
-    let q = track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, vel)
-        .or_else(|| if vel != (0.0, 0.0) { track_point(prev_pyr, curr_pyr, p, LK_PATCH_RADIUS, (0.0, 0.0)) } else { None })?;
-    if q.0 < 2.0 || q.1 < 2.0 || q.0 > w as f32 - 3.0 || q.1 > h as f32 - 3.0 {
-        return None;
-    }
-    let back_guess = (p.0 - q.0, p.1 - q.1);
-    let back = track_point(curr_pyr, prev_pyr, q, LK_PATCH_RADIUS, back_guess)?;
-    ((back.0 - p.0).hypot(back.1 - p.1) <= FWD_BWD_MAX_PX).then_some(q)
+    advance_track_with_guess(prev_pyr, curr_pyr, tr, vel, w, h)
+        .or_else(|| if vel != (0.0, 0.0) { advance_track_with_guess(prev_pyr, curr_pyr, tr, (0.0, 0.0), w, h) } else { None })
 }
 
 /// Deterministic 4×3 grid Shi–Tomasi corner seeding reusing `track3d::corners`.
